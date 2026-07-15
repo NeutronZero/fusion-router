@@ -1,0 +1,22 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+resources:
+  max_daily_cost: 10.0
+  max_daily_tokens: 1000000
+  max_concurrent: 5
+
+policies:
+  - name: default
+    priority: 1
+    conditions: []
+    actions:
+      - action_type: set_strategy
+        params:
+          strategy: "auto"
+
+providers:
+  zen:
+    base_url: "https://api.zenprovider.com/v1"
+    api_key_env: "ZEN_API_KEY"

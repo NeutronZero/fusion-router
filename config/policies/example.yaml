@@ -1,0 +1,27 @@
+name: "code-review-policy"
+priority: 10
+conditions:
+  - field: "intent"
+    operator: "equals"
+    value: "Code"
+actions:
+  - action_type: "set_strategy"
+    params:
+      strategy: "Reflection"
+  - action_type: "set_model"
+    params:
+      model: "claude-sonnet-4-20250514"
+---
+name: "debug-policy"
+priority: 10
+conditions:
+  - field: "intent"
+    operator: "equals"
+    value: "Debug"
+actions:
+  - action_type: "set_strategy"
+    params:
+      strategy: "Single"
+  - action_type: "set_model"
+    params:
+      model: "claude-sonnet-4-20250514"
