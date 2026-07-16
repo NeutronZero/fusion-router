@@ -1,6 +1,20 @@
 # Changelog
 
-## [0.1.0] – 2025-07-17
+## [0.2.0] – 2026-07-17
+
+### Added
+- **Plugin System** – dynamic loading for providers, strategies, and compiler passes
+  - `PluginRegistry` with discovery from `plugins/` directory
+  - TOML-based manifests for plugin metadata
+  - `libloading`-based dynamic loading (C ABI)
+  - Sample plugin (`example-provider`) demonstrating the ABI
+- Plugin registration for providers, strategies, and compiler passes
+- 5 golden tests for plugin functionality
+
+### Changed
+- Workspace configuration for plugin crates (`plugins/` directory)
+
+## [0.1.0] – 2026-07-17
 
 ### Added
 - Full DAG support (conditional, loop, split, join, barrier nodes)

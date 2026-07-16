@@ -1,0 +1,9 @@
+[plugin]
+name = "example-provider"
+version = "0.1.0"
+description = "Example provider plugin for FusionRouter"
+entry = "target/debug/example_provider.dll"
+
+[provider]
+name = "example"
+models = ["example-model"]
