@@ -45,6 +45,11 @@ pub(crate) fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerE
                 crate::types::IRNodeKind::Judge => crate::types::ExecutionNodeKind::LLMJudge,
                 crate::types::IRNodeKind::Transform => crate::types::ExecutionNodeKind::Transform,
                 crate::types::IRNodeKind::Gate => crate::types::ExecutionNodeKind::Gate,
+                crate::types::IRNodeKind::Conditional => crate::types::ExecutionNodeKind::Conditional,
+                crate::types::IRNodeKind::Loop => crate::types::ExecutionNodeKind::Loop,
+                crate::types::IRNodeKind::Split => crate::types::ExecutionNodeKind::Split,
+                crate::types::IRNodeKind::Join => crate::types::ExecutionNodeKind::Join,
+                crate::types::IRNodeKind::Barrier => crate::types::ExecutionNodeKind::Barrier,
             },
             strategy: ir_node.strategy.clone(),
             model: ir_node.model.clone().unwrap_or_default(),
@@ -61,6 +66,7 @@ pub(crate) fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerE
         exec_edges.push(crate::types::ExecutionEdge {
             from: ir_edge.from,
             to: ir_edge.to,
+            condition: ir_edge.condition.clone(),
         });
     }
 

@@ -1,6 +1,7 @@
-use axum::{routing::post, Router};
-use std::net::SocketAddr;
+#![allow(dead_code)]
 use std::sync::Arc;
+
+use axum::{routing::post, Router};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -18,6 +19,13 @@ mod transport;
 mod resource;
 mod telemetry;
 mod types;
+mod config;
+
+use config::AppConfig;
+use providers::openrouter::OpenRouterProvider;
+use providers::router::ProviderRouter;
+use providers::zen::ZenProvider;
+use telemetry::SqliteEvidenceRepository;
 
 #[tokio::main]
 async fn main() {
@@ -30,19 +38,34 @@ async fn main() {
         )
         .init();
 
+    let config_path = std::env::var("FUSION_CONFIG")
+        .unwrap_or_else(|_| "config/default.yaml".to_string());
+
+    let config = AppConfig::load(&config_path)
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to load config, using defaults");
+            AppConfig::load("config/default.yaml").unwrap_or_else(|_| {
+                panic!("Could not load config from config/default.yaml");
+            })
+        });
+
+    tracing::info!("loaded config from {}", config_path);
+
     let zen_key = std::env::var("OPENCODEZEN_API_KEY")
         .unwrap_or_else(|_| "test-key".to_string());
     let openrouter_key = std::env::var("OPENROUTER_API_KEY")
         .unwrap_or_else(|_| "test-key".to_string());
 
-    let zen_provider = Arc::new(providers::zen::ZenProvider::new(zen_key));
-    let openrouter_provider = Arc::new(providers::openrouter::OpenRouterProvider::new(openrouter_key));
+    let zen_provider = Arc::new(ZenProvider::new(zen_key));
+    let openrouter_provider = Arc::new(OpenRouterProvider::new(openrouter_key));
 
-    let router = providers::router::ProviderRouter::new(openrouter_provider.clone())
-        .with_provider(
-            vec!["opencode/".to_string(), "zen/".to_string()],
-            zen_provider,
-        );
+    let provider_router: Arc<dyn providers::ChatProvider + Send + Sync> = Arc::new(
+        ProviderRouter::new(openrouter_provider.clone())
+            .with_provider(
+                vec!["opencode/".to_string(), "zen/".to_string()],
+                zen_provider,
+            ),
+    );
 
     tracing::info!(
         "providers configured: opencode-zen={}, openrouter={}",
@@ -50,9 +73,20 @@ async fn main() {
         std::env::var("OPENROUTER_API_KEY").is_ok(),
     );
 
-    let state = server::handlers::AppState {
-        provider: Arc::new(router),
-    };
+    let resource_manager = resource::DefaultResourceManager::new(config.to_quota());
+
+    let evidence_repo = SqliteEvidenceRepository::new("fusion_telemetry.db")
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to open telemetry db, using no-op");
+            SqliteEvidenceRepository::new(":memory:").expect("in-memory db")
+        });
+
+    let state = server::handlers::AppState::new(
+        provider_router,
+        resource_manager,
+        Arc::new(evidence_repo),
+        config,
+    );
 
     let app = Router::new()
         .route("/v1/chat/completions", post(server::handlers::chat_completions))
@@ -60,7 +94,9 @@ async fn main() {
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let addr = format!("{}:{}", "0.0.0.0", 8080)
+        .parse::<std::net::SocketAddr>()
+        .unwrap();
     tracing::info!("FusionRouter listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();

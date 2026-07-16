@@ -9,7 +9,8 @@ use super::work_queue::WorkQueue;
 use super::Scheduler;
 use crate::executor::Executor;
 use crate::types::{
-    ExecutionGraph, ExecutionInstance, ExecutionResult, NodeState, ReservationId, SchedulerError,
+    ExecutionGraph, ExecutionInstance, ExecutionNodeKind, ExecutionResult, NodeState,
+    ReservationId, SchedulerError,
 };
 
 pub struct DefaultScheduler;
@@ -39,6 +40,7 @@ impl Scheduler for DefaultScheduler {
             instance_id: Uuid::new_v4(),
             graph,
             node_states,
+            outputs: HashMap::new(),
             reservation_id: reservation.0,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -56,6 +58,7 @@ impl Scheduler for DefaultScheduler {
         let total_tokens: u64 = 0;
         let total_cost: f64 = 0.0;
         let mut retry_counts: HashMap<Uuid, u32> = HashMap::new();
+        let mut loop_iterations: HashMap<Uuid, u32> = HashMap::new();
 
         let mut queue = WorkQueue::new(instance.graph.clone());
 
@@ -83,7 +86,7 @@ impl Scheduler for DefaultScheduler {
             let mut handles = Vec::new();
 
             for node in node_clones {
-                let span = info_span!("exec_node", node_id = %node.id, strategy = ?node.strategy);
+                let span = info_span!("exec_node", node_id = %node.id, kind = ?node.kind);
                 handles.push(
                     async move {
                         let node_start = Instant::now();
@@ -102,7 +105,103 @@ impl Scheduler for DefaultScheduler {
                     Ok(NodeState::Succeeded) => {
                         info!(node_id = ?node_id, latency_ms = latency, "Node succeeded");
                         instance.node_states.insert(node_id, NodeState::Succeeded);
-                        queue.mark_completed(node_id);
+
+                        let node_kind = queue.graph().nodes.iter()
+                            .find(|n| n.id == node_id)
+                            .map(|n| n.kind.clone());
+
+                        let edges: Vec<_> = queue.graph().edges.iter()
+                            .filter(|e| e.from == node_id || e.to == node_id)
+                            .cloned()
+                            .collect();
+
+                        match node_kind {
+                            Some(ExecutionNodeKind::Conditional) => {
+                                queue.mark_conditional_completed(node_id);
+                                let result_val = instance.outputs.get(&node_id)
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("true");
+                                for edge in &edges {
+                                    if edge.from == node_id {
+                                        let matches = match edge.condition.as_deref() {
+                                            Some(cond) => cond == result_val,
+                                            None => true,
+                                        };
+                                        if matches {
+                                            queue.activate_edge(edge.from, edge.to);
+                                        }
+                                    }
+                                }
+                            }
+                            Some(ExecutionNodeKind::Loop) => {
+                                queue.mark_completed(node_id);
+                                let should_continue = instance.outputs.get(&node_id)
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                let outgoing: Vec<_> = edges.iter()
+                                    .filter(|e| e.from == node_id)
+                                    .cloned()
+                                    .collect();
+                                if should_continue {
+                                    let body_ids: Vec<Uuid> = outgoing.iter()
+                                        .filter(|e| e.condition.as_deref() != Some("exit"))
+                                        .map(|e| e.to)
+                                        .collect();
+                                    for &body_id in &body_ids {
+                                        instance.node_states.insert(body_id, NodeState::Pending);
+                                    }
+                                    queue.reset_loop_body(&body_ids);
+                                } else {
+                                    for edge in &outgoing {
+                                        if edge.condition.as_deref() == Some("exit") {
+                                            queue.activate_edge(edge.from, edge.to);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {
+                                queue.mark_completed(node_id);
+                                let has_loop_back = edges.iter()
+                                    .any(|e| e.from == node_id && e.condition.as_deref() == Some("loop"));
+                                let loop_target = edges.iter()
+                                    .find(|e| e.from == node_id && e.condition.as_deref() == Some("loop"))
+                                    .map(|e| e.to);
+                                if has_loop_back {
+                                    if let Some(loop_node_id) = loop_target {
+                                        let iter_count = loop_iterations.entry(loop_node_id).or_insert(0);
+                                        let max_iters = queue.graph().nodes.iter()
+                                            .find(|n| n.id == loop_node_id)
+                                            .and_then(|n| n.config.get("max_iterations"))
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(10) as u32;
+                                        if *iter_count < max_iters {
+                                            *iter_count += 1;
+                                            info!(
+                                                loop_node_id = ?loop_node_id,
+                                                iteration = *iter_count,
+                                                max = max_iters,
+                                                "Loop iteration"
+                                            );
+                                            let loop_outgoing: Vec<_> = queue.graph().edges.iter()
+                                                .filter(|e| e.from == loop_node_id)
+                                                .cloned()
+                                                .collect();
+                                            let body_ids: Vec<Uuid> = loop_outgoing.iter()
+                                                .filter(|e| e.condition.as_deref() != Some("exit"))
+                                                .map(|e| e.to)
+                                                .collect();
+                                            for &body_id in &body_ids {
+                                                instance.node_states.insert(body_id, NodeState::Pending);
+                                            }
+                                            queue.reset_loop_body(&body_ids);
+                                            instance.node_states.insert(loop_node_id, NodeState::Pending);
+                                            queue.reset_ready(loop_node_id);
+                                            queue.activate_edge(node_id, loop_node_id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     Ok(NodeState::Failed(reason)) => {
                         info!(node_id = ?node_id, reason = %reason, latency_ms = latency, "Node failed");

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod server;
 pub mod context;
 pub mod requirements;
@@ -12,3 +14,4 @@ pub mod transport;
 pub mod resource;
 pub mod telemetry;
 pub mod types;
+pub mod config;

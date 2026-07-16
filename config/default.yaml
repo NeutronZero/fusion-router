@@ -6,6 +6,15 @@ resources:
   max_daily_cost: 10.0
   max_daily_tokens: 1000000
   max_concurrent: 5
+  provider_limits:
+    opencode-zen:
+      max_daily_cost: 5.0
+      max_rpm: 60
+      max_tpm: 500000
+    openrouter:
+      max_daily_cost: 5.0
+      max_rpm: 60
+      max_tpm: 500000
 
 policies:
   - name: default
@@ -16,7 +25,13 @@ policies:
         params:
           strategy: "auto"
 
+strategies:
+  consensus_count: 3
+
 providers:
   zen:
-    base_url: "https://api.zenprovider.com/v1"
-    api_key_env: "ZEN_API_KEY"
+    base_url: "https://api.opencode.ai/v1"
+    api_key_env: "OPENCODEZEN_API_KEY"
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"

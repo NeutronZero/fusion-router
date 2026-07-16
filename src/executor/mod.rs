@@ -91,7 +91,12 @@ impl Executor for DefaultExecutor {
                 }
                 ExecutionNodeKind::Transform
                 | ExecutionNodeKind::Gate
-                | ExecutionNodeKind::Aggregate => {}
+                | ExecutionNodeKind::Aggregate
+                | ExecutionNodeKind::Conditional
+                | ExecutionNodeKind::Loop
+                | ExecutionNodeKind::Split
+                | ExecutionNodeKind::Join
+                | ExecutionNodeKind::Barrier => {}
             }
         }
 

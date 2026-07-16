@@ -99,6 +99,11 @@ pub enum IRNodeKind {
     Judge,
     Transform,
     Gate,
+    Conditional,
+    Loop,
+    Split,
+    Join,
+    Barrier,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,12 +157,19 @@ pub enum ExecutionNodeKind {
     Transform,
     Gate,
     Aggregate,
+    Conditional,
+    Loop,
+    Split,
+    Join,
+    Barrier,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionEdge {
     pub from: Uuid,
     pub to: Uuid,
+    #[serde(default)]
+    pub condition: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +197,7 @@ pub struct ExecutionInstance {
     pub instance_id: Uuid,
     pub graph: ExecutionGraph,
     pub node_states: HashMap<Uuid, NodeState>,
+    pub outputs: HashMap<Uuid, serde_json::Value>,
     pub reservation_id: Uuid,
     pub created_at: i64,
 }

@@ -52,8 +52,8 @@ impl Strategy for ReflectionStrategy {
         ExecutionSubgraph {
             nodes: vec![gen_node, review_node, gate_node],
             edges: vec![
-                ExecutionEdge { from: gen_id, to: review_id },
-                ExecutionEdge { from: review_id, to: gate_id },
+                ExecutionEdge { from: gen_id, to: review_id, condition: None },
+                ExecutionEdge { from: review_id, to: gate_id, condition: None },
             ],
             entry_node_id: gen_id,
             exit_node_id: gate_id,

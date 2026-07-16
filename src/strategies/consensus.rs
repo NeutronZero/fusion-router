@@ -56,6 +56,7 @@ impl Strategy for ConsensusStrategy {
             edges.push(ExecutionEdge {
                 from: *gen_id,
                 to: judge_id,
+                condition: None,
             });
         }
 
