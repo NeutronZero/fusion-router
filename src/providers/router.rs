@@ -1,16 +1,16 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use super::Provider;
+use super::{ChatProvider, Provider};
 use crate::types::ChatCompletionRequest;
 
 pub struct ProviderRouter {
-    providers: Vec<(Vec<String>, Arc<dyn Provider + Send + Sync>)>,
-    default: Arc<dyn Provider + Send + Sync>,
+    providers: Vec<(Vec<String>, Arc<Provider>)>,
+    default: Arc<Provider>,
 }
 
 impl ProviderRouter {
-    pub fn new(default: Arc<dyn Provider + Send + Sync>) -> Self {
+    pub fn new(default: Arc<Provider>) -> Self {
         Self {
             providers: Vec::new(),
             default,
@@ -20,13 +20,13 @@ impl ProviderRouter {
     pub fn with_provider(
         mut self,
         model_prefixes: Vec<String>,
-        provider: Arc<dyn Provider + Send + Sync>,
+        provider: Arc<Provider>,
     ) -> Self {
         self.providers.push((model_prefixes, provider));
         self
     }
 
-    fn resolve(&self, model: &str) -> &Arc<dyn Provider + Send + Sync> {
+    fn resolve(&self, model: &str) -> &Arc<Provider> {
         for (prefixes, provider) in &self.providers {
             for prefix in prefixes {
                 if model.starts_with(prefix) {
@@ -39,7 +39,7 @@ impl ProviderRouter {
 }
 
 #[async_trait]
-impl Provider for ProviderRouter {
+impl ChatProvider for ProviderRouter {
     fn name(&self) -> &str {
         "router"
     }

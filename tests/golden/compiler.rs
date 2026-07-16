@@ -73,3 +73,45 @@ async fn test_model_resolution() {
     let result = pass.apply(ir).await.unwrap();
     assert!(result.nodes[0].model.is_some());
 }
+
+#[tokio::test]
+async fn test_budget_optimisation_pass_success() {
+    use std::sync::Arc;
+    use fusion_router::compiler::passes::BudgetOptimisationPass;
+    use fusion_router::resource::DefaultResourceManager;
+    use fusion_router::types::Quota;
+
+    let rm = Arc::new(DefaultResourceManager::new(Quota {
+        max_daily_cost: 10.0,
+        max_daily_tokens: 10000,
+        max_concurrent: 10,
+        provider_limits: Default::default(),
+    }));
+
+    let pass = BudgetOptimisationPass { resource_manager: rm };
+    let ir = create_test_ir(); // cost is 0.01, tokens 500
+
+    let result = pass.apply(ir).await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_budget_optimisation_pass_failure() {
+    use std::sync::Arc;
+    use fusion_router::compiler::passes::BudgetOptimisationPass;
+    use fusion_router::resource::DefaultResourceManager;
+    use fusion_router::types::Quota;
+
+    let rm = Arc::new(DefaultResourceManager::new(Quota {
+        max_daily_cost: 0.001, // lower than 0.01
+        max_daily_tokens: 100, // lower than 500
+        max_concurrent: 10,
+        provider_limits: Default::default(),
+    }));
+
+    let pass = BudgetOptimisationPass { resource_manager: rm };
+    let ir = create_test_ir();
+
+    let result = pass.apply(ir).await;
+    assert!(result.is_err());
+}

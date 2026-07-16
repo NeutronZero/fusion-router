@@ -49,7 +49,55 @@ impl ContextAssembler for DefaultContextAssembler {
 }
 
 impl DefaultContextAssembler {
-    fn trim_messages(&self, messages: &[crate::types::ChatMessage], _max_tokens: u32) -> Vec<crate::types::ChatMessage> {
-        messages.to_vec()
+    pub fn trim_messages(&self, messages: &[crate::types::ChatMessage], max_tokens: u32) -> Vec<crate::types::ChatMessage> {
+        let total_tokens: u32 = messages.iter()
+            .map(|m| estimate_tokens(&m.content))
+            .sum();
+
+        if total_tokens <= max_tokens {
+            return messages.to_vec();
+        }
+
+        let mut system_msgs: Vec<crate::types::ChatMessage> = Vec::new();
+        let mut other_msgs: Vec<crate::types::ChatMessage> = Vec::new();
+
+        for msg in messages {
+            if msg.role == "system" {
+                system_msgs.push(msg.clone());
+            } else {
+                other_msgs.push(msg.clone());
+            }
+        }
+
+        let system_tokens: u32 = system_msgs.iter()
+            .map(|m| estimate_tokens(&m.content))
+            .sum();
+
+        let mut remaining = max_tokens.saturating_sub(system_tokens + 5);
+        let mut trimmed_other: Vec<crate::types::ChatMessage> = Vec::new();
+
+        for msg in other_msgs.iter().rev() {
+            let tokens = estimate_tokens(&msg.content) + 5;
+            if tokens <= remaining {
+                trimmed_other.push(msg.clone());
+                remaining -= tokens;
+            } else if remaining > 10 {
+                let truncated: String = msg.content.chars().take((remaining * 4) as usize).collect();
+                trimmed_other.push(crate::types::ChatMessage {
+                    role: msg.role.clone(),
+                    content: truncated,
+                });
+                remaining = 0;
+            }
+        }
+
+        trimmed_other.reverse();
+        let mut result = system_msgs;
+        result.extend(trimmed_other);
+        result
     }
+}
+
+pub fn estimate_tokens(text: &str) -> u32 {
+    (text.len() as u32 + 3) / 4
 }

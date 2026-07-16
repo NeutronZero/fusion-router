@@ -2,12 +2,12 @@ use axum::{extract::State, Json};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::providers::Provider;
+use crate::providers::ChatProvider;
 use crate::types::ChatCompletionRequest;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub provider: Arc<dyn Provider + Send + Sync>,
+    pub provider: Arc<dyn ChatProvider + Send + Sync>,
 }
 
 pub async fn chat_completions(

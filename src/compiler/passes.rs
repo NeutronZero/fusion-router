@@ -37,7 +37,12 @@ impl CompilerPass for ModelResolutionPass {
     }
 }
 
-pub struct BudgetOptimisationPass;
+use std::sync::Arc;
+use crate::resource::ResourceManager;
+
+pub struct BudgetOptimisationPass {
+    pub resource_manager: Arc<dyn ResourceManager>,
+}
 
 #[async_trait]
 impl CompilerPass for BudgetOptimisationPass {
@@ -46,6 +51,10 @@ impl CompilerPass for BudgetOptimisationPass {
     }
 
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
+        let temp_graph = super::lower_to_graph(ir.clone())?;
+        if !self.resource_manager.can_afford(&temp_graph).await {
+            return Err(CompilerError::ValidationError("Budget exceeded".to_string()));
+        }
         Ok(ir)
     }
 }

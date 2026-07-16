@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::info;
 
-use crate::providers::Provider;
+use crate::providers::ChatProvider;
 use crate::strategies::Strategy;
 use crate::types::{
     ChatCompletionRequest, ChatMessage, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph,
@@ -17,13 +17,13 @@ pub trait Executor: Send + Sync {
 }
 
 pub struct DefaultExecutor {
-    pub provider: Arc<dyn Provider + Send + Sync>,
+    pub provider: Arc<dyn ChatProvider + Send + Sync>,
     pub strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>>,
 }
 
 impl DefaultExecutor {
     pub fn new(
-        provider: Arc<dyn Provider + Send + Sync>,
+        provider: Arc<dyn ChatProvider + Send + Sync>,
         strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>>,
     ) -> Self {
         Self { provider, strategies }

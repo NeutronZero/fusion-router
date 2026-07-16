@@ -3,13 +3,13 @@ use std::sync::Arc;
 use axum::{routing::post, Router};
 use tower_http::trace::TraceLayer;
 
-use fusion_router::providers::Provider;
+use fusion_router::providers::ChatProvider;
 use fusion_router::types::ChatCompletionRequest;
 
 struct MockProvider;
 
 #[async_trait::async_trait]
-impl Provider for MockProvider {
+impl ChatProvider for MockProvider {
     fn name(&self) -> &str {
         "mock"
     }

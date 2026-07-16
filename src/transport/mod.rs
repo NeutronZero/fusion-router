@@ -1,2 +1,3 @@
-// Transport implementations (HTTP, stdio, etc.)
-// Phase 6 will populate this module
+pub mod http;
+
+pub use http::HttpTransport;

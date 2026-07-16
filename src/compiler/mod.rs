@@ -32,7 +32,7 @@ impl Compiler for DefaultCompiler {
     }
 }
 
-fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
+pub(crate) fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
     let mut exec_nodes = Vec::new();
     let mut exec_edges = Vec::new();
 
