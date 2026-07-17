@@ -19,3 +19,4 @@ pub mod plugin;
 pub mod workflow;
 pub mod tools;
 pub mod cache;
+pub mod middleware;
