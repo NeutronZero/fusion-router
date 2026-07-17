@@ -16,3 +16,4 @@ pub mod telemetry;
 pub mod types;
 pub mod config;
 pub mod plugin;
+pub mod workflow;
