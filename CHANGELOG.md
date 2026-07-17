@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0] – 2026-07-17
+
+### Added
+- **Chain Strategy** – sequential pipeline of sub-strategies; each stage feeds into the next via `ExecutionEdge`
+- **ReAct Strategy** – reasoning loop with `Loop` control node and configurable `max_iterations`; mimics the ReAct (Reasoning + Acting) pattern
+- **Debate Strategy** – parallel debaters feeding into a judge strategy for adversarial refinement
+- 5 golden tests verifying subgraph structure for each new strategy
+
+### Changed
+- `StrategyKind::ReAct` added to the strategy enum
+
 ## [0.3.0] – 2026-07-17
 
 ### Added

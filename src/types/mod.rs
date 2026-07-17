@@ -128,6 +128,7 @@ pub enum StrategyKind {
     Reflection,
     Chain,
     Debate,
+    ReAct,
     Fusion,
 }
 

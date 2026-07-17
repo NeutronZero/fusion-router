@@ -28,7 +28,10 @@ use crate::resource::ResourceManager;
 use crate::resource::DefaultResourceManager;
 use crate::scheduler::Scheduler;
 use crate::scheduler::default::DefaultScheduler;
+use crate::strategies::chain::ChainStrategy;
 use crate::strategies::consensus::ConsensusStrategy;
+use crate::strategies::debate::DebateStrategy;
+use crate::strategies::react::ReActStrategy;
 use crate::strategies::reflection::ReflectionStrategy;
 use crate::strategies::single::SingleStrategy;
 use crate::strategies::Strategy;
@@ -90,6 +93,20 @@ impl AppState {
             }),
         );
         strategies.insert(StrategyKind::Reflection, Box::new(ReflectionStrategy));
+        strategies.insert(StrategyKind::Chain, Box::new(ChainStrategy {
+            stages: vec![
+                Box::new(SingleStrategy),
+                Box::new(ReflectionStrategy),
+            ],
+        }));
+        strategies.insert(StrategyKind::ReAct, Box::new(ReActStrategy::default()));
+        strategies.insert(StrategyKind::Debate, Box::new(DebateStrategy {
+            debaters: vec![
+                Box::new(SingleStrategy),
+                Box::new(SingleStrategy),
+            ],
+            judge: Box::new(SingleStrategy),
+        }));
 
         let executor = Arc::new(DefaultExecutor::new(
             provider.clone(),
