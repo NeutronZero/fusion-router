@@ -16,6 +16,8 @@ use crate::compiler::DefaultCompiler;
 use crate::compiler::passes::{ConstraintValidationPass, ModelResolutionPass};
 use crate::config::AppConfig;
 use crate::context::assembler::ContextAssembler;
+use crate::tools::{ToolRegistry, HTTPRequestTool, ShellCommandTool};
+use crate::tools::builtin::{CalculatorTool, SearchTool, FileReadTool};
 use crate::context::assembler::DefaultContextAssembler;
 use crate::executor::DefaultExecutor;
 use crate::planner::Planner;
@@ -51,6 +53,7 @@ pub struct AppState {
     pub provider: Arc<dyn ChatProvider + Send + Sync>,
     pub config: Arc<AppConfig>,
     pub workflow_registry: Arc<WorkflowRegistry>,
+    pub tool_registry: Arc<ToolRegistry>,
 }
 
 impl AppState {
@@ -99,7 +102,26 @@ impl AppState {
                 Box::new(ReflectionStrategy),
             ],
         }));
-        strategies.insert(StrategyKind::ReAct, Box::new(ReActStrategy::default()));
+        // Build tool registry from config
+        let mut tool_registry = ToolRegistry::new();
+        tool_registry.register(Arc::new(CalculatorTool));
+        tool_registry.register(Arc::new(SearchTool));
+        for dir in &config.tools.allowed_read_directories {
+            tool_registry.register(Arc::new(FileReadTool::new(dir.clone())));
+        }
+        if config.tools.enable_http_tool {
+            tool_registry.register(Arc::new(HTTPRequestTool::new()));
+        }
+        tool_registry.register(Arc::new(ShellCommandTool::new(
+            config.tools.allowed_shell_commands.clone(),
+            config.tools.shell_timeout_secs,
+        )));
+        let tool_registry = Arc::new(tool_registry);
+
+        strategies.insert(StrategyKind::ReAct, Box::new(ReActStrategy::new(
+            10,
+            Some(tool_registry.clone()),
+        )));
         strategies.insert(StrategyKind::Debate, Box::new(DebateStrategy {
             debaters: vec![
                 Box::new(SingleStrategy),
@@ -111,7 +133,7 @@ impl AppState {
         let executor = Arc::new(DefaultExecutor::new(
             provider.clone(),
             strategies,
-        ));
+        ).with_tool_registry(tool_registry.clone()));
 
         let scheduler = Arc::new(DefaultScheduler::new());
 
@@ -127,6 +149,7 @@ impl AppState {
             provider,
             config: Arc::new(config),
             workflow_registry,
+            tool_registry,
         }
     }
 }

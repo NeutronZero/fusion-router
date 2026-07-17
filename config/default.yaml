@@ -35,3 +35,14 @@ providers:
   openrouter:
     base_url: "https://openrouter.ai/api/v1"
     api_key_env: "OPENROUTER_API_KEY"
+
+tools:
+  allowed_shell_commands:
+    - ls
+    - echo
+    - cat
+    - cmd
+  shell_timeout_secs: 10
+  allowed_read_directories:
+    - "."
+  enable_http_tool: true

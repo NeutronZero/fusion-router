@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]
     pub strategies: StrategyConfig,
+    #[serde(default)]
+    pub tools: ToolsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -89,6 +91,41 @@ impl Default for StrategyConfig {
 }
 
 fn default_consensus_count() -> u32 { 3 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolsConfig {
+    #[serde(default = "default_allowed_shell_commands")]
+    pub allowed_shell_commands: Vec<String>,
+    #[serde(default = "default_shell_timeout_secs")]
+    pub shell_timeout_secs: u64,
+    #[serde(default = "default_allowed_read_directories")]
+    pub allowed_read_directories: Vec<String>,
+    #[serde(default = "default_enable_http_tool")]
+    pub enable_http_tool: bool,
+}
+
+fn default_allowed_shell_commands() -> Vec<String> {
+    vec!["ls".into(), "echo".into(), "cat".into(), "cmd".into()]
+}
+
+fn default_shell_timeout_secs() -> u64 { 10 }
+
+fn default_allowed_read_directories() -> Vec<String> {
+    vec![".".into()]
+}
+
+fn default_enable_http_tool() -> bool { true }
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            allowed_shell_commands: default_allowed_shell_commands(),
+            shell_timeout_secs: default_shell_timeout_secs(),
+            allowed_read_directories: default_allowed_read_directories(),
+            enable_http_tool: default_enable_http_tool(),
+        }
+    }
+}
 
 impl AppConfig {
     pub fn load(path: &str) -> anyhow::Result<Self> {

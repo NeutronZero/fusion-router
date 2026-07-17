@@ -83,6 +83,7 @@ async fn test_chat_completion_endpoint() {
             policies: vec![],
             providers: Default::default(),
             strategies: fusion_router::config::StrategyConfig { consensus_count: 3 },
+            tools: Default::default(),
         }
     });
 

@@ -73,6 +73,7 @@ fn build_app(quota: &Quota) -> Router {
         policies: vec![],
         providers: Default::default(),
         strategies: fusion_router::config::StrategyConfig { consensus_count: 3 },
+        tools: Default::default(),
     };
 
     let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config);
