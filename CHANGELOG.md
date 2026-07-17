@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0] – 2026-07-17
+
+### Added
+- **Workflow Registry** – named workflow definitions with YAML DSL
+  - `WorkflowDefinition` struct with name, description, capability filters, node/edge templates
+  - `WorkflowRegistry` with register, get, list, load_dir, select methods
+  - YAML-based workflow definitions auto-loaded from `workflows/` directory
+  - Example workflows: `code-review`, `chat`, `deep-research`
+- **WorkflowPlanner** – DAG planner that matches `Requirements` to registered workflows
+  - Selects workflow definition matching intent and complexity
+  - Falls back to `SimplePlanner` when no workflow matches
+  - `instantiate()` converts definition to `WorkflowIR` guided by `Requirements`
+- **Requirements Struct Migration** – typed fields replacing string maps
+  - `intent` renamed to `intent_classification`
+  - `Complexity` renamed to `ComplexityLevel`
+  - Added `has_files`, `context_window`, `original_text` fields
+  - Removed `soft_scores` and `hard_constraints` maps
+
+### Changed
+- Planner pipeline now uses `WorkflowPlanner` by default with `SimplePlanner` fallback
+
 ## [0.2.1] – 2026-07-17
 
 ### Added
