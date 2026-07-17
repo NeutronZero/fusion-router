@@ -341,11 +341,18 @@ pub struct Usage {
 
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum CompilerError {
-    #[error("Validation error: {0}")]
-    ValidationError(String),
-    #[error("Pass error: {0}")]
-    PassError(String),
-    #[error("Internal error: {0}")]
+    #[error("Validation error in pass '{pass}': {message}")]
+    ValidationError {
+        pass: String,
+        node_id: Option<Uuid>,
+        message: String,
+    },
+    #[error("Pass '{pass}' failed: {message}")]
+    PassError {
+        pass: String,
+        message: String,
+    },
+    #[error("Internal compiler error: {0}")]
     Internal(String),
 }
 
