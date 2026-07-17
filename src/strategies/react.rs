@@ -61,7 +61,7 @@ impl Strategy for ReActStrategy {
             model: node.model.clone(),
             retry_policy: node.retry_policy.clone(),
             fallback: node.fallback.clone(),
-            config: node.config.clone(),
+            config,
         };
 
         ExecutionSubgraph {

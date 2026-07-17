@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0] – 2026-07-17
+
+### Added
+- **HTTPRequestTool** – GET/POST/PUT/DELETE with configurable headers and 30s timeout
+- **ShellCommandTool** – allowed-list safety guard with timeout
+- **ToolRegistry utilities** – `len()`, `contains()`, `unregister()`
+- **Plugin tool support** – `[tool]` section in manifests, `register_tool()`
+- **Tool config** – `tools` section in `config/default.yaml`
+- **Tool dispatch in executor** – JSON tool invocation: `{"tool": "name", "args": {...}}`
+- **Tool loading in AppState** – Calculator, ShellCommand, HTTPRequest, FileRead pre‑registered
+- **Integration tests** – ReAct + tool registry golden tests
+- **Safety guards** – allow-list for shell, path canonicalization for file read
+
+### Fixed
+- ReAct strategy now correctly passes `available_tools` to generator nodes
+
 ## [0.5.0] – 2026-07-17
 
 ### Added
