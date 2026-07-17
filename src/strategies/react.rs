@@ -1,18 +1,27 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use super::Strategy;
+use crate::tools::ToolRegistry;
 use crate::types::{
     ExecutionEdge, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph, RetryPolicy, StrategyKind,
 };
 
 pub struct ReActStrategy {
     pub max_iterations: u32,
+    pub tool_registry: Option<Arc<ToolRegistry>>,
 }
 
 impl Default for ReActStrategy {
     fn default() -> Self {
-        Self { max_iterations: 10 }
+        Self { max_iterations: 10, tool_registry: None }
+    }
+}
+
+impl ReActStrategy {
+    pub fn new(max_iterations: u32, tool_registry: Option<Arc<ToolRegistry>>) -> Self {
+        Self { max_iterations, tool_registry }
     }
 }
 
@@ -20,6 +29,13 @@ impl Strategy for ReActStrategy {
     fn apply(&self, node: &ExecutionNode) -> ExecutionSubgraph {
         let loop_id = Uuid::new_v4();
         let gen_id = Uuid::new_v4();
+
+        let mut config = node.config.clone();
+        config.insert("max_iterations".into(), serde_json::json!(self.max_iterations));
+        if let Some(ref registry) = self.tool_registry {
+            let tool_names: Vec<&str> = registry.list();
+            config.insert("available_tools".into(), serde_json::json!(tool_names));
+        }
 
         let loop_node = ExecutionNode {
             id: loop_id,

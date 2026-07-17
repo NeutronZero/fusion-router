@@ -110,7 +110,7 @@ fn test_chain_strategy_single_stage_passthrough() {
 
 #[test]
 fn test_react_strategy_custom_max_iterations() {
-    let strategy = ReActStrategy { max_iterations: 5 };
+    let strategy = ReActStrategy { max_iterations: 5, tool_registry: None };
 
     let sub = strategy.apply(&make_node());
 

@@ -22,6 +22,7 @@ mod types;
 mod config;
 mod plugin;
 mod workflow;
+mod tools;
 
 use config::AppConfig;
 use providers::openrouter::OpenRouterProvider;
