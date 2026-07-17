@@ -20,6 +20,8 @@ mod resource;
 mod telemetry;
 mod types;
 mod config;
+mod plugin;
+mod workflow;
 
 use config::AppConfig;
 use providers::openrouter::OpenRouterProvider;
