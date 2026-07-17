@@ -1,6 +1,8 @@
 mod builtin;
+mod http_tool;
 mod registry;
 
+pub use http_tool::HTTPRequestTool;
 pub use registry::ToolRegistry;
 
 use async_trait::async_trait;
