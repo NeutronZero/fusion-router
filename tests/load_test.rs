@@ -317,6 +317,8 @@ async fn test_concurrent_dag_workflows() {
         metadata: GraphMetadata {
             estimated_cost: 0.02, estimated_tokens: 1000, max_depth: 2, node_count: 4,
         },
+        total_tokens: 1000,
+        total_cost: 1,
     };
 
     let start = Instant::now();
@@ -410,6 +412,8 @@ async fn test_loop_iteration_stress() {
         metadata: GraphMetadata {
             estimated_cost: 0.5, estimated_tokens: 25000, max_depth: 50, node_count: 3,
         },
+        total_tokens: 25000,
+        total_cost: 1,
     };
 
     let mut instance = scheduler.schedule(graph, ReservationId(Uuid::new_v4()));

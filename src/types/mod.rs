@@ -136,6 +136,8 @@ pub struct ExecutionGraph {
     pub nodes: Vec<ExecutionNode>,
     pub edges: Vec<ExecutionEdge>,
     pub metadata: GraphMetadata,
+    pub total_tokens: u64,
+    pub total_cost: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

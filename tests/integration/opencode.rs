@@ -217,6 +217,8 @@ async fn test_dag_split_join_workflow() {
             max_depth: 3,
             node_count: 5,
         },
+        total_tokens: 1500,
+        total_cost: 1,
     };
 
     let reservation = fusion_router::types::ReservationId(Uuid::new_v4());

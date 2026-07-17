@@ -70,6 +70,9 @@ pub(crate) fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerE
         });
     }
 
+    let total_cost = ir.metadata.estimated_cost.ceil() as u64;
+    let total_tokens = ir.metadata.estimated_tokens;
+
     Ok(ExecutionGraph {
         graph_id: ir.plan_id,
         nodes: exec_nodes,
@@ -80,5 +83,7 @@ pub(crate) fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerE
             max_depth: 1,
             node_count: ir.nodes.len() as u32,
         },
+        total_tokens,
+        total_cost,
     })
 }
