@@ -35,23 +35,33 @@ use telemetry::SqliteEvidenceRepository;
 async fn main() {
     let _ = dotenv::dotenv();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "fusion_router=debug,tower_http=debug".into()),
-        )
-        .init();
-
     let config_path = std::env::var("FUSION_CONFIG")
         .unwrap_or_else(|_| "config/default.yaml".to_string());
 
     let config = AppConfig::load(&config_path)
         .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "failed to load config, using defaults");
+            eprintln!("failed to load config: {e}, using defaults");
             AppConfig::load("config/default.yaml").unwrap_or_else(|_| {
                 panic!("Could not load config from config/default.yaml");
             })
         });
+
+    let log_level = &config.logging.level;
+    let log_format = &config.logging.format;
+
+    let env_filter = tracing_subscriber::EnvFilter::default()
+        .add_directive(log_level.parse().expect("invalid log level"));
+
+    if log_format == "json" {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(env_filter)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .init();
+    }
 
     tracing::info!("loaded config from {}", config_path);
 
