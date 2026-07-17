@@ -25,7 +25,7 @@ mod tools;
 mod cache;
 mod middleware;
 
-use config::AppConfig;
+use config::{AppConfig, AuthConfig};
 use providers::openrouter::OpenRouterProvider;
 use providers::router::ProviderRouter;
 use providers::zen::ZenProvider;
@@ -105,6 +105,7 @@ async fn main() {
     let host = config.server.host.clone();
     let port = config.server.port;
     let cors_config = config.server.cors.clone();
+    let auth_config = config.auth.clone();
 
     let rate_limiter = {
         let limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
@@ -128,6 +129,8 @@ async fn main() {
         .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
         .layer(axum::Extension(rate_limiter))
         .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
+        .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
+        .layer(axum::Extension(auth_config))
         .layer(crate::middleware::cors::cors_layer_from_config(&cors_config))
         .with_state(state);
 
