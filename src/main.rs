@@ -120,6 +120,7 @@ async fn main() {
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
         .layer(axum::Extension(rate_limiter))
+        .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
         .layer(crate::middleware::cors::cors_layer_from_config(&cors_config))
         .with_state(state);
 
