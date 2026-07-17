@@ -1,9 +1,11 @@
 mod builtin;
 mod http_tool;
 mod registry;
+mod shell_tool;
 
 pub use http_tool::HTTPRequestTool;
 pub use registry::ToolRegistry;
+pub use shell_tool::ShellCommandTool;
 
 use async_trait::async_trait;
 use serde_json::Value;
