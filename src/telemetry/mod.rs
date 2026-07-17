@@ -10,4 +10,5 @@ pub trait EvidenceRepository: Send + Sync {
 mod sqlite_repo;
 pub use sqlite_repo::SqliteEvidenceRepository;
 
-
+pub mod metrics;
+pub mod audit;

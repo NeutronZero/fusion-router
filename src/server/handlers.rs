@@ -307,6 +307,15 @@ async fn process_request(
     }
 }
 
+pub async fn metrics_handler() -> impl IntoResponse {
+    let metrics = crate::telemetry::metrics::render_metrics();
+    (
+        StatusCode::OK,
+        [("Content-Type", "text/plain; charset=utf-8")],
+        metrics,
+    )
+}
+
 fn error_response(request_id: Uuid, model: &str, error: &str) -> ChatCompletionResponse {
     ChatCompletionResponse {
         id: request_id.to_string(),

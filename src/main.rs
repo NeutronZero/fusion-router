@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use std::sync::Arc;
 
-use axum::{routing::post, Router};
+use axum::{routing::get, routing::post, Router};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -94,6 +94,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/v1/chat/completions", post(server::handlers::chat_completions))
+        .route("/metrics", get(server::handlers::metrics_handler))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state);
