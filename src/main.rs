@@ -23,6 +23,7 @@ mod config;
 mod plugin;
 mod workflow;
 mod tools;
+mod cache;
 
 use config::AppConfig;
 use providers::openrouter::OpenRouterProvider;

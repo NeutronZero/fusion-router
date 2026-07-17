@@ -480,6 +480,7 @@ dependencies = [
  "libloading",
  "meval",
  "moka",
+ "parking_lot",
  "pretty_assertions",
  "reqwest",
  "rusqlite",

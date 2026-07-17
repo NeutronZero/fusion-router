@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::info;
 
+use crate::cache::SemanticCache;
 use crate::providers::ChatProvider;
 use crate::strategies::Strategy;
 use crate::types::{
@@ -19,6 +20,7 @@ pub trait Executor: Send + Sync {
 pub struct DefaultExecutor {
     pub provider: Arc<dyn ChatProvider + Send + Sync>,
     pub strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>>,
+    pub cache: Option<Arc<SemanticCache>>,
 }
 
 impl DefaultExecutor {
@@ -26,7 +28,12 @@ impl DefaultExecutor {
         provider: Arc<dyn ChatProvider + Send + Sync>,
         strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>>,
     ) -> Self {
-        Self { provider, strategies }
+        Self { provider, strategies, cache: None }
+    }
+
+    pub fn with_cache(mut self, cache: Arc<SemanticCache>) -> Self {
+        self.cache = Some(cache);
+        self
     }
 
     fn build_request(node: &ExecutionNode) -> ChatCompletionRequest {
@@ -58,6 +65,11 @@ impl DefaultExecutor {
             files: None,
         }
     }
+
+    fn cache_key(request: &ChatCompletionRequest) -> String {
+        let messages_json = serde_json::to_string(&request.messages).unwrap_or_default();
+        format!("{}:{}", request.model, messages_json)
+    }
 }
 
 #[async_trait]
@@ -73,6 +85,23 @@ impl Executor for DefaultExecutor {
                 | ExecutionNodeKind::LLMReview
                 | ExecutionNodeKind::LLMJudge => {
                     let request = Self::build_request(sub_node);
+                    let cache_key = Self::cache_key(&request);
+
+                    if let Some(ref cache) = self.cache {
+                        if cache.get(&cache_key).await.is_some() {
+                            info!(
+                                node_id = %sub_node.id,
+                                "Cache hit for LLM node"
+                            );
+                            let latency = start.elapsed().as_millis() as u64;
+                            return NodeExecutionResult {
+                                state: NodeState::Succeeded,
+                                usage: None,
+                                latency_ms: latency,
+                            };
+                        }
+                    }
+
                     match self.provider.chat_completion(&request).await {
                         Ok(response) => {
                             info!(
@@ -80,6 +109,14 @@ impl Executor for DefaultExecutor {
                                 model = %response.model,
                                 "LLM node completed"
                             );
+
+                            if let Some(ref cache) = self.cache {
+                                let content = response.choices.first()
+                                    .map(|c| c.message.content.clone())
+                                    .unwrap_or_default();
+                                cache.put(&cache_key, serde_json::json!({ "content": content })).await;
+                            }
+
                             if let Some(usage) = response.usage {
                                 accumulated_usage = Some(match accumulated_usage {
                                     Some(acc) => Usage {
