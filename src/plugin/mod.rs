@@ -1,7 +1,9 @@
 mod manager;
 mod manifest;
 
+#[allow(unused_imports)]
 pub use manager::PluginManager;
+#[allow(unused_imports)]
 pub use manifest::PluginManifest;
 
 use std::collections::HashMap;
