@@ -245,6 +245,53 @@ impl AppConfig {
         }
     }
 
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors: Vec<String> = Vec::new();
+
+        if self.server.port == 0 {
+            errors.push("server.port must be greater than 0".into());
+        }
+
+        if self.server.shutdown_timeout_secs == 0 {
+            errors.push("server.shutdown_timeout_secs must be greater than 0".into());
+        }
+
+        if self.resources.max_daily_cost < 0.0 {
+            errors.push("resources.max_daily_cost must be non-negative".into());
+        }
+
+        if self.resources.max_concurrent == 0 {
+            errors.push("resources.max_concurrent must be greater than 0".into());
+        }
+
+        if self.auth.enabled && self.auth.api_keys.is_empty() {
+            errors.push("auth.enabled is true but no api_keys configured".into());
+        }
+
+        if self.rate_limiting.requests_per_minute == 0 {
+            errors.push("rate_limiting.requests_per_minute must be greater than 0".into());
+        }
+
+        if self.rate_limiting.burst_size == 0 {
+            errors.push("rate_limiting.burst_size must be greater than 0".into());
+        }
+
+        if self.rate_limiting.cleanup_interval_secs == 0 {
+            errors.push("rate_limiting.cleanup_interval_secs must be greater than 0".into());
+        }
+
+        match self.logging.format.as_str() {
+            "text" | "json" => {}
+            other => errors.push(format!("logging.format must be 'text' or 'json', got '{}'", other)),
+        }
+
+        if self.logging.level.is_empty() {
+            errors.push("logging.level must not be empty".into());
+        }
+
+        if errors.is_empty() { Ok(()) } else { Err(errors) }
+    }
+
     pub fn to_policies(&self) -> Vec<Policy> {
         self.policies.iter().map(|p| Policy {
             name: p.name.clone(),

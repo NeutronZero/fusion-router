@@ -46,6 +46,13 @@ async fn main() {
             })
         });
 
+    if let Err(errors) = config.validate() {
+        for err in &errors {
+            eprintln!("config validation error: {err}");
+        }
+        panic!("configuration validation failed with {} error(s)", errors.len());
+    }
+
     let log_level = &config.logging.level;
     let log_format = &config.logging.format;
 
