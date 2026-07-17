@@ -178,7 +178,7 @@ async fn process_request(
 
     // 2. Extract requirements
     let reqs = state.requirements_extractor.extract(&ctx);
-    tracing::debug!(intent = ?reqs.intent, complexity = ?reqs.complexity, "requirements extracted");
+    tracing::debug!(intent = ?reqs.intent_classification, complexity = ?reqs.complexity, "requirements extracted");
 
     // 3. Get evidence snapshot
     let evidence = state.evidence_repository.snapshot().await.ok();
@@ -227,7 +227,7 @@ async fn process_request(
                 node_id: *node_id,
                 model: request.model.clone(),
                 provider: state.provider.name().to_string(),
-                intent: reqs.intent.clone(),
+                intent: reqs.intent_classification.clone(),
                 latency_ms: result.total_latency_ms,
                 tokens: 0,
                 cost: 0.0,
@@ -245,7 +245,7 @@ async fn process_request(
         node_id: Uuid::nil(),
         model: request.model.clone(),
         provider: state.provider.name().to_string(),
-        intent: reqs.intent,
+        intent: reqs.intent_classification,
         latency_ms: result.total_latency_ms,
         tokens: result.total_tokens as u32,
         cost: result.total_cost,

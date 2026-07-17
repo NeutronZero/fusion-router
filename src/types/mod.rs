@@ -51,10 +51,11 @@ pub struct ContextSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Requirements {
-    pub intent: Intent,
-    pub complexity: Complexity,
-    pub soft_scores: HashMap<String, f32>,
-    pub hard_constraints: HashMap<String, String>,
+    pub intent_classification: Intent,
+    pub complexity: ComplexityLevel,
+    pub has_files: bool,
+    pub context_window: u64,
+    pub original_text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -68,7 +69,7 @@ pub enum Intent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum Complexity {
+pub enum ComplexityLevel {
     Low,
     Medium,
     High,

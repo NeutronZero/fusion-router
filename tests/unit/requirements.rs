@@ -1,5 +1,5 @@
 use fusion_router::requirements::extractor::{DefaultRequirementsExtractor, RequirementsExtractor};
-use fusion_router::types::{ChatMessage, ContextSnapshot, FileRef, Intent, Complexity};
+use fusion_router::types::{ChatMessage, ContextSnapshot, FileRef, Intent, ComplexityLevel};
 
 fn make_snapshot(messages: Vec<(&str, &str)>, files: Vec<&str>) -> ContextSnapshot {
     ContextSnapshot {
@@ -23,7 +23,7 @@ fn test_intent_classification_code() {
     let extractor = DefaultRequirementsExtractor;
     let ctx = make_snapshot(vec![("user", "Write a function to sort an array in Rust")], vec![]);
     let req = extractor.extract(&ctx);
-    assert_eq!(req.intent, Intent::Code);
+    assert_eq!(req.intent_classification, Intent::Code);
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn test_intent_classification_debug() {
     let extractor = DefaultRequirementsExtractor;
     let ctx = make_snapshot(vec![("user", "Fix this bug: the program crashes on startup")], vec![]);
     let req = extractor.extract(&ctx);
-    assert_eq!(req.intent, Intent::Debug);
+    assert_eq!(req.intent_classification, Intent::Debug);
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn test_intent_classification_general() {
     let extractor = DefaultRequirementsExtractor;
     let ctx = make_snapshot(vec![("user", "What is the weather today?")], vec![]);
     let req = extractor.extract(&ctx);
-    assert_eq!(req.intent, Intent::General);
+    assert_eq!(req.intent_classification, Intent::General);
 }
 
 #[test]
@@ -47,7 +47,7 @@ fn test_complexity_low() {
     let extractor = DefaultRequirementsExtractor;
     let ctx = make_snapshot(vec![("user", "Hi")], vec![]);
     let req = extractor.extract(&ctx);
-    assert_eq!(req.complexity, Complexity::Low);
+    assert_eq!(req.complexity, ComplexityLevel::Low);
 }
 
 #[test]
@@ -55,5 +55,5 @@ fn test_complexity_high_with_files() {
     let extractor = DefaultRequirementsExtractor;
     let ctx = make_snapshot(vec![("user", "Review this code")], vec!["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs"]);
     let req = extractor.extract(&ctx);
-    assert_eq!(req.complexity, Complexity::High);
+    assert_eq!(req.complexity, ComplexityLevel::High);
 }

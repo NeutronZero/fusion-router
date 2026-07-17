@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use super::Planner;
 use crate::types::{
-    Complexity, EvidenceSnapshot, IRMetadata, IRNode, IRNodeKind, Intent,
+    ComplexityLevel, EvidenceSnapshot, IRMetadata, IRNode, IRNodeKind, Intent,
     Policy, Requirements, StrategyKind, WorkflowIR,
 };
 
@@ -51,15 +51,15 @@ impl Planner for SimplePlanner {
 
 fn select_strategy(requirements: &Requirements) -> StrategyKind {
     match requirements.complexity {
-        Complexity::Critical => StrategyKind::Consensus,
-        Complexity::High => StrategyKind::Reflection,
-        Complexity::Medium => StrategyKind::Single,
-        Complexity::Low => StrategyKind::Single,
+        ComplexityLevel::Critical => StrategyKind::Consensus,
+        ComplexityLevel::High => StrategyKind::Reflection,
+        ComplexityLevel::Medium => StrategyKind::Single,
+        ComplexityLevel::Low => StrategyKind::Single,
     }
 }
 
 fn select_model(requirements: &Requirements) -> String {
-    match requirements.intent {
+    match requirements.intent_classification {
         Intent::Code | Intent::Debug | Intent::Architecture => "claude-sonnet-4-20250514".to_string(),
         Intent::Analysis => "claude-sonnet-4-20250514".to_string(),
         Intent::Creative => "claude-sonnet-4-20250514".to_string(),
