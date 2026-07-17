@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.1] – 2026-07-17
+
+### Added
+- Structured `CompilerError` with typed `ValidationError { pass, node_id, message }` and `PassError { pass, message }` variants
+- 3-color DFS cycle detection in `ControlFlowValidationPass` (replaces ad-hoc DFS)
+- `total_tokens` and `total_cost` fields on `ExecutionGraph`
+
+### Fixed
+- Cycle detection now follows standard white/grey/black coloring
+- Error messages include pass name and failing node ID
+
 ## [0.2.0] – 2026-07-17
 
 ### Added
