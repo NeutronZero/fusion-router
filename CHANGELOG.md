@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.5.0] – 2026-07-17
+
+### Added
+- **Dynamic Workflow Generation** (`DynamicPlanner`) – LLM generates `WorkflowIR` from requirements via prompt, validated through existing compiler passes
+  - ADR-015 documents the approach with safety guards
+  - `PlannerMode` enum: `Static`, `Dynamic`, `Hybrid`
+  - `DynamicPlannerConfig`: `max_generated_nodes` (20), `generation_timeout` (10s), `max_iterations` (10)
+  - Falls back to `SimplePlanner` on validation failure
+  - 4 unit tests for JSON IR parsing and safety limits
+- **Tool Registry** – pluggable tool system for ReAct and other strategies
+  - `Tool` trait with `name`, `description`, `schema`, `execute`
+  - `ToolRegistry` with `register`, `get`, `list`
+  - Built-in tools: `CalculatorTool` (arithmetic), `SearchTool` (mocked), `FileReadTool` (with path traversal protection)
+  - `ReActStrategy` now accepts optional `Arc<ToolRegistry>`
+- **Semantic Caching** – embedding-based response cache
+  - `Embedder` trait with `MockEmbedder` (384-dim deterministic vectors)
+  - `SemanticCache` with configurable similarity threshold and max entries
+  - LRU eviction when cache exceeds max entries
+  - Integrated into `DefaultExecutor`: cache check before provider call, store after
+- **NodeExecutionResult** – structured per-node execution metadata
+  - `Usage` field tracking `prompt_tokens`, `completion_tokens`, `total_tokens`
+  - Token/cost accumulation in `DefaultScheduler` with per-token cost rates
+  - Non-zero metrics propagated to `ExecutionResult`
+- **Prometheus Metrics** endpoint at `/metrics`
+  - Counters: `fusionrouter_requests_total`, `errors_total`, `tokens_total`
+  - Histograms: `request_duration_seconds`, `provider_latency_seconds`
+- **Audit Log** – structured in-memory audit trail with JSONL export
+- **WebSocket & Stdio Transports** – `Transport` trait with two new implementations
+- **Disconnected subgraph cycle detection** – golden test for `detect_cycle_disconnected_subgraph`
+- `IRNodeKind` gains `PartialEq` derive
+
+### Changed
+- `Executor::execute_node` returns `NodeExecutionResult` instead of `Result<NodeState, anyhow::Error>`
+- `Scheduler` trait: `create_instance` removed, `schedule` method now creates the instance
+- Plugin golden test cleaned up (removed unused `HashMap` import)
+- Version bumped to `0.5.0`
+
+### Fixed
+- Token/cost accumulation no longer stubbed at zero in `DefaultScheduler`
+- `FileReadTool` uses canonical path resolution for proper path traversal protection
+
 ## [0.4.0] – 2026-07-17
 
 ### Added
