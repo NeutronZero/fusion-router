@@ -1,4 +1,4 @@
-mod builtin;
+pub mod builtin;
 mod http_tool;
 mod registry;
 mod shell_tool;

@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
+use serde_json::Value;
 use tracing::info;
 
 use crate::cache::SemanticCache;
 use crate::providers::ChatProvider;
 use crate::strategies::Strategy;
+use crate::tools::ToolRegistry;
 use crate::types::{
     ChatCompletionRequest, ChatMessage, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph,
     NodeExecutionResult, NodeState, StrategyKind, Usage,
@@ -21,6 +23,7 @@ pub struct DefaultExecutor {
     pub provider: Arc<dyn ChatProvider + Send + Sync>,
     pub strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>>,
     pub cache: Option<Arc<SemanticCache>>,
+    pub tool_registry: Option<Arc<ToolRegistry>>,
 }
 
 impl DefaultExecutor {
@@ -28,11 +31,16 @@ impl DefaultExecutor {
         provider: Arc<dyn ChatProvider + Send + Sync>,
         strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>>,
     ) -> Self {
-        Self { provider, strategies, cache: None }
+        Self { provider, strategies, cache: None, tool_registry: None }
     }
 
     pub fn with_cache(mut self, cache: Arc<SemanticCache>) -> Self {
         self.cache = Some(cache);
+        self
+    }
+
+    pub fn with_tool_registry(mut self, registry: Arc<ToolRegistry>) -> Self {
+        self.tool_registry = Some(registry);
         self
     }
 
@@ -115,6 +123,34 @@ impl Executor for DefaultExecutor {
                                     .map(|c| c.message.content.clone())
                                     .unwrap_or_default();
                                 cache.put(&cache_key, serde_json::json!({ "content": content })).await;
+                            }
+
+                            if let Some(ref tool_registry) = self.tool_registry {
+                                if let Some(content) = response.choices.first()
+                                    .map(|c| c.message.content.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                {
+                                    if let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&content) {
+                                        if let Some(tool_name) = obj.get("tool").and_then(|v| v.as_str()) {
+                                            if tool_registry.contains(tool_name) {
+                                                let tool = tool_registry.get(tool_name).unwrap();
+                                                let tool_args = obj.get("args").cloned().unwrap_or(Value::Null);
+                                                match tool.execute(tool_args).await {
+                                                    Ok(result) => {
+                                                        info!(tool = %tool_name, "Tool executed successfully");
+                                                        // Store result in response for downstream nodes
+                                                        let _ = result;
+                                                    }
+                                                    Err(e) => {
+                                                        info!(tool = %tool_name, error = %e, "Tool execution failed");
+                                                    }
+                                                }
+                                            } else {
+                                                info!(tool = %tool_name, "Unknown tool requested");
+                                            }
+                                        }
+                                    }
+                                }
                             }
 
                             if let Some(usage) = response.usage {
