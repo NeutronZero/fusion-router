@@ -1,0 +1,27 @@
+name: deep-research
+description: Multi-step research with analysis and synthesis
+required_intents: ["Architecture", "Analysis"]
+min_complexity: 2
+requires_files: false
+node_templates:
+  - kind: Generate
+    strategy: Single
+    model: claude-sonnet-4-20250514
+    config:
+      temperature: 0.3
+      system_prompt: "You are a research assistant. Analyze the query thoroughly."
+  - kind: Review
+    strategy: Reflection
+    config:
+      review_focus: "completeness,accuracy"
+  - kind: Generate
+    strategy: Single
+    model: claude-sonnet-4-20250514
+    config:
+      temperature: 0.5
+      system_prompt: "Synthesize findings into a coherent response."
+edges:
+  - from: 0
+    to: 1
+  - from: 1
+    to: 2

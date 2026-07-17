@@ -19,7 +19,8 @@ use crate::context::assembler::ContextAssembler;
 use crate::context::assembler::DefaultContextAssembler;
 use crate::executor::DefaultExecutor;
 use crate::planner::Planner;
-use crate::planner::SimplePlanner;
+use crate::planner::WorkflowPlanner;
+use crate::workflow::WorkflowRegistry;
 use crate::providers::ChatProvider;
 use crate::requirements::extractor::RequirementsExtractor;
 use crate::requirements::extractor::DefaultRequirementsExtractor;
@@ -38,7 +39,7 @@ use crate::types::*;
 pub struct AppState {
     pub context_assembler: Arc<DefaultContextAssembler>,
     pub requirements_extractor: Arc<DefaultRequirementsExtractor>,
-    pub planner: Arc<SimplePlanner>,
+    pub planner: Arc<dyn Planner + Send + Sync>,
     pub compiler: Arc<DefaultCompiler>,
     pub scheduler: Arc<DefaultScheduler>,
     pub executor: Arc<DefaultExecutor>,
@@ -46,6 +47,7 @@ pub struct AppState {
     pub evidence_repository: Arc<dyn EvidenceRepository + Send + Sync>,
     pub provider: Arc<dyn ChatProvider + Send + Sync>,
     pub config: Arc<AppConfig>,
+    pub workflow_registry: Arc<WorkflowRegistry>,
 }
 
 impl AppState {
@@ -57,7 +59,14 @@ impl AppState {
     ) -> Self {
         let context_assembler = Arc::new(DefaultContextAssembler::new());
         let requirements_extractor = Arc::new(DefaultRequirementsExtractor);
-        let planner = Arc::new(SimplePlanner);
+
+        let mut workflow_registry = WorkflowRegistry::new();
+        let _ = workflow_registry.load_dir("workflows");
+        let workflow_registry = Arc::new(workflow_registry);
+
+        let planner: Arc<dyn Planner + Send + Sync> = Arc::new(
+            WorkflowPlanner::new(workflow_registry.clone()),
+        );
 
         let resource_manager = Arc::new(resource_manager);
 
@@ -100,6 +109,7 @@ impl AppState {
             evidence_repository,
             provider,
             config: Arc::new(config),
+            workflow_registry,
         }
     }
 }

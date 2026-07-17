@@ -1,0 +1,10 @@
+name: chat
+description: Simple single-turn chat completion
+required_intents: ["General", "Creative", "Analysis"]
+min_complexity: 0
+requires_files: false
+node_templates:
+  - kind: Generate
+    strategy: Single
+    config:
+      temperature: 0.7

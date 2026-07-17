@@ -3,7 +3,6 @@ use async_trait::async_trait;
 mod simple;
 mod workflow;
 
-pub use simple::SimplePlanner;
 pub use workflow::WorkflowPlanner;
 
 use crate::types::{EvidenceSnapshot, Policy, Requirements, WorkflowIR};
