@@ -106,4 +106,19 @@ fn test_plugin_manager_default_is_empty() {
     assert!(mgr.registry().providers.is_empty());
     assert!(mgr.registry().strategies.is_empty());
     assert!(mgr.registry().passes.is_empty());
+    assert!(mgr.registry().tools.is_empty());
+}
+
+#[test]
+fn test_plugin_registry_register_tool() {
+    use std::sync::Arc;
+    use fusion_router::tools::{Tool, builtin::CalculatorTool};
+
+    let mut mgr = PluginManager::new();
+    let tool: Arc<dyn Tool + Send + Sync> = Arc::new(CalculatorTool);
+    mgr.register_tool(tool);
+
+    let registry = mgr.registry();
+    assert_eq!(registry.tools.len(), 1);
+    assert!(registry.tools.contains_key("calculator"));
 }

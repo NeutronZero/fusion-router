@@ -12,15 +12,18 @@ use std::sync::Arc;
 use crate::compiler::CompilerPass;
 use crate::providers::ChatProvider;
 use crate::strategies::Strategy;
+use crate::tools::Tool;
 
 pub type BoxedProvider = Box<dyn ChatProvider + Send + Sync>;
 pub type BoxedStrategy = Box<dyn Strategy + Send + Sync>;
 pub type BoxedPass = Box<dyn CompilerPass + Send + Sync>;
+pub type BoxedTool = Arc<dyn Tool + Send + Sync>;
 
 pub struct PluginRegistry {
     pub providers: HashMap<String, Arc<dyn ChatProvider + Send + Sync>>,
     pub strategies: HashMap<crate::types::StrategyKind, Box<dyn Strategy + Send + Sync>>,
     pub passes: Vec<Box<dyn CompilerPass + Send + Sync>>,
+    pub tools: HashMap<String, BoxedTool>,
 }
 
 impl PluginRegistry {
@@ -29,6 +32,7 @@ impl PluginRegistry {
             providers: HashMap::new(),
             strategies: HashMap::new(),
             passes: Vec::new(),
+            tools: HashMap::new(),
         }
     }
 
@@ -45,6 +49,11 @@ impl PluginRegistry {
     pub fn register_pass(&mut self, pass: Box<dyn CompilerPass + Send + Sync>) {
         tracing::info!(pass = %pass.name(), "registered plugin compiler pass");
         self.passes.push(pass);
+    }
+
+    pub fn register_tool(&mut self, tool: BoxedTool) {
+        tracing::info!(tool = %tool.name(), "registered plugin tool");
+        self.tools.insert(tool.name().to_string(), tool);
     }
 }
 

@@ -45,6 +45,10 @@ impl PluginManager {
         self.registry.register_pass(pass);
     }
 
+    pub fn register_tool(&mut self, tool: Arc<dyn crate::tools::Tool + Send + Sync>) {
+        self.registry.register_tool(tool);
+    }
+
     pub fn manifests(&self) -> &HashMap<String, PluginManifest> {
         &self.manifests
     }

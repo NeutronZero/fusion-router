@@ -10,6 +10,8 @@ pub struct PluginManifest {
     pub strategy: Option<StrategyConfig>,
     #[serde(default)]
     pub pass: Option<PassConfig>,
+    #[serde(default)]
+    pub tool: Option<ToolConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -35,6 +37,12 @@ pub struct StrategyConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PassConfig {
+    pub name: String,
+    pub config: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolConfig {
     pub name: String,
     pub config: HashMap<String, serde_json::Value>,
 }
