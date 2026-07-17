@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{routing::post, Router};
+use axum::{routing::get, routing::post, Router};
 use tower_http::trace::TraceLayer;
 
 use fusion_router::config::AppConfig;
@@ -238,4 +238,192 @@ async fn test_dag_split_join_workflow() {
         .filter(|s| **s == fusion_router::types::NodeState::Succeeded)
         .collect();
     assert_eq!(succeeded.len(), 5, "All 5 nodes should succeed (Split + A + B + Join + Final)");
+}
+
+use fusion_router::config::{AuthConfig, CorsConfig, RateLimitingConfig, LoggingConfig, ServerConfig, ResourceConfig, StrategyConfig, ToolsConfig};
+use fusion_router::middleware;
+
+struct MidMockProvider;
+
+#[async_trait::async_trait]
+impl ChatProvider for MidMockProvider {
+    fn name(&self) -> &str { "mock" }
+    async fn chat_completion(
+        &self,
+        request: &fusion_router::types::ChatCompletionRequest,
+    ) -> anyhow::Result<fusion_router::types::ChatCompletionResponse> {
+        Ok(fusion_router::types::ChatCompletionResponse {
+            id: "mock-id".into(),
+            object: "chat.completion".into(),
+            created: chrono::Utc::now().timestamp(),
+            model: request.model.clone(),
+            choices: vec![fusion_router::types::Choice {
+                index: 0,
+                message: fusion_router::types::ChatMessage { role: "assistant".into(), content: "Hello!".into() },
+                finish_reason: "stop".into(),
+            }],
+            usage: Some(fusion_router::types::Usage { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }),
+        })
+    }
+}
+
+fn test_config() -> AppConfig {
+    AppConfig {
+        server: ServerConfig { host: "0.0.0.0".into(), port: 8080, shutdown_timeout_secs: 30, cors: CorsConfig::default() },
+        resources: ResourceConfig { max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default() },
+        policies: vec![], providers: Default::default(),
+        strategies: StrategyConfig { consensus_count: 3 }, tools: ToolsConfig::default(),
+        auth: AuthConfig { enabled: true, api_keys: vec!["test-key".into()] },
+        rate_limiting: RateLimitingConfig::default(),
+        logging: LoggingConfig::default(),
+    }
+}
+
+#[tokio::test]
+async fn test_middleware_stack_rejects_unauthenticated() {
+    let provider = Arc::new(MidMockProvider);
+    let resource_manager = DefaultResourceManager::new(Quota {
+        max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default(),
+    });
+    let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
+    let config = test_config();
+
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone());
+
+    let rate_limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
+    let app = Router::new()
+        .route("/v1/chat/completions", post(fusion_router::server::handlers::chat_completions))
+        .route("/health", get(fusion_router::server::health::health_handler))
+        .route("/metrics", get(fusion_router::server::handlers::metrics_handler))
+        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
+        .layer(axum::Extension(rate_limiter))
+        .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
+        .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
+        .layer(axum::Extension(config.auth))
+        .layer(fusion_router::middleware::cors::cors_layer_from_config(&config.server.cors))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+    let client = reqwest::Client::new();
+
+    // Without auth key -> 401
+    let res = client.post(format!("http://{}/v1/chat/completions", addr))
+        .json(&serde_json::json!({"model":"test","messages":[{"role":"user","content":"hi"}]}))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 401);
+
+    // With valid key -> 200
+    let res = client.post(format!("http://{}/v1/chat/completions", addr))
+        .header("x-api-key", "test-key")
+        .json(&serde_json::json!({"model":"test","messages":[{"role":"user","content":"hi"}]}))
+        .send().await.unwrap();
+    assert_eq!(res.status(), 200);
+
+    // Health endpoint is whitelisted -> 200
+    let res = client.get(format!("http://{}/health", addr)).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+}
+
+#[tokio::test]
+async fn test_middleware_request_id_header() {
+    let provider = Arc::new(MidMockProvider);
+    let resource_manager = DefaultResourceManager::new(Quota {
+        max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default(),
+    });
+    let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
+    let config = test_config();
+
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone());
+
+    let rate_limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
+    let app = Router::new()
+        .route("/health", get(fusion_router::server::health::health_handler))
+        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
+        .layer(axum::Extension(rate_limiter))
+        .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
+        .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
+        .layer(axum::Extension(config.auth))
+        .layer(fusion_router::middleware::cors::cors_layer_from_config(&config.server.cors))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+    let client = reqwest::Client::new();
+
+    // Generated request ID
+    let res = client.get(format!("http://{}/health", addr)).send().await.unwrap();
+    assert!(res.headers().contains_key("x-request-id"));
+
+    // Passthrough request ID
+    let res = client.get(format!("http://{}/health", addr))
+        .header("x-request-id", "my-custom-id")
+        .send().await.unwrap();
+    assert_eq!(res.headers().get("x-request-id").unwrap(), "my-custom-id");
+}
+
+#[tokio::test]
+async fn test_config_validation_valid() {
+    let config = test_config();
+    assert!(config.validate().is_ok());
+}
+
+#[tokio::test]
+async fn test_config_validation_auth_no_keys() {
+    let mut config = test_config();
+    config.auth.enabled = true;
+    config.auth.api_keys.clear();
+    assert!(config.validate().is_err());
+}
+
+#[tokio::test]
+async fn test_config_validation_invalid_format() {
+    let mut config = test_config();
+    config.logging.format = "xml".into();
+    assert!(config.validate().is_err());
+}
+
+#[tokio::test]
+async fn test_health_ready_endpoints() {
+    let provider = Arc::new(MidMockProvider);
+    let resource_manager = DefaultResourceManager::new(Quota {
+        max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default(),
+    });
+    let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
+    let config = test_config();
+
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone());
+
+    let rate_limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
+    let app = Router::new()
+        .route("/health", get(fusion_router::server::health::health_handler))
+        .route("/ready", get(fusion_router::server::health::ready_handler))
+        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
+        .layer(axum::Extension(rate_limiter))
+        .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
+        .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
+        .layer(axum::Extension(config.auth))
+        .layer(fusion_router::middleware::cors::cors_layer_from_config(&config.server.cors))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+    let client = reqwest::Client::new();
+    let res = client.get(format!("http://{}/health", addr)).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+
+    let res = client.get(format!("http://{}/ready", addr)).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
 }
