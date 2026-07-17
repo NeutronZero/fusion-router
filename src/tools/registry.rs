@@ -24,13 +24,51 @@ impl ToolRegistry {
         self.tools.keys().map(|k| k.as_str()).collect()
     }
 
+    pub fn len(&self) -> usize {
+        self.tools.len()
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
+    }
+
+    pub fn unregister(&mut self, name: &str) {
+        self.tools.remove(name);
     }
 }
 
 impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::builtin::CalculatorTool;
+
+    #[test]
+    fn test_registry_len_and_contains() {
+        let mut reg = ToolRegistry::new();
+        assert_eq!(reg.len(), 0);
+        assert!(!reg.contains("calculator"));
+        reg.register(Arc::new(CalculatorTool));
+        assert_eq!(reg.len(), 1);
+        assert!(reg.contains("calculator"));
+    }
+
+    #[test]
+    fn test_unregister() {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(CalculatorTool));
+        assert!(reg.contains("calculator"));
+        reg.unregister("calculator");
+        assert!(!reg.contains("calculator"));
+        assert_eq!(reg.len(), 0);
     }
 }
