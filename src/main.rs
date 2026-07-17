@@ -2,7 +2,6 @@
 use std::sync::Arc;
 
 use axum::{routing::get, routing::post, Router};
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 mod server;
@@ -24,6 +23,7 @@ mod plugin;
 mod workflow;
 mod tools;
 mod cache;
+mod middleware;
 
 use config::AppConfig;
 use providers::openrouter::OpenRouterProvider;
@@ -85,6 +85,7 @@ async fn main() {
             SqliteEvidenceRepository::new(":memory:").expect("in-memory db")
         });
 
+    let cors_config = config.server.cors.clone();
     let state = server::handlers::AppState::new(
         provider_router,
         resource_manager,
@@ -96,7 +97,7 @@ async fn main() {
         .route("/v1/chat/completions", post(server::handlers::chat_completions))
         .route("/metrics", get(server::handlers::metrics_handler))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(crate::middleware::cors::cors_layer_from_config(&cors_config))
         .with_state(state);
 
     let addr = format!("{}:{}", "0.0.0.0", 8080)
