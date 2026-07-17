@@ -274,6 +274,13 @@ pub struct ProviderResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeExecutionResult {
+    pub state: NodeState,
+    pub usage: Option<Usage>,
+    pub latency_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageInfo {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,

@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 use std::time::Instant;
-use async_trait::async_trait;
 use futures::future::join_all;
 use tracing::{info, info_span, Instrument};
 use uuid::Uuid;
 
-use super::work_queue::WorkQueue;
-use super::Scheduler;
 use crate::executor::Executor;
+use crate::scheduler::work_queue::WorkQueue;
 use crate::types::{
     ExecutionGraph, ExecutionInstance, ExecutionNodeKind, ExecutionResult, NodeState,
     ReservationId, SchedulerError,
 };
+
+const COST_PER_INPUT_TOKEN: f64 = 0.002 / 1000.0;
+const COST_PER_OUTPUT_TOKEN: f64 = 0.01 / 1000.0;
 
 pub struct DefaultScheduler;
 
@@ -21,20 +22,13 @@ impl DefaultScheduler {
     }
 }
 
-impl Default for DefaultScheduler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl Scheduler for DefaultScheduler {
+#[async_trait::async_trait]
+impl crate::scheduler::Scheduler for DefaultScheduler {
     fn schedule(&self, graph: ExecutionGraph, reservation: ReservationId) -> ExecutionInstance {
-        let node_states: HashMap<Uuid, NodeState> = graph
-            .nodes
-            .iter()
-            .map(|n| (n.id, NodeState::Pending))
-            .collect();
+        let mut node_states = HashMap::new();
+        for node in &graph.nodes {
+            node_states.insert(node.id, NodeState::Pending);
+        }
 
         ExecutionInstance {
             instance_id: Uuid::new_v4(),
@@ -55,8 +49,8 @@ impl Scheduler for DefaultScheduler {
         executor: &dyn Executor,
     ) -> Result<ExecutionResult, SchedulerError> {
         let start = Instant::now();
-        let total_tokens: u64 = 0;
-        let total_cost: f64 = 0.0;
+        let mut total_tokens: u64 = 0;
+        let mut total_cost: f64 = 0.0;
         let mut retry_counts: HashMap<Uuid, u32> = HashMap::new();
         let mut loop_iterations: HashMap<Uuid, u32> = HashMap::new();
 
@@ -89,10 +83,8 @@ impl Scheduler for DefaultScheduler {
                 let span = info_span!("exec_node", node_id = %node.id, kind = ?node.kind);
                 handles.push(
                     async move {
-                        let node_start = Instant::now();
                         let result = executor.execute_node(&node).await;
-                        let latency = node_start.elapsed().as_millis() as u64;
-                        (node.id, result, latency)
+                        (node.id, result)
                     }
                     .instrument(span),
                 );
@@ -100,9 +92,15 @@ impl Scheduler for DefaultScheduler {
 
             let results = join_all(handles).await;
 
-            for (node_id, result, latency) in results {
-                match result {
-                    Ok(NodeState::Succeeded) => {
+            for (node_id, exec_result) in results {
+                let latency = exec_result.latency_ms;
+                if let Some(ref usage) = exec_result.usage {
+                    total_tokens += usage.total_tokens as u64;
+                    total_cost += usage.prompt_tokens as f64 * COST_PER_INPUT_TOKEN
+                        + usage.completion_tokens as f64 * COST_PER_OUTPUT_TOKEN;
+                }
+                match exec_result.state {
+                    NodeState::Succeeded => {
                         info!(node_id = ?node_id, latency_ms = latency, "Node succeeded");
                         instance.node_states.insert(node_id, NodeState::Succeeded);
 
@@ -203,7 +201,7 @@ impl Scheduler for DefaultScheduler {
                             }
                         }
                     }
-                    Ok(NodeState::Failed(reason)) => {
+                    NodeState::Failed(reason) => {
                         info!(node_id = ?node_id, reason = %reason, latency_ms = latency, "Node failed");
                         let retries = retry_counts.entry(node_id).or_insert(0);
 
@@ -235,15 +233,16 @@ impl Scheduler for DefaultScheduler {
                                 );
                                 let mut fallback_node = node.clone();
                                 fallback_node.model = fallback.model.clone();
-                                match executor.execute_node(&fallback_node).await {
-                                    Ok(NodeState::Succeeded) => {
+                                let fb_result = executor.execute_node(&fallback_node).await;
+                                match fb_result.state {
+                                    NodeState::Succeeded => {
                                         info!(node_id = ?node_id, "Fallback succeeded");
                                         instance
                                             .node_states
                                             .insert(node_id, NodeState::Succeeded);
                                         queue.mark_completed(node_id);
                                     }
-                                    Ok(NodeState::Failed(fb_reason)) => {
+                                    NodeState::Failed(fb_reason) => {
                                         instance.node_states.insert(
                                             node_id,
                                             NodeState::Failed(format!(
@@ -253,22 +252,12 @@ impl Scheduler for DefaultScheduler {
                                         );
                                         queue.mark_failed(node_id);
                                     }
-                                    Ok(_) => {
+                                    _ => {
                                         instance.node_states.insert(
                                             node_id,
                                             NodeState::Succeeded,
                                         );
                                         queue.mark_completed(node_id);
-                                    }
-                                    Err(e) => {
-                                        instance.node_states.insert(
-                                            node_id,
-                                            NodeState::Failed(format!(
-                                                "Fallback error: {}",
-                                                e
-                                            )),
-                                        );
-                                        queue.mark_failed(node_id);
                                     }
                                 }
                             } else {
@@ -283,13 +272,6 @@ impl Scheduler for DefaultScheduler {
                                 .insert(node_id, NodeState::Failed(reason));
                             queue.mark_failed(node_id);
                         }
-                    }
-                    Err(e) => {
-                        info!(node_id = ?node_id, error = %e, "Node execution error");
-                        instance
-                            .node_states
-                            .insert(node_id, NodeState::Failed(e.to_string()));
-                        queue.mark_failed(node_id);
                     }
                     _ => {
                         instance.node_states.insert(node_id, NodeState::Succeeded);

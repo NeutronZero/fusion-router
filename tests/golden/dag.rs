@@ -254,3 +254,40 @@ async fn test_compiler_passes_handle_all_node_kinds() {
     assert_eq!(graph.nodes.len(), 4);
     assert_eq!(graph.edges.len(), 4);
 }
+
+#[tokio::test]
+async fn detect_cycle_disconnected_subgraph() {
+    let pass = ControlFlowValidationPass;
+
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    let c = Uuid::new_v4();
+    let d = Uuid::new_v4();
+
+    let ir = WorkflowIR {
+        plan_id: Uuid::nil(),
+        nodes: vec![
+            IRNode { id: a, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: b, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: c, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: d, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+        ],
+        edges: vec![
+            IREdge { from: a, to: b, condition: None },
+            IREdge { from: b, to: c, condition: None },
+            IREdge { from: c, to: a, condition: None },
+            // d is disconnected from the a→b→c cycle
+        ],
+        metadata: IRMetadata {
+            policy_applied: vec!["test".into()],
+            estimated_cost: 0.01,
+            estimated_tokens: 500,
+        },
+    };
+
+    let result = pass.apply(ir).await;
+    assert!(
+        result.is_err(),
+        "Should detect cycle even in disconnected subgraph (a→b→c→a)"
+    );
+}

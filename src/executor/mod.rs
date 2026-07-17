@@ -7,12 +7,12 @@ use crate::providers::ChatProvider;
 use crate::strategies::Strategy;
 use crate::types::{
     ChatCompletionRequest, ChatMessage, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph,
-    NodeState, StrategyKind,
+    NodeExecutionResult, NodeState, StrategyKind, Usage,
 };
 
 #[async_trait]
 pub trait Executor: Send + Sync {
-    async fn execute_node(&self, node: &ExecutionNode) -> Result<NodeState, anyhow::Error>;
+    async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult;
     async fn resolve_strategy(&self, node: &ExecutionNode) -> ExecutionSubgraph;
 }
 
@@ -62,8 +62,10 @@ impl DefaultExecutor {
 
 #[async_trait]
 impl Executor for DefaultExecutor {
-    async fn execute_node(&self, node: &ExecutionNode) -> Result<NodeState, anyhow::Error> {
+    async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult {
+        let start = std::time::Instant::now();
         let subgraph = self.resolve_strategy(node).await;
+        let mut accumulated_usage: Option<Usage> = None;
 
         for sub_node in &subgraph.nodes {
             match sub_node.kind {
@@ -78,6 +80,16 @@ impl Executor for DefaultExecutor {
                                 model = %response.model,
                                 "LLM node completed"
                             );
+                            if let Some(usage) = response.usage {
+                                accumulated_usage = Some(match accumulated_usage {
+                                    Some(acc) => Usage {
+                                        prompt_tokens: acc.prompt_tokens + usage.prompt_tokens,
+                                        completion_tokens: acc.completion_tokens + usage.completion_tokens,
+                                        total_tokens: acc.total_tokens + usage.total_tokens,
+                                    },
+                                    None => usage,
+                                });
+                            }
                         }
                         Err(e) => {
                             info!(
@@ -85,7 +97,12 @@ impl Executor for DefaultExecutor {
                                 error = %e,
                                 "LLM node failed"
                             );
-                            return Ok(NodeState::Failed(format!("Provider error: {}", e)));
+                            let latency = start.elapsed().as_millis() as u64;
+                            return NodeExecutionResult {
+                                state: NodeState::Failed(format!("Provider error: {}", e)),
+                                usage: None,
+                                latency_ms: latency,
+                            };
                         }
                     }
                 }
@@ -100,7 +117,12 @@ impl Executor for DefaultExecutor {
             }
         }
 
-        Ok(NodeState::Succeeded)
+        let latency = start.elapsed().as_millis() as u64;
+        NodeExecutionResult {
+            state: NodeState::Succeeded,
+            usage: accumulated_usage,
+            latency_ms: latency,
+        }
     }
 
     async fn resolve_strategy(&self, node: &ExecutionNode) -> ExecutionSubgraph {
