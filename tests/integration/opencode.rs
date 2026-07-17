@@ -73,7 +73,7 @@ async fn test_chat_completion_endpoint() {
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = AppConfig::load("config/default.yaml").unwrap_or_else(|_| {
         AppConfig {
-            server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 8080 },
+            server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 8080, shutdown_timeout_secs: 30, cors: Default::default() },
             resources: fusion_router::config::ResourceConfig {
                 max_daily_cost: 100.0,
                 max_daily_tokens: 100000,
@@ -84,6 +84,9 @@ async fn test_chat_completion_endpoint() {
             providers: Default::default(),
             strategies: fusion_router::config::StrategyConfig { consensus_count: 3 },
             tools: Default::default(),
+            auth: Default::default(),
+            rate_limiting: Default::default(),
+            logging: Default::default(),
         }
     });
 

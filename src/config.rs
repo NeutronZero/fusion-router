@@ -15,6 +15,12 @@ pub struct AppConfig {
     pub strategies: StrategyConfig,
     #[serde(default)]
     pub tools: ToolsConfig,
+    #[serde(default)]
+    pub auth: AuthConfig,
+    #[serde(default)]
+    pub rate_limiting: RateLimitingConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -23,10 +29,100 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default = "default_shutdown_timeout")]
+    pub shutdown_timeout_secs: u64,
+    #[serde(default)]
+    pub cors: CorsConfig,
 }
 
 fn default_host() -> String { "0.0.0.0".to_string() }
 fn default_port() -> u16 { 8080 }
+fn default_shutdown_timeout() -> u64 { 30 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CorsConfig {
+    #[serde(default = "default_cors_origins")]
+    pub allowed_origins: Vec<String>,
+    #[serde(default = "default_cors_methods")]
+    pub allowed_methods: Vec<String>,
+    #[serde(default = "default_cors_headers")]
+    pub allowed_headers: Vec<String>,
+}
+
+fn default_cors_origins() -> Vec<String> { vec!["*".into()] }
+fn default_cors_methods() -> Vec<String> { vec!["GET".into(), "POST".into(), "PUT".into(), "DELETE".into(), "OPTIONS".into()] }
+fn default_cors_headers() -> Vec<String> { vec!["content-type".into(), "authorization".into(), "x-api-key".into(), "x-request-id".into()] }
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            allowed_origins: default_cors_origins(),
+            allowed_methods: default_cors_methods(),
+            allowed_headers: default_cors_headers(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub api_keys: Vec<String>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self { enabled: false, api_keys: vec![] }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitingConfig {
+    #[serde(default = "default_rpm")]
+    pub requests_per_minute: u64,
+    #[serde(default = "default_burst")]
+    pub burst_size: u32,
+    #[serde(default = "default_cleanup_interval")]
+    pub cleanup_interval_secs: u64,
+}
+
+fn default_rpm() -> u64 { 60 }
+fn default_burst() -> u32 { 10 }
+fn default_cleanup_interval() -> u64 { 300 }
+
+impl Default for RateLimitingConfig {
+    fn default() -> Self {
+        Self {
+            requests_per_minute: default_rpm(),
+            burst_size: default_burst(),
+            cleanup_interval_secs: default_cleanup_interval(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoggingConfig {
+    #[serde(default = "default_log_format")]
+    pub format: String,
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    #[serde(default)]
+    pub directory: Option<String>,
+}
+
+fn default_log_format() -> String { "text".into() }
+fn default_log_level() -> String { "info".into() }
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            format: default_log_format(),
+            level: default_log_level(),
+            directory: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResourceConfig {

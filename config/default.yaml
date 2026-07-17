@@ -1,6 +1,21 @@
 server:
   host: "0.0.0.0"
   port: 8080
+  shutdown_timeout_secs: 30
+  cors:
+    allowed_origins:
+      - "*"
+    allowed_methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed_headers:
+      - content-type
+      - authorization
+      - x-api-key
+      - x-request-id
 
 resources:
   max_daily_cost: 10.0
@@ -35,6 +50,20 @@ providers:
   openrouter:
     base_url: "https://openrouter.ai/api/v1"
     api_key_env: "OPENROUTER_API_KEY"
+
+auth:
+  enabled: false
+  api_keys: []
+
+rate_limiting:
+  requests_per_minute: 60
+  burst_size: 10
+  cleanup_interval_secs: 300
+
+logging:
+  format: "text"
+  level: "info"
+  directory: ""
 
 tools:
   allowed_shell_commands:
