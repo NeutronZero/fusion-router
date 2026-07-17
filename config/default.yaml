@@ -51,19 +51,25 @@ providers:
     base_url: "https://openrouter.ai/api/v1"
     api_key_env: "OPENROUTER_API_KEY"
 
+# Authentication
 auth:
   enabled: false
   api_keys: []
+  # When enabled, requests must include x-api-key header matching one of api_keys.
+  # Whitelisted paths: /health, /ready, /metrics
 
+# Rate limiting
 rate_limiting:
   requests_per_minute: 60
   burst_size: 10
   cleanup_interval_secs: 300
+  # Uses token-bucket algorithm per client (identified by x-api-key or x-forwarded-for)
 
+# Structured logging
 logging:
-  format: "text"
-  level: "info"
-  directory: ""
+  format: "text"     # "text" or "json"
+  level: "info"      # tracing level directive
+  directory: ~       # optional log directory
 
 tools:
   allowed_shell_commands:
