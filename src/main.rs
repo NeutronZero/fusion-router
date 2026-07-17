@@ -85,6 +85,8 @@ async fn main() {
             SqliteEvidenceRepository::new(":memory:").expect("in-memory db")
         });
 
+    let host = config.server.host.clone();
+    let port = config.server.port;
     let cors_config = config.server.cors.clone();
 
     let rate_limiter = {
@@ -103,13 +105,15 @@ async fn main() {
     let app = Router::new()
         .route("/v1/chat/completions", post(server::handlers::chat_completions))
         .route("/metrics", get(server::handlers::metrics_handler))
+        .route("/health", get(server::health::health_handler))
+        .route("/ready", get(server::health::ready_handler))
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
         .layer(axum::Extension(rate_limiter))
         .layer(crate::middleware::cors::cors_layer_from_config(&cors_config))
         .with_state(state);
 
-    let addr = format!("{}:{}", "0.0.0.0", 8080)
+    let addr = format!("{}:{}", host, port)
         .parse::<std::net::SocketAddr>()
         .unwrap();
     tracing::info!("FusionRouter listening on {}", addr);
