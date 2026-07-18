@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+pub mod execution;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChatCompletionRequest {
@@ -17,6 +19,10 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<ToolDefinition>>,
     #[serde(default)]
     pub files: Option<Vec<FileRef>>,
+    #[serde(default)]
+    pub execution: Option<execution::ExecutionIntent>,
+    #[serde(default)]
+    pub output: Option<execution::OutputPreferences>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

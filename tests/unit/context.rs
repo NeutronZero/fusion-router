@@ -17,6 +17,8 @@ async fn test_context_assembler_basic() {
         max_tokens: Some(2048),
         tools: None,
         files: None,
+        execution: None,
+        output: None,
     };
 
     let snapshot = assembler.assemble(&request).await.unwrap();

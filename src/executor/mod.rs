@@ -71,6 +71,8 @@ impl DefaultExecutor {
             max_tokens,
             tools: None,
             files: None,
+            execution: None,
+            output: None,
         }
     }
 

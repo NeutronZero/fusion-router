@@ -92,6 +92,8 @@ impl DynamicPlanner {
             max_tokens: Some(2048),
             tools: None,
             files: None,
+            execution: None,
+            output: None,
         };
 
         match tokio::time::timeout(
