@@ -106,12 +106,8 @@ async fn main() {
     let port = config.server.port;
     let cors_config = config.server.cors.clone();
     let auth_config = config.auth.clone();
-
-    let rate_limiter = {
-        let limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
-        limiter.start_cleanup();
-        limiter
-    };
+    let rate_limiting_enabled = config.rate_limiting.enabled;
+    let rate_limiting_config = config.rate_limiting.clone();
 
     let state = server::handlers::AppState::new(
         provider_router,
@@ -120,19 +116,25 @@ async fn main() {
         config,
     );
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/v1/chat/completions", post(server::handlers::chat_completions))
         .route("/metrics", get(server::handlers::metrics_handler))
         .route("/health", get(server::health::health_handler))
         .route("/ready", get(server::health::ready_handler))
         .layer(TraceLayer::new_for_http())
-        .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
-        .layer(axum::Extension(rate_limiter))
         .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
         .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
         .layer(axum::Extension(auth_config))
         .layer(crate::middleware::cors::cors_layer_from_config(&cors_config))
         .with_state(state);
+
+    if rate_limiting_enabled {
+        let limiter = middleware::rate_limit::RateLimiter::new(rate_limiting_config);
+        limiter.start_cleanup();
+        app = app
+            .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
+            .layer(axum::Extension(limiter));
+    }
 
     let addr = format!("{}:{}", host, port)
         .parse::<std::net::SocketAddr>()

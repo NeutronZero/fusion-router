@@ -82,6 +82,42 @@ cargo test golden::dag         # DAG-specific tests
 cargo test integration         # integration tests
 ```
 
+## OpenCode Integration
+
+FusionRouter can serve as a backend provider for [OpenCode](https://opencode.ai).
+
+### Configuration
+
+Point OpenCode to FusionRouter by creating `~/.config/opencode/project.json`:
+
+```bash
+# Or use the setup script:
+bash scripts/setup-opencode.sh
+```
+
+Or manually:
+
+```json
+{
+  "provider": {
+    "baseURL": "http://localhost:8080/v1",
+    "apiKey": "${FUSION_ROUTER_API_KEY}"
+  }
+}
+```
+
+- Set `FUSION_ROUTER_API_KEY` if FusionRouter auth is enabled.
+- FusionRouter handles model routing automatically; the `model` field in OpenCode is ignored.
+
+### Setup Scripts
+
+| Script | Platform |
+|--------|----------|
+| `scripts/setup-opencode.sh` | Linux / macOS / WSL |
+| `scripts/setup-opencode.ps1` | Windows PowerShell |
+
+Run the appropriate script after starting FusionRouter.
+
 ## Architecture
 
 See `docs/architecture/runtime.md` for the full pipeline description, DAG execution model, and scheduling algorithm.

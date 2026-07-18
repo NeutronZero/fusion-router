@@ -129,6 +129,7 @@ mod tests {
     #[test]
     fn test_rate_limiter_allows_burst() {
         let config = RateLimitingConfig {
+            enabled: false,
             requests_per_minute: 60,
             burst_size: 5,
             cleanup_interval_secs: 300,
@@ -143,6 +144,7 @@ mod tests {
     #[test]
     fn test_rate_limiter_blocks_after_burst() {
         let config = RateLimitingConfig {
+            enabled: false,
             requests_per_minute: 60,
             burst_size: 3,
             cleanup_interval_secs: 300,
@@ -160,6 +162,7 @@ mod tests {
     #[test]
     fn test_rate_limiter_different_clients_independent() {
         let config = RateLimitingConfig {
+            enabled: false,
             requests_per_minute: 60,
             burst_size: 2,
             cleanup_interval_secs: 300,

@@ -79,6 +79,8 @@ impl Default for AuthConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RateLimitingConfig {
+    #[serde(default = "default_rate_limiting_enabled")]
+    pub enabled: bool,
     #[serde(default = "default_rpm")]
     pub requests_per_minute: u64,
     #[serde(default = "default_burst")]
@@ -87,6 +89,7 @@ pub struct RateLimitingConfig {
     pub cleanup_interval_secs: u64,
 }
 
+fn default_rate_limiting_enabled() -> bool { false }
 fn default_rpm() -> u64 { 60 }
 fn default_burst() -> u32 { 10 }
 fn default_cleanup_interval() -> u64 { 300 }
@@ -94,6 +97,7 @@ fn default_cleanup_interval() -> u64 { 300 }
 impl Default for RateLimitingConfig {
     fn default() -> Self {
         Self {
+            enabled: default_rate_limiting_enabled(),
             requests_per_minute: default_rpm(),
             burst_size: default_burst(),
             cleanup_interval_secs: default_cleanup_interval(),
@@ -268,16 +272,16 @@ impl AppConfig {
             errors.push("auth.enabled is true but no api_keys configured".into());
         }
 
-        if self.rate_limiting.requests_per_minute == 0 {
-            errors.push("rate_limiting.requests_per_minute must be greater than 0".into());
-        }
-
-        if self.rate_limiting.burst_size == 0 {
-            errors.push("rate_limiting.burst_size must be greater than 0".into());
-        }
-
-        if self.rate_limiting.cleanup_interval_secs == 0 {
-            errors.push("rate_limiting.cleanup_interval_secs must be greater than 0".into());
+        if self.rate_limiting.enabled {
+            if self.rate_limiting.requests_per_minute == 0 {
+                errors.push("rate_limiting.requests_per_minute must be greater than 0".into());
+            }
+            if self.rate_limiting.burst_size == 0 {
+                errors.push("rate_limiting.burst_size must be greater than 0".into());
+            }
+            if self.rate_limiting.cleanup_interval_secs == 0 {
+                errors.push("rate_limiting.cleanup_interval_secs must be greater than 0".into());
+            }
         }
 
         match self.logging.format.as_str() {

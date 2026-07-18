@@ -1,0 +1,6 @@
+{
+  "provider": {
+    "baseURL": "http://localhost:8080/v1",
+    "apiKey": "${FUSION_ROUTER_API_KEY}"
+  }
+}

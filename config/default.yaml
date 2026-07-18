@@ -58,8 +58,9 @@ auth:
   # When enabled, requests must include x-api-key header matching one of api_keys.
   # Whitelisted paths: /health, /ready, /metrics
 
-# Rate limiting
+# Rate limiting (opt-in, disabled by default)
 rate_limiting:
+  enabled: false
   requests_per_minute: 60
   burst_size: 10
   cleanup_interval_secs: 300
