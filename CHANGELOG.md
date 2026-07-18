@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0] – 2026-07-18
+
+### Added
+- **Intent-Oriented Planner** (ADR-016) – public API expresses *intent* via `execution` field; planner compiles to internal graph
+  - `ExecutionIntent` enum: `Quality`, `Speed`, `Balanced`, `Exhaustive`, `Constrained`
+  - `IntentPlanner` maps each intent to a multi-node `WorkflowIR` (Quality=5, Speed=1, Balanced=3, Exhaustive=6, Constrained=budget-aware)
+  - `OutputPreferences` with `include_report` for optional `ExecutionReport` in responses
+  - `ExecutionReport` struct: graph summary, per-model costs, timing, model breakdown, decisions
+  - `ChatCompletionRequest` extended with `execution` and `output` fields
+- **Judge/Reflect system prompts** – `DefaultExecutor` injects judge/reflect system prompts for `LLMJudge` and Reflection strategy nodes
+- **31 new tests** covering intent types, planner variants, JSON serialization, handler integration
+
+### Changed
+- `AppState::new()` now uses `IntentPlanner` instead of `WorkflowPlanner`
+- Handler pipeline passes `execution` and `output` from request to `Requirements`
+
 ## [0.7.1] – 2026-07-18
 
 ### Added

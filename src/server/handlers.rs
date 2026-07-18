@@ -21,7 +21,6 @@ use crate::tools::builtin::{CalculatorTool, SearchTool, FileReadTool};
 use crate::context::assembler::DefaultContextAssembler;
 use crate::executor::DefaultExecutor;
 use crate::planner::Planner;
-use crate::planner::WorkflowPlanner;
 use crate::workflow::WorkflowRegistry;
 use crate::providers::ChatProvider;
 use crate::requirements::extractor::RequirementsExtractor;
@@ -71,7 +70,7 @@ impl AppState {
         let workflow_registry = Arc::new(workflow_registry);
 
         let planner: Arc<dyn Planner + Send + Sync> = Arc::new(
-            WorkflowPlanner::new(workflow_registry.clone()),
+            crate::planner::IntentPlanner,
         );
 
         let resource_manager = Arc::new(resource_manager);
@@ -227,7 +226,9 @@ async fn process_request(
     tracing::debug!(messages = ctx.messages.len(), "context assembled");
 
     // 2. Extract requirements
-    let reqs = state.requirements_extractor.extract(&ctx);
+    let mut reqs = state.requirements_extractor.extract(&ctx);
+    reqs.execution_intent = request.execution.clone();
+    reqs.output_preferences = request.output.clone();
     tracing::debug!(intent = ?reqs.intent_classification, complexity = ?reqs.complexity, "requirements extracted");
 
     // 3. Get evidence snapshot
