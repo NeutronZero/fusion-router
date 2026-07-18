@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 
 mod dynamic_planner;
+mod intent_planner;
 mod simple;
 mod workflow;
 
 #[allow(unused_imports)]
 pub use dynamic_planner::{DynamicPlanner, DynamicPlannerConfig};
+pub use intent_planner::IntentPlanner;
 pub use workflow::WorkflowPlanner;
 
 use crate::types::{EvidenceSnapshot, Policy, Requirements, WorkflowIR};

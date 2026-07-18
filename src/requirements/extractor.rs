@@ -23,6 +23,8 @@ impl RequirementsExtractor for DefaultRequirementsExtractor {
             has_files: !ctx.files.is_empty(),
             context_window: ctx.max_tokens as u64,
             original_text,
+            execution_intent: None,
+            output_preferences: None,
         }
     }
 }

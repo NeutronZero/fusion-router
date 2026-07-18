@@ -63,6 +63,10 @@ pub struct Requirements {
     pub has_files: bool,
     pub context_window: u64,
     pub original_text: String,
+    #[serde(default)]
+    pub execution_intent: Option<execution::ExecutionIntent>,
+    #[serde(default)]
+    pub output_preferences: Option<execution::OutputPreferences>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
