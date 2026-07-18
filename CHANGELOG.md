@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.7.1] – 2026-07-18
+
+### Added
+- **OpenCode integration** – example config (`examples/opencode/opencode.json`), setup scripts (`scripts/setup-opencode.sh`, `scripts/setup-opencode.ps1`), QUICKSTART.md section
+- **Rate limiting opt-in** – `enabled: bool` field on `rate_limiting` config (default `false`); middleware is now conditional
+
+### Changed
+- **Strict request validation** – `ChatCompletionRequest` now uses `serde(deny_unknown_fields)`; unknown fields like `strategy` return 422 instead of being silently ignored
+
+## [0.7.0] – 2026-07-18
+
+### Added
+- **API Key Authentication** – config-driven middleware checking `x-api-key` header; whitelisted paths: `/health`, `/ready`, `/metrics`; opt‑in via `auth.enabled`
+- **CORS Middleware** – config-driven `allowed_origins`, `allowed_methods`, `allowed_headers` with wildcard support
+- **Token-Bucket Rate Limiting** – per-client (identified by `x-api-key` or `x-forwarded-for`) with configurable RPM, burst, cleanup; opt‑in via `rate_limiting.enabled`
+- **Health Check Endpoints** – `/health` (always ok), `/ready` (dependency checks)
+- **Graceful Shutdown** – Ctrl+C / SIGTERM handler with `shutdown_timeout_secs` support
+- **Structured JSON Logging** – config-driven format selection (`text` or `json`)
+- **Request ID Tracing** – UUID generation, passthrough of `x-request-id` header, response header injection
+- **Configuration Validation** – 11 checks on startup (port, timeout, auth keys, rate limits, log format)
+
+### Changed
+- Server address now reads from config (`server.host` / `server.port`)
+- Tracing subscriber initialized after config load to respect `logging.format` / `logging.level`
+
 ## [0.6.0] – 2026-07-17
 
 ### Added
