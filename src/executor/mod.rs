@@ -45,7 +45,7 @@ impl DefaultExecutor {
     }
 
     fn build_request(node: &ExecutionNode) -> ChatCompletionRequest {
-        let messages: Vec<ChatMessage> = node
+        let mut messages: Vec<ChatMessage> = node
             .config
             .get("messages")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -62,6 +62,23 @@ impl DefaultExecutor {
             .get("max_tokens")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
+
+        // Inject system prompt for judge/reflect nodes
+        if !messages.iter().any(|m| m.role == "system") {
+            let system_prompt = match node.kind {
+                ExecutionNodeKind::LLMJudge => Some("You are a judge evaluating the quality and correctness of responses. Assess the provided answers critically and select the best one, explaining your reasoning."),
+                _ => match node.strategy {
+                    crate::types::StrategyKind::Reflection => Some("You are a reflective reviewer. Analyze the previous response, identify potential issues, and provide an improved version."),
+                    _ => None,
+                },
+            };
+            if let Some(prompt) = system_prompt {
+                messages.insert(0, ChatMessage {
+                    role: "system".to_string(),
+                    content: prompt.to_string(),
+                });
+            }
+        }
 
         ChatCompletionRequest {
             model: node.model.clone(),
