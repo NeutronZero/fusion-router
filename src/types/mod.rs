@@ -258,6 +258,33 @@ pub struct PolicyAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCatalog {
+    pub code: String,
+    pub debug: String,
+    pub architecture: String,
+    pub general: String,
+    pub creative: String,
+    pub analysis: String,
+    pub fast: String,
+    pub cheap: String,
+}
+
+impl Default for ModelCatalog {
+    fn default() -> Self {
+        Self {
+            code: "claude-sonnet-4-20250514".into(),
+            debug: "claude-sonnet-4-20250514".into(),
+            architecture: "claude-opus-4-20250514".into(),
+            general: "gpt-4o".into(),
+            creative: "claude-sonnet-4-20250514".into(),
+            analysis: "claude-opus-4-20250514".into(),
+            fast: "gpt-4o-mini".into(),
+            cheap: "gpt-4o-mini".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReservationId(pub Uuid);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,6 +316,7 @@ pub struct NodeExecutionResult {
     pub state: NodeState,
     pub usage: Option<Usage>,
     pub latency_ms: u64,
+    pub output: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

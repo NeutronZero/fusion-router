@@ -10,7 +10,7 @@ pub async fn health_handler() -> Json<Value> {
 pub async fn ready_handler(
     State(state): State<AppState>,
 ) -> (StatusCode, Json<Value>) {
-    let mut checks = json!({
+    let checks = json!({
         "database": "ok",
         "plugins": "ok",
         "providers": "ok",
@@ -39,6 +39,7 @@ mod tests {
                 max_daily_cost: 100.0,
                 max_daily_tokens: 100000,
                 max_concurrent: 10,
+                max_concurrent_nodes: 16,
                 provider_limits: Default::default(),
             },
             policies: vec![],
@@ -48,6 +49,7 @@ mod tests {
             auth: AuthConfig::default(),
             rate_limiting: RateLimitingConfig::default(),
             logging: LoggingConfig::default(),
+            model_catalog: Default::default(),
         };
         crate::server::handlers::AppState::new(
             Arc::new(crate::providers::openrouter::OpenRouterProvider::new("test".into())),

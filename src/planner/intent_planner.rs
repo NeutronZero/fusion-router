@@ -7,12 +7,18 @@ use super::Planner;
 use crate::types::execution::ExecutionIntent;
 use crate::types::{
     ComplexityLevel, EvidenceSnapshot, IRMetadata, IRNode, IRNodeKind, Intent,
-    Policy, Requirements, StrategyKind, WorkflowIR,
+    ModelCatalog, Policy, Requirements, StrategyKind, WorkflowIR,
 };
 
-pub struct IntentPlanner;
+pub struct IntentPlanner {
+    pub model_catalog: ModelCatalog,
+}
 
 impl IntentPlanner {
+    pub fn new(model_catalog: ModelCatalog) -> Self {
+        Self { model_catalog }
+    }
+
     fn build_quality(&self, model: &str) -> WorkflowIR {
         let plan_id = Uuid::new_v4();
 
@@ -21,28 +27,28 @@ impl IntentPlanner {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Generate,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-a", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Generate,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-b", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Generate,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-c", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Judge,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-judge", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
@@ -54,12 +60,10 @@ impl IntentPlanner {
             },
         ];
 
-        let edges = vec![];
-
         WorkflowIR {
             plan_id,
             nodes,
-            edges,
+            edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec!["intent:quality".into()],
                 estimated_cost: 0.05,
@@ -99,21 +103,21 @@ impl IntentPlanner {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Generate,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-a", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Generate,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-b", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Judge,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-judge", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
         ];
@@ -138,42 +142,42 @@ impl IntentPlanner {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Generate,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-a", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Generate,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-b", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Generate,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-c", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Judge,
                 strategy: StrategyKind::Single,
-                model: Some(format!("{}-judge", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Generate,
                 strategy: StrategyKind::Reflection,
-                model: Some(format!("{}-reflect", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
             IRNode {
                 id: Uuid::new_v4(),
                 kind: IRNodeKind::Judge,
                 strategy: StrategyKind::Consensus,
-                model: Some(format!("{}-final-judge", model)),
+                model: Some(model.to_string()),
                 config: HashMap::new(),
             },
         ];
@@ -190,14 +194,14 @@ impl IntentPlanner {
         }
     }
 
-    fn select_model(requirements: &Requirements) -> String {
+    fn select_model(&self, requirements: &Requirements) -> String {
         match requirements.intent_classification {
-            Intent::Code | Intent::Debug | Intent::Architecture => "claude-sonnet-4-20250514",
-            Intent::Analysis => "claude-sonnet-4-20250514",
-            Intent::Creative => "claude-sonnet-4-20250514",
-            Intent::General => "claude-sonnet-4-20250514",
+            Intent::Code | Intent::Debug => self.model_catalog.code.clone(),
+            Intent::Architecture => self.model_catalog.architecture.clone(),
+            Intent::Analysis => self.model_catalog.analysis.clone(),
+            Intent::Creative => self.model_catalog.creative.clone(),
+            Intent::General => self.model_catalog.general.clone(),
         }
-        .to_string()
     }
 }
 
@@ -209,7 +213,7 @@ impl Planner for IntentPlanner {
         _policies: &[Policy],
         _evidence: Option<&EvidenceSnapshot>,
     ) -> WorkflowIR {
-        let model = Self::select_model(requirements);
+        let model = self.select_model(requirements);
 
         match &requirements.execution_intent {
             Some(ExecutionIntent::Quality) => self.build_quality(&model),
@@ -252,9 +256,13 @@ mod tests {
         }
     }
 
+    fn make_planner() -> IntentPlanner {
+        IntentPlanner::new(ModelCatalog::default())
+    }
+
     #[tokio::test]
     async fn test_quality_plan_node_count() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
         let ir = planner.plan(&reqs, &[], None).await;
         assert_eq!(ir.nodes.len(), 5);
@@ -265,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_quality_plan_node_kinds() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
         let ir = planner.plan(&reqs, &[], None).await;
         assert_eq!(ir.nodes.len(), 5);
@@ -276,7 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_speed_plan_single_node() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Speed));
         let ir = planner.plan(&reqs, &[], None).await;
         assert_eq!(ir.nodes.len(), 1);
@@ -289,7 +297,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_balanced_plan_three_nodes() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Balanced));
         let ir = planner.plan(&reqs, &[], None).await;
         assert_eq!(ir.nodes.len(), 3);
@@ -302,7 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_exhaustive_plan_six_nodes() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
         let ir = planner.plan(&reqs, &[], None).await;
         assert_eq!(ir.nodes.len(), 6);
@@ -313,7 +321,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_exhaustive_plan_ends_with_consensus_judge() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
         let ir = planner.plan(&reqs, &[], None).await;
         let last = ir.nodes.last().unwrap();
@@ -323,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_constrained_cheap_returns_speed() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Constrained {
             max_latency_ms: None,
             max_cost_usd: Some(0.01),
@@ -336,7 +344,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_constrained_generous_budget_returns_balanced() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Constrained {
             max_latency_ms: None,
             max_cost_usd: Some(0.05),
@@ -349,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_constrained_no_budget_returns_balanced() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Constrained {
             max_latency_ms: None,
             max_cost_usd: None,
@@ -362,7 +370,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_constrained_exact_at_threshold_returns_balanced() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Constrained {
             max_latency_ms: None,
             max_cost_usd: Some(0.02),
@@ -375,7 +383,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_intent_critical_complexity_returns_quality() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::Critical;
         let ir = planner.plan(&reqs, &[], None).await;
@@ -384,7 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_intent_high_complexity_returns_balanced() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::High;
         let ir = planner.plan(&reqs, &[], None).await;
@@ -393,7 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_intent_medium_complexity_returns_speed() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::Medium;
         let ir = planner.plan(&reqs, &[], None).await;
@@ -402,7 +410,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_intent_low_complexity_returns_speed() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::Low;
         let ir = planner.plan(&reqs, &[], None).await;
@@ -411,13 +419,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_select_model_returns_non_empty_string() {
-        let model = IntentPlanner::select_model(&make_reqs(None));
+        let planner = make_planner();
+        let model = planner.select_model(&make_reqs(None));
         assert!(!model.is_empty());
     }
 
     #[tokio::test]
     async fn test_each_intent_produces_distinct_plan_ids() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
         let ir1 = planner.plan(&reqs, &[], None).await;
         let reqs = make_reqs(Some(ExecutionIntent::Speed));
@@ -427,7 +436,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plan_nodes_have_unique_ids() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
         let ir = planner.plan(&reqs, &[], None).await;
         let mut ids: Vec<_> = ir.nodes.iter().map(|n| n.id).collect();
@@ -438,7 +447,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_all_plans_have_empty_edges() {
-        let planner = IntentPlanner;
+        let planner = make_planner();
         for intent in &[ExecutionIntent::Quality, ExecutionIntent::Speed, ExecutionIntent::Balanced, ExecutionIntent::Exhaustive] {
             let reqs = match intent {
                 ExecutionIntent::Constrained { .. } => unreachable!(),

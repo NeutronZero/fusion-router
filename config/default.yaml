@@ -21,6 +21,7 @@ resources:
   max_daily_cost: 10.0
   max_daily_tokens: 1000000
   max_concurrent: 5
+  max_concurrent_nodes: 16
   provider_limits:
     opencode-zen:
       max_daily_cost: 5.0

@@ -15,6 +15,7 @@ use crate::types::{
 pub struct DynamicPlannerConfig {
     pub max_generated_nodes: usize,
     pub generation_timeout: Duration,
+    #[allow(dead_code)]
     pub max_iterations: u32,
 }
 
@@ -35,6 +36,7 @@ pub struct DynamicPlanner {
 }
 
 impl DynamicPlanner {
+    #[allow(dead_code)]
     pub fn new(
         provider: Arc<dyn ChatProvider + Send + Sync>,
         config: DynamicPlannerConfig,
@@ -158,7 +160,7 @@ impl DynamicPlanner {
             });
         }
 
-        let edges_val = json.get("edges").and_then(|v| v.as_array()).map(|v| v.clone()).unwrap_or_default();
+        let edges_val = json.get("edges").and_then(|v| v.as_array()).cloned().unwrap_or_default();
         let mut edges = Vec::new();
         for ev in &edges_val {
             let from_idx = ev.get("from_index").and_then(|v| v.as_u64())? as usize;

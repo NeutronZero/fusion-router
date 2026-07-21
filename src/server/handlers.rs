@@ -4,9 +4,11 @@ use std::sync::Arc;
 use axum::{
     extract::State,
     http::StatusCode,
+    response::sse::{Event, Sse},
     response::IntoResponse,
     Json,
 };
+use futures::stream::{self};
 use uuid::Uuid;
 
 use crate::compiler::passes::BudgetOptimisationPass;
@@ -70,7 +72,7 @@ impl AppState {
         let workflow_registry = Arc::new(workflow_registry);
 
         let planner: Arc<dyn Planner + Send + Sync> = Arc::new(
-            crate::planner::IntentPlanner,
+            crate::planner::IntentPlanner::new(config.model_catalog.clone()),
         );
 
         let resource_manager = Arc::new(resource_manager);
@@ -79,7 +81,9 @@ impl AppState {
             passes: vec![
                 Box::new(ConstraintValidationPass),
                 Box::new(ControlFlowValidationPass),
-                Box::new(ModelResolutionPass),
+                Box::new(ModelResolutionPass {
+                    model_catalog: config.model_catalog.clone(),
+                }),
                 Box::new(BudgetOptimisationPass {
                     resource_manager: resource_manager.clone(),
                 }),
@@ -134,7 +138,9 @@ impl AppState {
             strategies,
         ).with_tool_registry(tool_registry.clone()));
 
-        let scheduler = Arc::new(DefaultScheduler::new());
+        let scheduler = Arc::new(DefaultScheduler::new(
+            config.resources.max_concurrent_nodes as usize,
+        ));
 
         Self {
             context_assembler,
@@ -169,7 +175,7 @@ pub async fn chat_completions(
 
     if request.stream {
         tracing::info!(request_id = %request_id, "streaming request");
-        return stream_response(state, request, request_id).into_response();
+        return stream_response(state, request, request_id).await;
     }
 
     tracing::info!("processing request through full pipeline");
@@ -188,32 +194,33 @@ pub async fn chat_completions(
     }
 }
 
-fn stream_response(
-    _state: AppState,
+async fn stream_response(
+    state: AppState,
     request: ChatCompletionRequest,
     request_id: Uuid,
 ) -> axum::response::Response {
-    let chunk = serde_json::json!({
-        "id": request_id,
-        "object": "chat.completion.chunk",
-        "created": chrono::Utc::now().timestamp(),
-        "model": request.model,
-        "choices": [{
-            "index": 0,
-            "delta": {"role": "assistant", "content": "Hello"},
-            "finish_reason": null
-        }]
-    });
-    let body = format!(
-        "data: {}\n\ndata: [DONE]\n\n",
-        chunk.to_string()
-    );
-    (
-        StatusCode::OK,
-        [("content-type", "text/event-stream")],
-        body,
-    )
-        .into_response()
+    let result = process_request(&state, &request, request_id).await;
+
+    let sse = match result {
+        Ok(response) => {
+            let json = serde_json::to_string(&response).unwrap_or_default();
+            stream::iter(vec![
+                Ok::<_, std::convert::Infallible>(Event::default().data(format!("data: {}\n\n", json))),
+                Ok(Event::default().data("data: [DONE]\n\n")),
+            ])
+        }
+        Err(e) => {
+            let error = serde_json::json!({
+                "error": e.to_string()
+            });
+            stream::iter(vec![
+                Ok::<_, std::convert::Infallible>(Event::default().data(format!("data: {}\n\n", error))),
+                Ok(Event::default().data("data: [DONE]\n\n")),
+            ])
+        }
+    };
+
+    Sse::new(sse).into_response()
 }
 
 async fn process_request(

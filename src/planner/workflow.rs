@@ -7,6 +7,7 @@ use super::{Planner, PlannerMode};
 use crate::types::{EvidenceSnapshot, Policy, Requirements, WorkflowIR};
 use crate::workflow::WorkflowRegistry;
 
+#[allow(dead_code)]
 pub struct WorkflowPlanner {
     registry: Arc<WorkflowRegistry>,
     dynamic: Option<Arc<DynamicPlanner>>,
@@ -14,6 +15,7 @@ pub struct WorkflowPlanner {
     mode: PlannerMode,
 }
 
+#[allow(dead_code)]
 impl WorkflowPlanner {
     pub fn new(registry: Arc<WorkflowRegistry>) -> Self {
         Self {
@@ -57,7 +59,7 @@ impl Planner for WorkflowPlanner {
             PlannerMode::Hybrid => {
                 if let Some(ref dp) = self.dynamic {
                     let ir = dp.plan(requirements, policies, evidence).await;
-                    if ir.nodes.len() > 1 || ir.nodes.first().map_or(false, |n| n.kind != crate::types::IRNodeKind::Generate) {
+                    if ir.nodes.len() > 1 || ir.nodes.first().is_some_and(|n| n.kind != crate::types::IRNodeKind::Generate) {
                         return ir;
                     }
                 }

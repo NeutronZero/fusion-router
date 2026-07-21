@@ -34,7 +34,7 @@ async fn test_compiler_determinism() {
     let compiler = fusion_router::compiler::DefaultCompiler {
         passes: vec![
             Box::new(ConstraintValidationPass),
-            Box::new(ModelResolutionPass),
+            Box::new(ModelResolutionPass { model_catalog: Default::default() }),
         ],
     };
 
@@ -67,7 +67,7 @@ async fn test_constraint_validation_empty_ir() {
 
 #[tokio::test]
 async fn test_model_resolution() {
-    let pass = ModelResolutionPass;
+    let pass = ModelResolutionPass { model_catalog: Default::default() };
     let ir = create_test_ir();
 
     let result = pass.apply(ir).await.unwrap();

@@ -9,7 +9,9 @@ use fusion_router::config::AppConfig;
 use fusion_router::providers::ChatProvider;
 use fusion_router::resource::DefaultResourceManager;
 use fusion_router::telemetry::EvidenceRepository;
-use fusion_router::types::{ChatCompletionRequest, Quota};
+use fusion_router::types::{
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice, Quota, Usage,
+};
 
 struct LoadMockProvider;
 
@@ -68,6 +70,7 @@ fn build_app(quota: &Quota) -> Router {
             max_daily_cost: quota.max_daily_cost,
             max_daily_tokens: quota.max_daily_tokens,
             max_concurrent: quota.max_concurrent,
+            max_concurrent_nodes: 16,
             provider_limits: Default::default(),
         },
         policies: vec![],
@@ -77,6 +80,7 @@ fn build_app(quota: &Quota) -> Router {
         auth: Default::default(),
         rate_limiting: Default::default(),
         logging: Default::default(),
+        model_catalog: Default::default(),
     };
 
     let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config);
@@ -287,7 +291,7 @@ async fn test_concurrent_dag_workflows() {
     let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
     strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
     let executor = Arc::new(DefaultExecutor::new(provider, strategies));
-    let scheduler = Arc::new(DefaultScheduler::new());
+    let scheduler = Arc::new(DefaultScheduler::new(16));
 
     let split_id = Uuid::new_v4();
     let a_id = Uuid::new_v4();
@@ -374,7 +378,7 @@ async fn test_loop_iteration_stress() {
     let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
     strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
     let executor = Arc::new(DefaultExecutor::new(provider, strategies));
-    let scheduler = Arc::new(DefaultScheduler::new());
+    let scheduler = Arc::new(DefaultScheduler::new(16));
 
     let loop_id = Uuid::new_v4();
     let body_id = Uuid::new_v4();
@@ -430,4 +434,227 @@ async fn test_loop_iteration_stress() {
     assert!(result.is_ok(), "Loop should complete");
     assert!(result.unwrap().success, "All nodes should succeed");
     println!("loop 50 iterations completed in {:?}", elapsed);
+}
+
+#[tokio::test]
+async fn test_compilation_throughput() {
+    use fusion_router::compiler::passes::*;
+    use fusion_router::compiler::{Compiler, DefaultCompiler};
+    use fusion_router::resource::DefaultResourceManager;
+    use fusion_router::types::{
+        IRMetadata, IRNode, IRNodeKind, IREdge, Quota, StrategyKind, WorkflowIR,
+    };
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    let quota = Quota {
+        max_daily_cost: 1_000_000.0,
+        max_daily_tokens: 1_000_000_000,
+        max_concurrent: 100,
+        provider_limits: Default::default(),
+    };
+    let resource_manager = Arc::new(DefaultResourceManager::new(quota));
+    let compiler = DefaultCompiler {
+        passes: vec![
+            Box::new(ConstraintValidationPass),
+            Box::new(ControlFlowValidationPass),
+            Box::new(BudgetOptimisationPass { resource_manager }),
+            Box::new(ModelResolutionPass { model_catalog: Default::default() }),
+        ],
+    };
+
+    let nodes: Vec<IRNode> = (0..50)
+        .map(|_i| {
+            let mut config = HashMap::new();
+            config.insert("prompt".to_string(), serde_json::json!("test"));
+            config.insert("max_tokens".to_string(), serde_json::json!(100));
+            IRNode {
+                id: Uuid::new_v4(),
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: Some("gpt-4".to_string()),
+                config,
+            }
+        })
+        .collect();
+    let edges: Vec<IREdge> = (0..49)
+        .map(|i| IREdge {
+            from: nodes[i].id,
+            to: nodes[i + 1].id,
+            condition: None,
+        })
+        .collect();
+    let ir = WorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes,
+        edges,
+        metadata: IRMetadata {
+            policy_applied: vec![],
+            estimated_cost: 0.5,
+            estimated_tokens: 5000,
+        },
+    };
+
+    let start = Instant::now();
+    let count = 100;
+    for _ in 0..count {
+        let _ = compiler.compile(ir.clone()).await.unwrap();
+    }
+    let elapsed = start.elapsed();
+    let throughput = count as f64 / elapsed.as_secs_f64();
+    println!(
+        "Compilation throughput: {:.0} compilations/sec ({} in {:?})",
+        throughput, count, elapsed
+    );
+    assert!(
+        throughput > 10.0,
+        "Throughput too low: {:.0}/s",
+        throughput
+    );
+}
+
+#[tokio::test]
+async fn test_cache_contention() {
+    use fusion_router::cache::embeddings::MockEmbedder;
+    use fusion_router::cache::SemanticCache;
+    use std::sync::Arc;
+
+    let cache = Arc::new(SemanticCache::new(Arc::new(MockEmbedder), 0.9, 5000, 384));
+
+    let mut handles = Vec::new();
+    for i in 0..50 {
+        let c = cache.clone();
+        handles.push(tokio::spawn(async move {
+            for j in 0..100 {
+                let key = format!("writer-{}-{}", i, j);
+                c.put(&key, serde_json::json!(format!("value-{}-{}", i, j))).await;
+            }
+        }));
+        let c = cache.clone();
+        handles.push(tokio::spawn(async move {
+            for j in 0..100 {
+                let _ = c.get(&format!("reader-{}-{}", i, j)).await;
+            }
+        }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
+    assert!(cache.len() > 0, "Cache should have entries after contention");
+}
+
+#[tokio::test]
+async fn test_high_concurrency_scheduling() {
+    use std::collections::HashMap;
+    use fusion_router::executor::DefaultExecutor;
+    use fusion_router::scheduler::default::DefaultScheduler;
+    use fusion_router::scheduler::Scheduler;
+    use fusion_router::strategies::single::SingleStrategy;
+    use fusion_router::strategies::Strategy;
+    use fusion_router::types::{
+        ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind,
+        GraphMetadata, RetryPolicy, StrategyKind, ReservationId,
+    };
+    use fusion_router::providers::ChatProvider;
+
+    struct HighLoadProvider;
+
+    #[async_trait::async_trait]
+    impl ChatProvider for HighLoadProvider {
+        fn name(&self) -> &str { "high-load" }
+
+        async fn chat_completion(
+            &self,
+            request: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            Ok(ChatCompletionResponse {
+                id: "hl-id".to_string(),
+                object: "chat.completion".to_string(),
+                created: chrono::Utc::now().timestamp(),
+                model: request.model.clone(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".to_string(),
+                        content: "high load response".to_string(),
+                    },
+                    finish_reason: "stop".to_string(),
+                }],
+                usage: Some(Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                }),
+            })
+        }
+    }
+
+    fn build_test_dag(n: usize) -> ExecutionGraph {
+        let node_ids: Vec<_> = (0..n).map(|_| Uuid::new_v4()).collect();
+        let nodes = node_ids
+            .iter()
+            .map(|&id| {
+                let mut config = HashMap::new();
+                config.insert(
+                    "messages".into(),
+                    serde_json::json!([{"role": "user", "content": "hello"}]),
+                );
+                ExecutionNode {
+                    id,
+                    kind: ExecutionNodeKind::LLMGenerate,
+                    strategy: StrategyKind::Single,
+                    model: "test".into(),
+                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    fallback: None,
+                    config,
+                }
+            })
+            .collect();
+        let edges: Vec<ExecutionEdge> = (0..n.saturating_sub(1))
+            .map(|i| ExecutionEdge {
+                from: node_ids[i],
+                to: node_ids[i + 1],
+                condition: None,
+            })
+            .collect();
+        ExecutionGraph {
+            graph_id: Uuid::new_v4(),
+            nodes,
+            edges,
+            metadata: GraphMetadata {
+                estimated_cost: n as f64 * 0.01,
+                estimated_tokens: n as u64 * 100,
+                max_depth: n as u32,
+                node_count: n as u32,
+            },
+            total_tokens: n as u64 * 100,
+            total_cost: n as u64,
+        }
+    }
+
+    let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(HighLoadProvider);
+    let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+    strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
+    let executor = Arc::new(DefaultExecutor::new(provider, strategies));
+    let scheduler = Arc::new(DefaultScheduler::new(64));
+
+    let mut handles = Vec::new();
+    for _ in 0..100 {
+        let graph = build_test_dag(20);
+        let scheduler = scheduler.clone();
+        let executor = executor.clone();
+        handles.push(tokio::spawn(async move {
+            let mut instance = scheduler.schedule(graph, ReservationId(Uuid::new_v4()));
+            scheduler.run(&mut instance, &*executor).await
+        }));
+    }
+
+    let results: Vec<_> = futures::future::join_all(handles).await;
+    let successes = results
+        .iter()
+        .filter(|r| r.as_ref().map(|ir| ir.is_ok()).unwrap_or(false))
+        .count();
+    println!("High concurrency schedule: {}/100 succeeded", successes);
 }

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use super::{Transport, TransportStream};
+use crate::transport::{Transport, TransportRequest, TransportResponse, TransportEvent, TransportError};
 
 pub struct WebSocketTransport {
     url: String,
@@ -14,11 +14,13 @@ impl WebSocketTransport {
 
 #[async_trait]
 impl Transport for WebSocketTransport {
-    async fn send(&self, request: &str) -> Result<String, String> {
-        Err(format!("WebSocket transport not yet implemented (would connect to {} with: {})", self.url, request))
+    #[tracing::instrument(skip(self, _req))]
+    async fn send(&self, _req: TransportRequest) -> Result<TransportResponse, TransportError> {
+        Err(TransportError::Network(format!("WebSocket transport not yet implemented (would connect to {})", self.url)))
     }
 
-    async fn stream(&self, _request: &str) -> Result<Box<dyn TransportStream>, String> {
-        Err("WebSocket streaming not yet implemented".to_string())
+    #[tracing::instrument(skip(self, _req))]
+    async fn stream(&self, _req: TransportRequest) -> Result<futures::stream::BoxStream<'static, Result<TransportEvent, TransportError>>, TransportError> {
+        Err(TransportError::Network("WebSocket streaming not yet implemented".to_string()))
     }
 }

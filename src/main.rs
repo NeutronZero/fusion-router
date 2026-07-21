@@ -25,7 +25,7 @@ mod tools;
 mod cache;
 mod middleware;
 
-use config::{AppConfig, AuthConfig};
+use config::AppConfig;
 use providers::openrouter::OpenRouterProvider;
 use providers::router::ProviderRouter;
 use providers::zen::ZenProvider;
@@ -34,6 +34,9 @@ use telemetry::SqliteEvidenceRepository;
 #[tokio::main]
 async fn main() {
     let _ = dotenv::dotenv();
+
+    telemetry::tracing::init_console();
+    let _ = telemetry::tracing::init_tracing();
 
     let config_path = std::env::var("FUSION_CONFIG")
         .unwrap_or_else(|_| "config/default.yaml".to_string());

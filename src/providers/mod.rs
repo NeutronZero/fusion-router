@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub mod zen_model;
@@ -9,6 +8,8 @@ pub mod router;
 pub mod ollama;
 pub mod zen;
 pub mod openrouter;
+pub mod circuit_breaker;
+pub mod circuit_breaking_provider;
 
 use crate::types::{ChatCompletionRequest, ChatCompletionResponse};
 
@@ -44,45 +45,7 @@ pub trait Model: Send + Sync {
     fn normalize_response(&self, resp: TransportResponse) -> anyhow::Result<ChatCompletionResponse>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransportRequest {
-    pub url: String,
-    pub method: String,
-    pub headers: HashMap<String, String>,
-    pub body: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransportResponse {
-    pub status: u16,
-    pub body: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransportEvent {
-    pub data: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
-pub enum TransportError {
-    #[error("Network error: {0}")]
-    Network(String),
-    #[error("Timeout error: {0}")]
-    Timeout(String),
-    #[error("HTTP error status {status}: {body}")]
-    Http {
-        status: u16,
-        body: String,
-    },
-    #[error("Serialization error: {0}")]
-    Serialization(String),
-}
-
-#[async_trait]
-pub trait Transport: Send + Sync {
-    async fn send(&self, req: TransportRequest) -> Result<TransportResponse, TransportError>;
-    async fn stream(&self, req: TransportRequest) -> Result<futures::stream::BoxStream<'static, Result<TransportEvent, TransportError>>, TransportError>;
-}
+pub use crate::transport::{Transport, TransportRequest, TransportResponse};
 
 #[async_trait]
 pub trait ChatProvider: Send + Sync {
@@ -112,6 +75,7 @@ impl ChatProvider for Provider {
         self.model.provider_name()
     }
 
+    #[tracing::instrument(skip(self, request), fields(provider = %self.name(), model = %request.model))]
     async fn chat_completion(&self, request: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
         let req = self.model.format_request(request, &self.api_key)?;
         let resp = self.transport.send(req).await.map_err(|e| anyhow::anyhow!("Transport error: {}", e))?;

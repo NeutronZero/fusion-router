@@ -12,3 +12,4 @@ pub use sqlite_repo::SqliteEvidenceRepository;
 
 pub mod metrics;
 pub mod audit;
+pub mod tracing;

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::collections::HashSet;
 use uuid::Uuid;
-use crate::types::{CompilerError, IRNodeKind};
+use crate::types::{CompilerError, ExecutionGraph, GraphMetadata, IRNodeKind, ModelCatalog};
 use super::CompilerPass;
 use crate::types::WorkflowIR;
 
@@ -22,6 +22,7 @@ impl CompilerPass for ConstraintValidationPass {
         "constraint_validation"
     }
 
+    #[tracing::instrument(skip_all, fields(pass = self.name(), node_count = ir.nodes.len()))]
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
         if ir.nodes.is_empty() {
             return Err(val_err("constraint_validation", None, "IR must have at least one node".into()));
@@ -30,7 +31,9 @@ impl CompilerPass for ConstraintValidationPass {
     }
 }
 
-pub struct ModelResolutionPass;
+pub struct ModelResolutionPass {
+    pub model_catalog: ModelCatalog,
+}
 
 #[async_trait]
 impl CompilerPass for ModelResolutionPass {
@@ -38,6 +41,7 @@ impl CompilerPass for ModelResolutionPass {
         "model_resolution"
     }
 
+    #[tracing::instrument(skip_all, fields(pass = self.name(), node_count = ir.nodes.len()))]
     async fn apply(&self, mut ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
         for node in &mut ir.nodes {
             match node.kind {
@@ -50,7 +54,7 @@ impl CompilerPass for ModelResolutionPass {
                 }
                 _ => {
                     if node.model.is_none() {
-                        node.model = Some("claude-sonnet-4-20250514".to_string());
+                        node.model = Some(self.model_catalog.fast.clone());
                     }
                 }
             }
@@ -72,9 +76,22 @@ impl CompilerPass for BudgetOptimisationPass {
         "budget_optimisation"
     }
 
+    #[tracing::instrument(skip_all, fields(pass = self.name(), node_count = ir.nodes.len()))]
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
-        let temp_graph = super::lower_to_graph(ir.clone())?;
-        if !self.resource_manager.can_afford(&temp_graph).await {
+        let budget_graph = ExecutionGraph {
+            graph_id: ir.plan_id,
+            nodes: vec![],
+            edges: vec![],
+            metadata: GraphMetadata {
+                estimated_cost: ir.metadata.estimated_cost,
+                estimated_tokens: ir.metadata.estimated_tokens,
+                max_depth: 0,
+                node_count: ir.nodes.len() as u32,
+            },
+            total_tokens: ir.metadata.estimated_tokens,
+            total_cost: ir.metadata.estimated_cost.ceil() as u64,
+        };
+        if !self.resource_manager.can_afford(&budget_graph).await {
             return Err(val_err("budget_optimisation", None, "Budget exceeded".into()));
         }
         Ok(ir)
@@ -89,6 +106,7 @@ impl CompilerPass for ControlFlowValidationPass {
         "control_flow_validation"
     }
 
+    #[tracing::instrument(skip_all, fields(pass = self.name(), node_count = ir.nodes.len(), edge_count = ir.edges.len()))]
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
         let node_ids: HashSet<Uuid> = ir.nodes.iter().map(|n| n.id).collect();
 
@@ -111,11 +129,11 @@ impl CompilerPass for ControlFlowValidationPass {
                         .collect();
                     if outgoing.is_empty() {
                         return Err(val_err("control_flow_validation", Some(node.id),
-                            format!("Conditional node must have at least one outgoing edge")));
+                            "Conditional node must have at least one outgoing edge".to_string()));
                     }
                     if !outgoing.iter().any(|e| e.condition.is_some()) {
                         return Err(val_err("control_flow_validation", Some(node.id),
-                            format!("Conditional node must have at least one edge with a condition")));
+                            "Conditional node must have at least one edge with a condition".to_string()));
                     }
                 }
                 IRNodeKind::Loop => {
@@ -124,11 +142,11 @@ impl CompilerPass for ControlFlowValidationPass {
                         .collect();
                     if outgoing.is_empty() {
                         return Err(val_err("control_flow_validation", Some(node.id),
-                            format!("Loop node must have at least one outgoing edge")));
+                            "Loop node must have at least one outgoing edge".to_string()));
                     }
                     if !node.config.contains_key("max_iterations") {
                         return Err(val_err("control_flow_validation", Some(node.id),
-                            format!("Loop node must have max_iterations in config")));
+                            "Loop node must have max_iterations in config".to_string()));
                     }
                 }
                 IRNodeKind::Split => {
@@ -158,11 +176,11 @@ impl CompilerPass for ControlFlowValidationPass {
                         .collect();
                     if incoming.is_empty() {
                         return Err(val_err("control_flow_validation", Some(node.id),
-                            format!("Barrier node must have at least one incoming edge")));
+                            "Barrier node must have at least one incoming edge".to_string()));
                     }
                     if outgoing.is_empty() {
                         return Err(val_err("control_flow_validation", Some(node.id),
-                            format!("Barrier node must have at least one outgoing edge")));
+                            "Barrier node must have at least one outgoing edge".to_string()));
                     }
                 }
                 _ => {}
@@ -176,6 +194,7 @@ impl CompilerPass for ControlFlowValidationPass {
 }
 
 impl ControlFlowValidationPass {
+    #[tracing::instrument(skip(self, ir))]
     fn detect_illegal_cycles(&self, ir: &WorkflowIR) -> Result<(), CompilerError> {
         let edges: Vec<(Uuid, Uuid)> = ir.edges.iter()
             .filter(|e| e.condition.as_deref() != Some("loop"))
@@ -223,11 +242,10 @@ fn three_color_cycle_detect(edges: &[(Uuid, Uuid)]) -> Result<(), Uuid> {
     }
 
     for node in graph.keys().copied().collect::<Vec<_>>() {
-        if colors.get(&node).unwrap_or(&Color::White) == &Color::White {
-            if dfs(node, &graph, &mut colors) {
+        if colors.get(&node).unwrap_or(&Color::White) == &Color::White
+            && dfs(node, &graph, &mut colors) {
                 return Err(node);
             }
-        }
     }
 
     Ok(())

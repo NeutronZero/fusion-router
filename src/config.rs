@@ -21,6 +21,8 @@ pub struct AppConfig {
     pub rate_limiting: RateLimitingConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub model_catalog: crate::types::ModelCatalog,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,6 +66,7 @@ impl Default for CorsConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[derive(Default)]
 pub struct AuthConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -71,11 +74,6 @@ pub struct AuthConfig {
     pub api_keys: Vec<String>,
 }
 
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self { enabled: false, api_keys: vec![] }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RateLimitingConfig {
@@ -134,9 +132,13 @@ pub struct ResourceConfig {
     pub max_daily_tokens: u64,
     #[serde(default = "default_concurrent")]
     pub max_concurrent: u32,
+    #[serde(default = "default_max_concurrent_nodes")]
+    pub max_concurrent_nodes: u32,
     #[serde(default)]
     pub provider_limits: HashMap<String, ProviderLimitConfig>,
 }
+
+fn default_max_concurrent_nodes() -> u32 { 16 }
 
 fn default_concurrent() -> u32 { 5 }
 
@@ -176,6 +178,10 @@ pub struct PolicyActionConfig {
 pub struct ProviderConfig {
     pub base_url: Option<String>,
     pub api_key_env: Option<String>,
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: u32,
+    #[serde(default = "default_cooldown_secs")]
+    pub cooldown_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -191,6 +197,9 @@ impl Default for StrategyConfig {
 }
 
 fn default_consensus_count() -> u32 { 3 }
+
+fn default_failure_threshold() -> u32 { 5 }
+fn default_cooldown_secs() -> u64 { 30 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ToolsConfig {
@@ -266,6 +275,10 @@ impl AppConfig {
 
         if self.resources.max_concurrent == 0 {
             errors.push("resources.max_concurrent must be greater than 0".into());
+        }
+
+        if self.resources.max_concurrent_nodes == 0 {
+            errors.push("resources.max_concurrent_nodes must be greater than 0".into());
         }
 
         if self.auth.enabled && self.auth.api_keys.is_empty() {

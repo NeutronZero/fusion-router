@@ -99,5 +99,5 @@ impl DefaultContextAssembler {
 }
 
 pub fn estimate_tokens(text: &str) -> u32 {
-    (text.len() as u32 + 3) / 4
+    (text.len() as u32).div_ceil(4)
 }

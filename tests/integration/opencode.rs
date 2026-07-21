@@ -78,6 +78,7 @@ async fn test_chat_completion_endpoint() {
                 max_daily_cost: 100.0,
                 max_daily_tokens: 100000,
                 max_concurrent: 10,
+                max_concurrent_nodes: 16,
                 provider_limits: Default::default(),
             },
             policies: vec![],
@@ -87,6 +88,7 @@ async fn test_chat_completion_endpoint() {
             auth: Default::default(),
             rate_limiting: Default::default(),
             logging: Default::default(),
+            model_catalog: Default::default(),
         }
     });
 
@@ -145,7 +147,7 @@ async fn test_dag_split_join_workflow() {
     strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
 
     let executor = DefaultExecutor::new(provider, strategies);
-    let scheduler = DefaultScheduler::new();
+    let scheduler = DefaultScheduler::new(16);
 
     let split_id = Uuid::new_v4();
     let a_id = Uuid::new_v4();
@@ -270,12 +272,13 @@ impl ChatProvider for MidMockProvider {
 fn test_config() -> AppConfig {
     AppConfig {
         server: ServerConfig { host: "0.0.0.0".into(), port: 8080, shutdown_timeout_secs: 30, cors: CorsConfig::default() },
-        resources: ResourceConfig { max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default() },
+        resources: ResourceConfig { max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, max_concurrent_nodes: 16, provider_limits: Default::default() },
         policies: vec![], providers: Default::default(),
         strategies: StrategyConfig { consensus_count: 3 }, tools: ToolsConfig::default(),
         auth: AuthConfig { enabled: true, api_keys: vec!["test-key".into()] },
         rate_limiting: RateLimitingConfig::default(),
         logging: LoggingConfig::default(),
+        model_catalog: Default::default(),
     }
 }
 

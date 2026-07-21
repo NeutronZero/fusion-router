@@ -134,7 +134,7 @@ impl WorkflowRegistry {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "yaml" || e == "yml") {
+            if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
                 let content = std::fs::read_to_string(&path)?;
                 let def: WorkflowDefinition = serde_yaml::from_str(&content)?;
                 self.register(def);

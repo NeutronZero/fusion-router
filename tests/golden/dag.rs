@@ -217,7 +217,7 @@ async fn test_compiler_passes_handle_all_node_kinds() {
         passes: vec![
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
-            Box::new(ModelResolutionPass),
+            Box::new(ModelResolutionPass { model_catalog: Default::default() }),
         ],
     };
 

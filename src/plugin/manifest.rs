@@ -66,7 +66,7 @@ impl PluginManifest {
         if let Ok(entries) = std::fs::read_dir(dir_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |e| e == "toml") {
+                if path.extension().is_some_and(|e| e == "toml") {
                     let path_str = path.to_string_lossy().to_string();
                     match Self::load(&path_str) {
                         Ok(manifest) => {

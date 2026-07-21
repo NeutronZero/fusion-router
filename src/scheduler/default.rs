@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::time::Instant;
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use tracing::{info, info_span, Instrument};
 use uuid::Uuid;
 
 use crate::executor::Executor;
 use crate::scheduler::work_queue::WorkQueue;
+use crate::transport::backoff::Backoff;
 use crate::types::{
     ExecutionGraph, ExecutionInstance, ExecutionNodeKind, ExecutionResult, NodeState,
     ReservationId, SchedulerError,
@@ -13,17 +14,29 @@ use crate::types::{
 
 const COST_PER_INPUT_TOKEN: f64 = 0.002 / 1000.0;
 const COST_PER_OUTPUT_TOKEN: f64 = 0.01 / 1000.0;
+const DEFAULT_MAX_CONCURRENT: usize = 16;
 
-pub struct DefaultScheduler;
+pub struct DefaultScheduler {
+    max_concurrent: usize,
+}
+
+impl Default for DefaultScheduler {
+    fn default() -> Self {
+        Self {
+            max_concurrent: DEFAULT_MAX_CONCURRENT,
+        }
+    }
+}
 
 impl DefaultScheduler {
-    pub fn new() -> Self {
-        Self
+    pub fn new(max_concurrent: usize) -> Self {
+        Self { max_concurrent }
     }
 }
 
 #[async_trait::async_trait]
 impl crate::scheduler::Scheduler for DefaultScheduler {
+    #[tracing::instrument(skip(self, graph), fields(node_count = graph.nodes.len()))]
     fn schedule(&self, graph: ExecutionGraph, reservation: ReservationId) -> ExecutionInstance {
         let mut node_states = HashMap::new();
         for node in &graph.nodes {
@@ -43,6 +56,7 @@ impl crate::scheduler::Scheduler for DefaultScheduler {
         }
     }
 
+    #[tracing::instrument(skip(self, instance, executor), fields(graph_id = %instance.graph.graph_id, node_count = instance.node_states.len()))]
     async fn run(
         &self,
         instance: &mut ExecutionInstance,
@@ -52,6 +66,7 @@ impl crate::scheduler::Scheduler for DefaultScheduler {
         let mut total_tokens: u64 = 0;
         let mut total_cost: f64 = 0.0;
         let mut retry_counts: HashMap<Uuid, u32> = HashMap::new();
+        let mut retry_backoffs: HashMap<Uuid, Backoff> = HashMap::new();
         let mut loop_iterations: HashMap<Uuid, u32> = HashMap::new();
 
         let mut queue = WorkQueue::new(instance.graph.clone());
@@ -90,7 +105,10 @@ impl crate::scheduler::Scheduler for DefaultScheduler {
                 );
             }
 
-            let results = join_all(handles).await;
+            let results: Vec<_> = stream::iter(handles)
+                .buffer_unordered(self.max_concurrent)
+                .collect()
+                .await;
 
             for (node_id, exec_result) in results {
                 let latency = exec_result.latency_ms;
@@ -101,8 +119,11 @@ impl crate::scheduler::Scheduler for DefaultScheduler {
                 }
                 match exec_result.state {
                     NodeState::Succeeded => {
+                        retry_counts.remove(&node_id);
+                        retry_backoffs.remove(&node_id);
                         info!(node_id = ?node_id, latency_ms = latency, "Node succeeded");
                         instance.node_states.insert(node_id, NodeState::Succeeded);
+                        instance.outputs.insert(node_id, exec_result.output.clone().unwrap_or(serde_json::Value::Null));
 
                         let node_kind = queue.graph().nodes.iter()
                             .find(|n| n.id == node_id)
@@ -218,53 +239,62 @@ impl crate::scheduler::Scheduler for DefaultScheduler {
                                     "Retrying node after backoff"
                                 );
                                 if node.retry_policy.backoff_ms > 0 {
-                                    tokio::time::sleep(std::time::Duration::from_millis(
-                                        node.retry_policy.backoff_ms,
-                                    ))
-                                    .await;
+                                    let max_ms = node.retry_policy
+                                        .backoff_ms
+                                        .saturating_mul(10);
+                                    let backoff = retry_backoffs
+                                        .entry(node_id)
+                                        .or_insert_with(|| Backoff::new(
+                                            node.retry_policy.backoff_ms,
+                                            max_ms,
+                                        ));
+                                    tokio::time::sleep(backoff.next()).await;
                                 }
                                 instance.node_states.insert(node_id, NodeState::Pending);
                                 queue.reset_ready(node_id);
-                            } else if let Some(ref fallback) = node.fallback {
-                                info!(
-                                    node_id = ?node_id,
-                                    fallback_model = %fallback.model,
-                                    "Attempting fallback execution"
-                                );
-                                let mut fallback_node = node.clone();
-                                fallback_node.model = fallback.model.clone();
-                                let fb_result = executor.execute_node(&fallback_node).await;
-                                match fb_result.state {
-                                    NodeState::Succeeded => {
-                                        info!(node_id = ?node_id, "Fallback succeeded");
-                                        instance
-                                            .node_states
-                                            .insert(node_id, NodeState::Succeeded);
-                                        queue.mark_completed(node_id);
-                                    }
-                                    NodeState::Failed(fb_reason) => {
-                                        instance.node_states.insert(
-                                            node_id,
-                                            NodeState::Failed(format!(
-                                                "Fallback failed: {}",
-                                                fb_reason
-                                            )),
-                                        );
-                                        queue.mark_failed(node_id);
-                                    }
-                                    _ => {
-                                        instance.node_states.insert(
-                                            node_id,
-                                            NodeState::Succeeded,
-                                        );
-                                        queue.mark_completed(node_id);
-                                    }
-                                }
                             } else {
-                                instance
-                                    .node_states
-                                    .insert(node_id, NodeState::Failed(reason));
-                                queue.mark_failed(node_id);
+                                retry_backoffs.remove(&node_id);
+                                if let Some(ref fallback) = node.fallback {
+                                    info!(
+                                        node_id = ?node_id,
+                                        fallback_model = %fallback.model,
+                                        "Attempting fallback execution"
+                                    );
+                                    let mut fallback_node = node.clone();
+                                    fallback_node.model = fallback.model.clone();
+                                    let fb_result = executor.execute_node(&fallback_node).await;
+                                    match fb_result.state {
+                                        NodeState::Succeeded => {
+                                            info!(node_id = ?node_id, "Fallback succeeded");
+                                            instance
+                                                .node_states
+                                                .insert(node_id, NodeState::Succeeded);
+                                            queue.mark_completed(node_id);
+                                        }
+                                        NodeState::Failed(fb_reason) => {
+                                            instance.node_states.insert(
+                                                node_id,
+                                                NodeState::Failed(format!(
+                                                    "Fallback failed: {}",
+                                                    fb_reason
+                                                )),
+                                            );
+                                            queue.mark_failed(node_id);
+                                        }
+                                        _ => {
+                                            instance.node_states.insert(
+                                                node_id,
+                                                NodeState::Succeeded,
+                                            );
+                                            queue.mark_completed(node_id);
+                                        }
+                                    }
+                                } else {
+                                    instance
+                                        .node_states
+                                        .insert(node_id, NodeState::Failed(reason));
+                                    queue.mark_failed(node_id);
+                                }
                             }
                         } else {
                             instance
@@ -291,7 +321,7 @@ impl crate::scheduler::Scheduler for DefaultScheduler {
         Ok(ExecutionResult {
             instance_id: instance.instance_id,
             success,
-            outputs: HashMap::new(),
+            outputs: instance.outputs.clone(),
             total_latency_ms: total_elapsed,
             total_cost,
             total_tokens,

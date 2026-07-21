@@ -3,9 +3,11 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ExecutionIntent {
     Quality,
     Speed,
+    #[default]
     Balanced,
     Exhaustive,
     Constrained {
@@ -16,11 +18,6 @@ pub enum ExecutionIntent {
     },
 }
 
-impl Default for ExecutionIntent {
-    fn default() -> Self {
-        Self::Balanced
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OutputPreferences {
