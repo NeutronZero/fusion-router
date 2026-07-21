@@ -6,6 +6,12 @@ edition = "2021"
 [workspace]
 members = ["plugins/example-provider"]
 
+[features]
+default = ["semantic-cache"]
+semantic-cache = ["dep:usearch"]
+dev-console = ["console-subscriber"]
+otel = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "tracing-opentelemetry", "tonic"]
+
 [dependencies]
 libloading = "0.8"
 toml = "0.8"
@@ -18,26 +24,51 @@ serde_json = "1"
 serde_yaml = "0.9"
 reqwest = { version = "0.11", features = ["json", "stream"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
+console-subscriber = { version = "0.4", optional = true }
+opentelemetry = { version = "0.27", optional = true }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"], optional = true }
+tracing-opentelemetry = { version = "0.28", optional = true }
+tonic = { version = "0.12", optional = true }
 anyhow = "1"
 meval = "0.2"
 parking_lot = "0.12"
 prometheus = { version = "0.13", features = ["process"] }
 tokio-tungstenite = "0.21"
-futures-util = "0.3"
 thiserror = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 dashmap = "5"
+rand = "0.8"
 futures = "0.3"
-moka = { version = "0.12", features = ["future"] }
 rusqlite = { version = "0.29", features = ["bundled"] }
-schemars = "0.8"
 dotenv = "0.15"
+usearch = { version = "2", optional = true }
 
 [dev-dependencies]
-tokio-test = "0.4"
-pretty_assertions = "1"
-wiremock = "0.5"
-dotenv = "0.15"
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+
+[[bench]]
+name = "compilation"
+harness = false
+
+[[bench]]
+name = "cache"
+harness = false
+
+[profile.dev]
+incremental = false
+opt-level = 0
+debug = true
+# "packed" saves ~40% disk vs "unpacked". Good for Windows.
+# On Unix/macOS, change to "unpacked" for faster debug builds.
+split-debuginfo = "packed"
+
+# Cranelift backend for faster debug builds (nightly-only)
+# To enable, run: rustup component add rustc-codegen-cranelift --toolchain nightly
+# Then uncomment and use: cargo +nightly build -Zcodegen-backend=cranelift
+#
+# [profile.dev.package.fusion-router]
+# codegen-backend = "cranelift"

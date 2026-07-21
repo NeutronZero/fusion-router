@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tracing::info;
 
+#[cfg(feature = "semantic-cache")]
 use crate::cache::SemanticCache;
 use crate::providers::ChatProvider;
 use crate::strategies::Strategy;
@@ -22,6 +23,7 @@ pub trait Executor: Send + Sync {
 pub struct DefaultExecutor {
     pub provider: Arc<dyn ChatProvider + Send + Sync>,
     pub strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>>,
+    #[cfg(feature = "semantic-cache")]
     pub cache: Option<Arc<SemanticCache>>,
     pub tool_registry: Option<Arc<ToolRegistry>>,
 }
@@ -31,9 +33,16 @@ impl DefaultExecutor {
         provider: Arc<dyn ChatProvider + Send + Sync>,
         strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>>,
     ) -> Self {
-        Self { provider, strategies, cache: None, tool_registry: None }
+        Self {
+            provider,
+            strategies,
+            #[cfg(feature = "semantic-cache")]
+            cache: None,
+            tool_registry: None,
+        }
     }
 
+    #[cfg(feature = "semantic-cache")]
     pub fn with_cache(mut self, cache: Arc<SemanticCache>) -> Self {
         self.cache = Some(cache);
         self
@@ -44,6 +53,7 @@ impl DefaultExecutor {
         self
     }
 
+    #[tracing::instrument(skip_all, fields(node_id = %node.id, model = %node.model))]
     fn build_request(node: &ExecutionNode) -> ChatCompletionRequest {
         let mut messages: Vec<ChatMessage> = node
             .config
@@ -93,6 +103,7 @@ impl DefaultExecutor {
         }
     }
 
+    #[cfg(feature = "semantic-cache")]
     fn cache_key(request: &ChatCompletionRequest) -> String {
         let messages_json = serde_json::to_string(&request.messages).unwrap_or_default();
         format!("{}:{}", request.model, messages_json)
@@ -101,10 +112,12 @@ impl DefaultExecutor {
 
 #[async_trait]
 impl Executor for DefaultExecutor {
+    #[tracing::instrument(skip(self, node), fields(node_id = %node.id, model = %node.model, kind = ?node.kind))]
     async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult {
         let start = std::time::Instant::now();
         let subgraph = self.resolve_strategy(node).await;
         let mut accumulated_usage: Option<Usage> = None;
+        let mut output_value: Option<serde_json::Value> = None;
 
         for sub_node in &subgraph.nodes {
             match sub_node.kind {
@@ -112,8 +125,10 @@ impl Executor for DefaultExecutor {
                 | ExecutionNodeKind::LLMReview
                 | ExecutionNodeKind::LLMJudge => {
                     let request = Self::build_request(sub_node);
+                    #[cfg(feature = "semantic-cache")]
                     let cache_key = Self::cache_key(&request);
 
+                    #[cfg(feature = "semantic-cache")]
                     if let Some(ref cache) = self.cache {
                         if cache.get(&cache_key).await.is_some() {
                             info!(
@@ -125,6 +140,7 @@ impl Executor for DefaultExecutor {
                                 state: NodeState::Succeeded,
                                 usage: None,
                                 latency_ms: latency,
+                                output: None,
                             };
                         }
                     }
@@ -137,6 +153,11 @@ impl Executor for DefaultExecutor {
                                 "LLM node completed"
                             );
 
+                            output_value = response.choices.first()
+                                .map(|c| c.message.content.clone())
+                                .map(serde_json::Value::String);
+
+                            #[cfg(feature = "semantic-cache")]
                             if let Some(ref cache) = self.cache {
                                 let content = response.choices.first()
                                     .map(|c| c.message.content.clone())
@@ -194,6 +215,7 @@ impl Executor for DefaultExecutor {
                                 state: NodeState::Failed(format!("Provider error: {}", e)),
                                 usage: None,
                                 latency_ms: latency,
+                                output: None,
                             };
                         }
                     }
@@ -214,9 +236,11 @@ impl Executor for DefaultExecutor {
             state: NodeState::Succeeded,
             usage: accumulated_usage,
             latency_ms: latency,
+            output: output_value,
         }
     }
 
+    #[tracing::instrument(skip(self, node), fields(node_id = %node.id, strategy = ?node.strategy))]
     async fn resolve_strategy(&self, node: &ExecutionNode) -> ExecutionSubgraph {
         self.strategies
             .get(&node.strategy)
