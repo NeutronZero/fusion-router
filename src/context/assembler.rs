@@ -82,7 +82,13 @@ impl DefaultContextAssembler {
                 trimmed_other.push(msg.clone());
                 remaining -= tokens;
             } else if remaining > 10 {
-                let truncated: String = msg.content.chars().take((remaining * 4) as usize).collect();
+                let byte_limit = (remaining * 4) as usize;
+                let safe_end = msg.content.char_indices()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .take_while(|&i| i <= byte_limit)
+                    .last()
+                    .unwrap_or(0);
+                let truncated: String = msg.content[..safe_end].to_string();
                 trimmed_other.push(crate::types::ChatMessage {
                     role: msg.role.clone(),
                     content: truncated,
@@ -100,4 +106,30 @@ impl DefaultContextAssembler {
 
 pub fn estimate_tokens(text: &str) -> u32 {
     (text.len() as u32).div_ceil(4)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::context::assembler::DefaultContextAssembler;
+    use crate::types::ChatMessage;
+
+    #[test]
+    fn test_trim_respects_token_budget_with_multibyte_utf8() {
+        let assembler = DefaultContextAssembler::new();
+        // "你好世界" is 4 chars × 3 bytes = 12 bytes → estimate_tokens = 3
+        // Repeated 100× = 400 chars, 1200 bytes, ~300 tokens
+        let content = "你好世界".repeat(100);
+        let messages = vec![ChatMessage {
+            role: "user".into(),
+            content,
+        }];
+        // max_tokens = 20 → forces aggressive trimming
+        let result = assembler.trim_messages(&messages, 20);
+        let total: u32 = result.iter().map(|m| crate::context::assembler::estimate_tokens(&m.content)).sum();
+        assert!(
+            total <= 20,
+            "trimmed multi-byte content exceeds budget of 20 tokens, computed {}",
+            total,
+        );
+    }
 }
