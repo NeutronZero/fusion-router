@@ -1,6 +1,12 @@
 /target
+advisory-dbs/
 .env
 *.swp
 *.swo
 *~
 .DS_Store
+*.log
+*.db
+*.db-shm
+*.db-wal
+

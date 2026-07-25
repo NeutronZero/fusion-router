@@ -18,10 +18,11 @@ pub struct CacheEntry {
 pub struct SemanticCache {
     embedder: Arc<dyn Embedder + Send + Sync>,
     entries: RwLock<HashMap<u64, CacheEntry>>,
-    index: RwLock<Index>,
+    index: Arc<std::sync::Mutex<Index>>,
     similarity_threshold: f32,
     max_entries: usize,
     next_label: AtomicU64,
+    dimensions: usize,
 }
 
 impl SemanticCache {
@@ -45,43 +46,81 @@ impl SemanticCache {
         Self {
             embedder,
             entries: RwLock::new(HashMap::new()),
-            index: RwLock::new(index),
+            index: Arc::new(std::sync::Mutex::new(index)),
             similarity_threshold,
             max_entries,
             next_label: AtomicU64::new(0),
+            dimensions,
         }
     }
 
     pub async fn get(&self, query: &str) -> Option<Value> {
         let query_embedding = self.embedder.embed(query).await.ok()?;
-        let entries = self.entries.read();
-        if entries.is_empty() {
-            return None;
-        }
-        let index = self.index.read();
-        let results = index.search(&query_embedding, 1).ok()?;
-        let label = *results.keys.first()?;
-        if let Some(entry) = entries.get(&label) {
-            let score = cosine_similarity(&query_embedding, &entry.embedding);
-            if score >= self.similarity_threshold {
-                return Some(entry.response.clone());
+        {
+            let entries = self.entries.read();
+            if entries.is_empty() {
+                return None;
             }
         }
-        None
+
+        let index = self.index.clone();
+        let emb = query_embedding.clone();
+        let results = tokio::task::spawn_blocking(move || {
+            let idx = index.lock().unwrap();
+            idx.search(&emb, 1)
+        })
+        .await
+        .ok()?.ok()?;
+
+        let label = *results.keys.first()?;
+        let entries = self.entries.read();
+        let entry = entries.get(&label)?;
+        let score = cosine_similarity(&query_embedding, &entry.embedding);
+        if score >= self.similarity_threshold {
+            Some(entry.response.clone())
+        } else {
+            None
+        }
     }
 
     pub async fn put(&self, key: &str, response: Value) {
         if let Ok(embedding) = self.embedder.embed(key).await {
-            let mut entries = self.entries.write();
-            let index = self.index.write();
-            if entries.len() >= self.max_entries {
-                if let Some(&oldest) = entries.keys().min() {
-                    let _ = index.remove(oldest);
-                    entries.remove(&oldest);
-                }
-            }
             let label = self.next_label.fetch_add(1, Ordering::Relaxed);
-            let _ = index.add(label, &embedding);
+
+            let index = self.index.clone();
+            let emb = embedding.clone();
+            if tokio::task::spawn_blocking(move || {
+                let idx = index.lock().unwrap();
+                idx.add(label, &emb)
+            })
+            .await
+            .is_err()
+            {
+                return;
+            }
+
+            let oldest_to_remove = {
+                let entries = self.entries.read();
+                if entries.len() >= self.max_entries {
+                    entries.keys().min().copied()
+                } else {
+                    None
+                }
+            };
+
+            if let Some(oldest) = oldest_to_remove {
+                let index = self.index.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let idx = index.lock().unwrap();
+                    let _ = idx.remove(oldest);
+                })
+                .await;
+            }
+
+            let mut entries = self.entries.write();
+            if let Some(oldest) = oldest_to_remove {
+                entries.remove(&oldest);
+            }
             entries.insert(
                 label,
                 CacheEntry {
@@ -103,7 +142,18 @@ impl SemanticCache {
 
     pub fn clear(&self) {
         self.entries.write().clear();
-        let _ = self.index.write().reset();
+        let options = IndexOptions {
+            dimensions: self.dimensions,
+            metric: MetricKind::Cos,
+            quantization: ScalarKind::F32,
+            connectivity: 16,
+            expansion_add: 128,
+            expansion_search: 64,
+            multi: false,
+        };
+        let new_index = Index::new(&options).expect("Failed to create new HNSW index");
+        new_index.reserve(self.max_entries).expect("Failed to reserve index capacity");
+        *self.index.lock().unwrap() = new_index;
         self.next_label.store(0, Ordering::Relaxed);
     }
 }

@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use futures::stream::{self, BoxStream};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 pub mod zen_model;
@@ -10,8 +12,12 @@ pub mod zen;
 pub mod openrouter;
 pub mod circuit_breaker;
 pub mod circuit_breaking_provider;
+pub mod registry;
 
-use crate::types::{ChatCompletionRequest, ChatCompletionResponse};
+#[allow(unused_imports)]
+pub use registry::ProviderRegistry;
+
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCapabilities {
@@ -28,6 +34,39 @@ pub struct ModelCapabilities {
 pub struct ModelPricing {
     pub input_cost_per_1k: f64,
     pub output_cost_per_1k: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ModelRequirements {
+    pub min_context_tokens: Option<u32>,
+    pub min_coding_score: Option<f32>,
+    pub min_reasoning_score: Option<f32>,
+    pub requires_tools: bool,
+    pub requires_streaming: bool,
+    pub requires_vision: bool,
+    pub max_cost_per_1k_tokens: Option<f64>,
+    pub preferred_provider: Option<String>,
+}
+
+impl ModelRequirements {
+    pub fn matches(&self, capabilities: &ModelCapabilities, pricing: &ModelPricing) -> bool {
+        if self.requires_tools && !capabilities.supports_tools { return false; }
+        if self.requires_streaming && !capabilities.supports_streaming { return false; }
+        if self.requires_vision && !capabilities.supports_vision { return false; }
+        if let Some(min_ctx) = self.min_context_tokens {
+            if capabilities.max_context_tokens < min_ctx { return false; }
+        }
+        if let Some(min_code) = self.min_coding_score {
+            if capabilities.coding_score < min_code { return false; }
+        }
+        if let Some(min_reason) = self.min_reasoning_score {
+            if capabilities.reasoning_score < min_reason { return false; }
+        }
+        if let Some(max_cost) = self.max_cost_per_1k_tokens {
+            if (pricing.input_cost_per_1k + pricing.output_cost_per_1k) > max_cost { return false; }
+        }
+        true
+    }
 }
 
 #[async_trait]
@@ -51,6 +90,26 @@ pub use crate::transport::{Transport, TransportRequest, TransportResponse};
 pub trait ChatProvider: Send + Sync {
     async fn chat_completion(&self, request: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse>;
     fn name(&self) -> &str;
+
+    async fn chat_stream(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ChatStreamChunk>>> {
+        let response = self.chat_completion(request).await?;
+        let content = response
+            .choices
+            .first()
+            .map(|c| c.message.content.clone())
+            .unwrap_or_default();
+        let usage = response.usage;
+        Ok(Box::pin(stream::once(async move {
+            Ok(ChatStreamChunk {
+                content: Some(content),
+                finish_reason: Some("stop".to_string()),
+                usage,
+            })
+        })))
+    }
 }
 
 pub struct Provider {
@@ -80,5 +139,136 @@ impl ChatProvider for Provider {
         let req = self.model.format_request(request, &self.api_key)?;
         let resp = self.transport.send(req).await.map_err(|e| anyhow::anyhow!("Transport error: {}", e))?;
         self.model.normalize_response(resp)
+    }
+
+    #[tracing::instrument(skip(self, request), fields(provider = %self.name(), model = %request.model))]
+    async fn chat_stream(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ChatStreamChunk>>> {
+        let mut transport_req = self.model.format_request(request, &self.api_key)?;
+        transport_req.body["stream"] = serde_json::json!(true);
+        let stream = self.transport.stream(transport_req).await.map_err(|e| anyhow::anyhow!("Transport error: {}", e))?;
+
+        let framed = stream.scan(String::new(), |buf, event| {
+            let chunks = match event {
+                Ok(event) => {
+                    buf.push_str(&event.data);
+                    let mut chunks = Vec::new();
+                    loop {
+                        let pos = match buf.find("\n\n") {
+                            Some(p) => p,
+                            None => break,
+                        };
+                        let raw = buf[..pos].trim().to_string();
+                        buf.drain(..=pos + 1);
+                        if raw.is_empty() {
+                            continue;
+                        }
+                        let data = raw.strip_prefix("data: ").unwrap_or(&raw);
+                        if data.trim().is_empty() || data == "[DONE]" {
+                            continue;
+                        }
+                        match ChatStreamChunk::from_sse_data(data) {
+                            Ok(Some(chunk)) => chunks.push(Ok(chunk)),
+                            Ok(None) => {}
+                            Err(e) => {
+                                tracing::warn!(raw = %raw, "SSE parse error");
+                                chunks.push(Err(e))
+                            }
+                        }
+                    }
+                    chunks
+                }
+                Err(e) => vec![Err(anyhow::anyhow!("Transport error: {}", e))],
+            };
+            async move { Some(chunks) }
+        });
+
+        Ok(Box::pin(framed.flat_map(|chunks| stream::iter(chunks))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_caps() -> ModelCapabilities {
+        ModelCapabilities {
+            coding_score: 0.9,
+            reasoning_score: 0.85,
+            max_context_tokens: 128_000,
+            supports_tools: true,
+            supports_streaming: true,
+            supports_vision: true,
+            supports_json_mode: true,
+        }
+    }
+
+    fn base_pricing() -> ModelPricing {
+        ModelPricing {
+            input_cost_per_1k: 3.0,
+            output_cost_per_1k: 15.0,
+        }
+    }
+
+    #[test]
+    fn test_matches_tools_req_fails_when_unsupported() {
+        let req = ModelRequirements {
+            requires_tools: true,
+            ..Default::default()
+        };
+        let caps = ModelCapabilities {
+            supports_tools: false,
+            ..base_caps()
+        };
+        assert!(!req.matches(&caps, &base_pricing()));
+    }
+
+    #[test]
+    fn test_matches_context_window_fails_when_too_small() {
+        let req = ModelRequirements {
+            min_context_tokens: Some(200_000),
+            ..Default::default()
+        };
+        assert!(!req.matches(&base_caps(), &base_pricing()));
+    }
+
+    #[test]
+    fn test_matches_cost_ceiling_fails_when_exceeded() {
+        let req = ModelRequirements {
+            max_cost_per_1k_tokens: Some(10.0),
+            ..Default::default()
+        };
+        assert!(!req.matches(&base_caps(), &base_pricing()));
+    }
+
+    #[test]
+    fn test_matches_all_satisfied_returns_true() {
+        let req = ModelRequirements {
+            requires_tools: true,
+            requires_streaming: true,
+            min_context_tokens: Some(32_000),
+            min_coding_score: Some(0.7),
+            max_cost_per_1k_tokens: Some(50.0),
+            ..Default::default()
+        };
+        assert!(req.matches(&base_caps(), &base_pricing()));
+    }
+
+    #[test]
+    fn test_matches_default_accepts_anything() {
+        let req = ModelRequirements::default();
+        assert!(req.matches(&base_caps(), &base_pricing()));
+        let minimal = ModelCapabilities {
+            coding_score: 0.1,
+            reasoning_score: 0.1,
+            max_context_tokens: 1_000,
+            supports_tools: false,
+            supports_streaming: false,
+            supports_vision: false,
+            supports_json_mode: false,
+        };
+        assert!(req.matches(&minimal, &base_pricing()));
     }
 }

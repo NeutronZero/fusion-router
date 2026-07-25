@@ -1,0 +1,237 @@
+use std::sync::Arc;
+use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+use crate::context::assembler::ContextAssembler;
+use crate::planner::Planner;
+use crate::compiler::Compiler;
+use crate::scheduler::Scheduler;
+use crate::executor::Executor;
+use crate::requirements::extractor::RequirementsExtractor;
+use crate::resource::{ResourceManager, ResourceGuard, BudgetEnvelope};
+use crate::telemetry::EvidenceRepository;
+use crate::types::*;
+
+pub struct PipelineContext {
+    pub request_id: Uuid,
+    pub cancellation_token: CancellationToken,
+    pub request: ChatCompletionRequest,
+    pub assembled_context: Option<ContextSnapshot>,
+    pub requirements: Option<Requirements>,
+    pub evidence: Option<EvidenceSnapshot>,
+    pub ir: Option<WorkflowIR>,
+    pub graph: Option<ExecutionGraph>,
+    pub resource_guard: Option<ResourceGuard>,
+    pub execution_result: Option<ExecutionResult>,
+    pub response: Option<ChatCompletionResponse>,
+    pub budget_envelope: Option<BudgetEnvelope>,
+}
+
+impl PipelineContext {
+    pub fn new(request_id: Uuid, request: ChatCompletionRequest, cancellation_token: CancellationToken) -> Self {
+        Self {
+            request_id,
+            cancellation_token,
+            request,
+            assembled_context: None,
+            requirements: None,
+            evidence: None,
+            ir: None,
+            graph: None,
+            resource_guard: None,
+            execution_result: None,
+            response: None,
+            budget_envelope: None,
+        }
+    }
+}
+
+#[async_trait]
+pub trait PipelineStep<Input, Output>: Send + Sync {
+    async fn execute(&self, input: Input, ctx: &mut PipelineContext) -> Result<Output, RouterError>;
+}
+
+pub struct ContextAssemblyStep {
+    pub assembler: Arc<dyn ContextAssembler + Send + Sync>,
+}
+
+#[async_trait]
+impl PipelineStep<ChatCompletionRequest, ContextSnapshot> for ContextAssemblyStep {
+    async fn execute(&self, request: ChatCompletionRequest, ctx: &mut PipelineContext) -> Result<ContextSnapshot, RouterError> {
+        let snapshot = self.assembler.assemble(&request).await.map_err(|e| {
+            RouterError::StageFailure {
+                stage: PipelineStage::ContextAssembly,
+                request_id: ctx.request_id,
+                message: e.to_string(),
+            }
+        })?;
+        ctx.assembled_context = Some(snapshot.clone());
+        Ok(snapshot)
+    }
+}
+
+pub struct RequirementsExtractionStep {
+    pub extractor: Arc<dyn RequirementsExtractor + Send + Sync>,
+}
+
+#[async_trait]
+impl PipelineStep<ContextSnapshot, Requirements> for RequirementsExtractionStep {
+    async fn execute(&self, context: ContextSnapshot, ctx: &mut PipelineContext) -> Result<Requirements, RouterError> {
+        let mut reqs = self.extractor.extract(&context);
+        reqs.execution_intent = ctx.request.execution.clone();
+        reqs.output_preferences = ctx.request.output.clone();
+        ctx.requirements = Some(reqs.clone());
+        Ok(reqs)
+    }
+}
+
+pub struct EvidenceSnapshotStep {
+    pub repository: Arc<dyn EvidenceRepository + Send + Sync>,
+}
+
+#[async_trait]
+impl PipelineStep<(), Option<EvidenceSnapshot>> for EvidenceSnapshotStep {
+    async fn execute(&self, _: (), ctx: &mut PipelineContext) -> Result<Option<EvidenceSnapshot>, RouterError> {
+        let evidence = self.repository.snapshot().await.ok();
+        ctx.evidence = evidence.clone();
+        Ok(evidence)
+    }
+}
+
+pub struct PlanningStep {
+    pub planner: Arc<dyn Planner + Send + Sync>,
+    pub policies: Vec<Policy>,
+}
+
+#[async_trait]
+impl PipelineStep<(Requirements, Option<EvidenceSnapshot>), WorkflowIR> for PlanningStep {
+    async fn execute(&self, (reqs, evidence): (Requirements, Option<EvidenceSnapshot>), ctx: &mut PipelineContext) -> Result<WorkflowIR, RouterError> {
+        let ir = self.planner.plan(&reqs, &self.policies, evidence.as_ref()).await;
+        ctx.ir = Some(ir.clone());
+        Ok(ir)
+    }
+}
+
+pub struct CompilationStep {
+    pub compiler: Arc<dyn Compiler + Send + Sync>,
+}
+
+#[async_trait]
+impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
+    async fn execute(&self, ir: WorkflowIR, ctx: &mut PipelineContext) -> Result<ExecutionGraph, RouterError> {
+        let mut graph = self.compiler.compile(ir).await.map_err(|e| {
+            RouterError::StageFailure {
+                stage: PipelineStage::Compilation,
+                request_id: ctx.request_id,
+                message: e.to_string(),
+            }
+        })?;
+
+        for node in &mut graph.nodes {
+            node.model = ctx.request.model.clone();
+            if matches!(node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
+                if let Some(ctx_snapshot) = &ctx.assembled_context {
+                    node.config.insert("messages".to_string(), serde_json::to_value(&ctx_snapshot.messages).unwrap_or_default());
+                }
+            }
+        }
+
+        ctx.graph = Some(graph.clone());
+        Ok(graph)
+    }
+}
+
+pub struct ResourceReservationStep {
+    pub resource_manager: Arc<dyn ResourceManager>,
+}
+
+#[async_trait]
+impl PipelineStep<ExecutionGraph, ResourceGuard> for ResourceReservationStep {
+    async fn execute(&self, graph: ExecutionGraph, ctx: &mut PipelineContext) -> Result<ResourceGuard, RouterError> {
+        if !self.resource_manager.try_reserve(&graph).await {
+            return Err(RouterError::ResourceExhausted {
+                request_id: ctx.request_id,
+                details: "Daily resource quota exhausted".to_string(),
+            });
+        }
+
+        // Initialize per-request budget envelope from global quota
+        let q = self.resource_manager.quota();
+        let max_cost = ((q.max_daily_cost * 0.2 * 1000.0) as u64).max(10_000);
+        let max_tokens = (q.max_daily_tokens / 5).max(10_000);
+        ctx.budget_envelope = Some(BudgetEnvelope::new(max_cost, max_tokens, 10));
+
+        let guard = ResourceGuard::new(ctx.request_id, graph, self.resource_manager.clone());
+        ctx.resource_guard = None;
+        Ok(guard)
+    }
+}
+
+pub struct SchedulingExecutionStep {
+    pub scheduler: Arc<dyn Scheduler + Send + Sync>,
+    pub executor: Arc<dyn Executor + Send + Sync>,
+}
+
+#[async_trait]
+impl PipelineStep<(ExecutionGraph, ReservationId), ExecutionResult> for SchedulingExecutionStep {
+    async fn execute(&self, (graph, reservation): (ExecutionGraph, ReservationId), ctx: &mut PipelineContext) -> Result<ExecutionResult, RouterError> {
+        let mut instance = self.scheduler.schedule(graph, reservation);
+        instance.budget_envelope = ctx.budget_envelope.clone();
+        let result = self
+            .scheduler
+            .run_with_cancellation(&mut instance, &*self.executor, &ctx.cancellation_token)
+            .await
+            .map_err(|e| RouterError::StageFailure {
+                stage: PipelineStage::Execution,
+                request_id: ctx.request_id,
+                message: e.to_string(),
+            })?;
+
+        ctx.execution_result = Some(result.clone());
+        Ok(result)
+    }
+}
+
+pub struct ResponseBuilderStep;
+
+#[async_trait]
+impl PipelineStep<ExecutionResult, ChatCompletionResponse> for ResponseBuilderStep {
+    async fn execute(&self, result: ExecutionResult, ctx: &mut PipelineContext) -> Result<ChatCompletionResponse, RouterError> {
+        if !result.success {
+            return Err(RouterError::StageFailure {
+                stage: PipelineStage::ResponseBuilding,
+                request_id: ctx.request_id,
+                message: "Execution completed with failures".to_string(),
+            });
+        }
+
+        let content = result.outputs.values()
+            .last()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "Request processed successfully.".to_string());
+
+        let response = ChatCompletionResponse {
+            id: ctx.request_id.to_string(),
+            object: "chat.completion".to_string(),
+            created: chrono::Utc::now().timestamp(),
+            model: ctx.request.model.clone(),
+            choices: vec![Choice {
+                index: 0,
+                message: ChatMessage {
+                    role: "assistant".to_string(),
+                    content,
+                },
+                finish_reason: "stop".to_string(),
+            }],
+            usage: Some(Usage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: result.total_tokens as u32,
+            }),
+        };
+
+        ctx.response = Some(response.clone());
+        Ok(response)
+    }
+}

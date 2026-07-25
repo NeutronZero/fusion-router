@@ -8,16 +8,15 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use futures::stream::{self};
+use futures::stream::{self, BoxStream};
+use futures::StreamExt;
 use uuid::Uuid;
 
 use crate::compiler::passes::BudgetOptimisationPass;
 use crate::compiler::passes::ControlFlowValidationPass;
-use crate::compiler::Compiler;
 use crate::compiler::DefaultCompiler;
 use crate::compiler::passes::{ConstraintValidationPass, ModelResolutionPass};
 use crate::config::AppConfig;
-use crate::context::assembler::ContextAssembler;
 use crate::tools::{ToolRegistry, HTTPRequestTool, ShellCommandTool};
 use crate::tools::builtin::{CalculatorTool, SearchTool, FileReadTool};
 use crate::context::assembler::DefaultContextAssembler;
@@ -25,11 +24,8 @@ use crate::executor::DefaultExecutor;
 use crate::planner::Planner;
 use crate::workflow::WorkflowRegistry;
 use crate::providers::ChatProvider;
-use crate::requirements::extractor::RequirementsExtractor;
 use crate::requirements::extractor::DefaultRequirementsExtractor;
-use crate::resource::ResourceManager;
 use crate::resource::DefaultResourceManager;
-use crate::scheduler::Scheduler;
 use crate::scheduler::default::DefaultScheduler;
 use crate::strategies::chain::ChainStrategy;
 use crate::strategies::consensus::ConsensusStrategy;
@@ -40,6 +36,11 @@ use crate::strategies::single::SingleStrategy;
 use crate::strategies::Strategy;
 use crate::telemetry::EvidenceRepository;
 use crate::types::*;
+use crate::server::pipeline::{
+    PipelineStep, PipelineContext, ContextAssemblyStep, RequirementsExtractionStep,
+    EvidenceSnapshotStep, PlanningStep, CompilationStep, ResourceReservationStep,
+    SchedulingExecutionStep, ResponseBuilderStep,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -83,6 +84,7 @@ impl AppState {
                 Box::new(ControlFlowValidationPass),
                 Box::new(ModelResolutionPass {
                     model_catalog: config.model_catalog.clone(),
+                    model_requirements: None,
                 }),
                 Box::new(BudgetOptimisationPass {
                     resource_manager: resource_manager.clone(),
@@ -98,11 +100,11 @@ impl AppState {
                 count: config.strategies.consensus_count,
             }),
         );
-        strategies.insert(StrategyKind::Reflection, Box::new(ReflectionStrategy));
+        strategies.insert(StrategyKind::Reflection, Box::new(ReflectionStrategy::default()));
         strategies.insert(StrategyKind::Chain, Box::new(ChainStrategy {
             stages: vec![
                 Box::new(SingleStrategy),
-                Box::new(ReflectionStrategy),
+                Box::new(ReflectionStrategy::default()),
             ],
         }));
         // Build tool registry from config
@@ -188,8 +190,9 @@ pub async fn chat_completions(
             Json(response).into_response()
         }
         Err(e) => {
-            tracing::error!(request_id = %request_id, error = %e, "pipeline failed");
-            Json(error_response(request_id, &request.model, &e.to_string())).into_response()
+            let status = e.status_code();
+            tracing::error!(request_id = %request_id, stage = ?e.stage(), error = %e, "pipeline failed");
+            (status, Json(error_response(request_id, &request.model, &e.to_string()))).into_response()
         }
     }
 }
@@ -199,26 +202,52 @@ async fn stream_response(
     request: ChatCompletionRequest,
     request_id: Uuid,
 ) -> axum::response::Response {
-    let result = process_request(&state, &request, request_id).await;
+    let request_id_str = request_id.to_string();
+    let model_name = request.model.clone();
+    let created = chrono::Utc::now().timestamp();
 
-    let sse = match result {
-        Ok(response) => {
-            let json = serde_json::to_string(&response).unwrap_or_default();
-            stream::iter(vec![
-                Ok::<_, std::convert::Infallible>(Event::default().data(format!("data: {}\n\n", json))),
-                Ok(Event::default().data("data: [DONE]\n\n")),
-            ])
-        }
+    let provider = state.provider.clone();
+    let inner = provider.chat_stream(&request).await;
+    drop(request);
+    drop(state);
+
+    let stream: BoxStream<'static, Result<Event, std::convert::Infallible>> = match inner {
+        Ok(inner_stream) => Box::pin(inner_stream.map(move |chunk_result| {
+            let id = request_id_str.clone();
+            let model = model_name.clone();
+            let payload = match chunk_result {
+                Ok(chunk) => {
+                    serde_json::json!({
+                        "id": id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "content": chunk.content,
+                            },
+                            "finish_reason": chunk.finish_reason,
+                        }],
+                    })
+                }
+                Err(e) => {
+                    serde_json::json!({"error": e.to_string()})
+                }
+            };
+            Ok(Event::default().data(serde_json::to_string(&payload).unwrap_or_default()))
+        })),
         Err(e) => {
-            let error = serde_json::json!({
-                "error": e.to_string()
-            });
-            stream::iter(vec![
-                Ok::<_, std::convert::Infallible>(Event::default().data(format!("data: {}\n\n", error))),
-                Ok(Event::default().data("data: [DONE]\n\n")),
-            ])
+            let error = serde_json::json!({"error": e.to_string()});
+            Box::pin(stream::once(async move {
+                Ok(Event::default().data(serde_json::to_string(&error).unwrap_or_default()))
+            }))
         }
     };
+
+    let sse = stream.chain(stream::once(async {
+        Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"))
+    }));
 
     Sse::new(sse).into_response()
 }
@@ -227,27 +256,44 @@ async fn process_request(
     state: &AppState,
     request: &ChatCompletionRequest,
     request_id: Uuid,
-) -> anyhow::Result<ChatCompletionResponse> {
-    // 1. Assemble context
-    let ctx = state.context_assembler.assemble(request).await?;
-    tracing::debug!(messages = ctx.messages.len(), "context assembled");
+) -> Result<ChatCompletionResponse, RouterError> {
+    let cancellation_token = tokio_util::sync::CancellationToken::new();
+    let mut pctx = PipelineContext::new(request_id, request.clone(), cancellation_token);
 
-    // 2. Extract requirements
-    let mut reqs = state.requirements_extractor.extract(&ctx);
-    reqs.execution_intent = request.execution.clone();
-    reqs.output_preferences = request.output.clone();
+    // 1. Context Assembly
+    let step_ctx = ContextAssemblyStep {
+        assembler: state.context_assembler.clone(),
+    };
+    let context_snapshot = step_ctx.execute(request.clone(), &mut pctx).await?;
+    tracing::debug!(messages = context_snapshot.messages.len(), "context assembled");
+
+    // 2. Requirements Extraction
+    let step_reqs = RequirementsExtractionStep {
+        extractor: state.requirements_extractor.clone(),
+    };
+    let reqs = step_reqs.execute(context_snapshot, &mut pctx).await?;
     tracing::debug!(intent = ?reqs.intent_classification, complexity = ?reqs.complexity, "requirements extracted");
 
-    // 3. Get evidence snapshot
-    let evidence = state.evidence_repository.snapshot().await.ok();
+    // 3. Evidence Snapshot
+    let step_evidence = EvidenceSnapshotStep {
+        repository: state.evidence_repository.clone(),
+    };
+    let evidence = step_evidence.execute((), &mut pctx).await?;
 
-    // 4. Plan
+    // 4. Planning
     let policies = state.config.to_policies();
-    let ir = state.planner.plan(&reqs, &policies, evidence.as_ref()).await;
+    let step_plan = PlanningStep {
+        planner: state.planner.clone(),
+        policies,
+    };
+    let ir = step_plan.execute((reqs.clone(), evidence), &mut pctx).await?;
     tracing::debug!(plan_id = %ir.plan_id, nodes = ir.nodes.len(), "plan created");
 
-    // 5. Compile
-    let graph = state.compiler.compile(ir).await?;
+    // 5. Compilation
+    let step_compile = CompilationStep {
+        compiler: state.compiler.clone(),
+    };
+    let graph = step_compile.execute(ir, &mut pctx).await?;
     tracing::debug!(
         graph_id = %graph.graph_id,
         estimated_cost = graph.metadata.estimated_cost,
@@ -255,19 +301,19 @@ async fn process_request(
         "graph compiled"
     );
 
-    // 6. Reserve resources
-    state.resource_manager.reserve(&graph).await?;
+    // 6. Resource Reservation with RAII Guard
+    let step_reserve = ResourceReservationStep {
+        resource_manager: state.resource_manager.clone(),
+    };
+    let mut guard = step_reserve.execute(graph.clone(), &mut pctx).await?;
 
-    // 7. Schedule
+    // 7. Scheduling & Execution
     let reservation = ReservationId(Uuid::new_v4());
-    let mut instance = state.scheduler.schedule(graph, reservation);
-
-    // 8. Execute
-    let result = state
-        .scheduler
-        .run(&mut instance, &*state.executor)
-        .await
-        .map_err(|e| anyhow::anyhow!("Execution failed: {}", e))?;
+    let step_exec = SchedulingExecutionStep {
+        scheduler: state.scheduler.clone(),
+        executor: state.executor.clone(),
+    };
+    let result = step_exec.execute((graph.clone(), reservation), &mut pctx).await?;
 
     tracing::debug!(
         instance_id = %result.instance_id,
@@ -276,66 +322,31 @@ async fn process_request(
         "execution complete"
     );
 
-    // 9. Record telemetry
-    for (node_id, state_val) in &instance.node_states {
-        if let NodeState::Failed(_reason) = state_val {
-            let record = ExecutionRecord {
-                record_id: Uuid::new_v4(),
-                plan_id: instance.instance_id,
-                node_id: *node_id,
-                model: request.model.clone(),
-                provider: state.provider.name().to_string(),
-                intent: reqs.intent_classification.clone(),
-                latency_ms: result.total_latency_ms,
-                tokens: 0,
-                cost: 0.0,
-                success: false,
-                timestamp: chrono::Utc::now().timestamp(),
-            };
-            let _ = state.evidence_repository.record(record).await;
-        }
-    }
-
-    // Record overall success
-    let record = ExecutionRecord {
-        record_id: Uuid::new_v4(),
-        plan_id: instance.instance_id,
-        node_id: Uuid::nil(),
-        model: request.model.clone(),
-        provider: state.provider.name().to_string(),
-        intent: reqs.intent_classification,
-        latency_ms: result.total_latency_ms,
-        tokens: result.total_tokens as u32,
-        cost: result.total_cost,
-        success: result.success,
-        timestamp: chrono::Utc::now().timestamp(),
-    };
-    let _ = state.evidence_repository.record(record).await;
-
-    // 10. Build response
+    // 8. Telemetry Recording
     if result.success {
-        Ok(ChatCompletionResponse {
-            id: request_id.to_string(),
-            object: "chat.completion".to_string(),
-            created: chrono::Utc::now().timestamp(),
+        let record = ExecutionRecord {
+            record_id: Uuid::new_v4(),
+            plan_id: result.instance_id,
+            node_id: Uuid::nil(),
             model: request.model.clone(),
-            choices: vec![Choice {
-                index: 0,
-                message: ChatMessage {
-                    role: "assistant".to_string(),
-                    content: "Request processed successfully.".to_string(),
-                },
-                finish_reason: "stop".to_string(),
-            }],
-            usage: Some(Usage {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: result.total_tokens as u32,
-            }),
-        })
-    } else {
-        anyhow::bail!("Execution completed with failures")
+            provider: state.provider.name().to_string(),
+            intent: reqs.intent_classification,
+            latency_ms: result.total_latency_ms,
+            tokens: result.total_tokens as u32,
+            cost: result.total_cost as f64,
+            success: result.success,
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+        let _ = state.evidence_repository.record(record).await;
     }
+
+    // 9. Response Building
+    let response = ResponseBuilderStep.execute(result, &mut pctx).await?;
+
+    // Commit RAII ResourceGuard on successful completion
+    guard.commit();
+
+    Ok(response)
 }
 
 pub async fn metrics_handler() -> impl IntoResponse {

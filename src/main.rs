@@ -25,9 +25,13 @@ mod tools;
 mod cache;
 mod middleware;
 
+#[cfg(feature = "wasm-plugins")]
+mod wasm;
+
 use config::AppConfig;
+use providers::circuit_breaker::CircuitBreaker;
 use providers::openrouter::OpenRouterProvider;
-use providers::router::ProviderRouter;
+use providers::router::{ProviderRouter, ProviderTarget};
 use providers::zen::ZenProvider;
 use telemetry::SqliteEvidenceRepository;
 
@@ -80,15 +84,24 @@ async fn main() {
     let openrouter_key = std::env::var("OPENROUTER_API_KEY")
         .unwrap_or_else(|_| "test-key".to_string());
 
-    let zen_provider = Arc::new(ZenProvider::new(zen_key));
-    let openrouter_provider = Arc::new(OpenRouterProvider::new(openrouter_key));
+    let openrouter_target = ProviderTarget::new(
+        "openrouter".to_string(),
+        CircuitBreaker::new(5, 3, 30),
+        Box::new(move || -> Arc<dyn providers::ChatProvider + Send + Sync> {
+            Arc::new(OpenRouterProvider::new(openrouter_key.clone()))
+        }),
+    );
+    let zen_target = ProviderTarget::new(
+        "zen".to_string(),
+        CircuitBreaker::new(5, 3, 30),
+        Box::new(move || -> Arc<dyn providers::ChatProvider + Send + Sync> {
+            Arc::new(ZenProvider::new(zen_key.clone()))
+        }),
+    );
 
     let provider_router: Arc<dyn providers::ChatProvider + Send + Sync> = Arc::new(
-        ProviderRouter::new(openrouter_provider.clone())
-            .with_provider(
-                vec!["opencode/".to_string(), "zen/".to_string()],
-                zen_provider,
-            ),
+        ProviderRouter::new(openrouter_target)
+            .with_provider(vec!["opencode/".to_string(), "zen/".to_string()], zen_target),
     );
 
     tracing::info!(

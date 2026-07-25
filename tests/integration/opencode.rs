@@ -59,7 +59,11 @@ impl EvidenceRepository for NoopEvidence {
             model_rankings: vec![],
         })
     }
+    async fn get_model_stats(&self, _window_hours: u32) -> anyhow::Result<Vec<fusion_router::telemetry::ModelPerformanceStats>> {
+        Ok(vec![])
+    }
 }
+
 
 #[tokio::test]
 async fn test_chat_completion_endpoint() {
@@ -125,7 +129,7 @@ async fn test_chat_completion_endpoint() {
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["object"], "chat.completion");
-    assert!(body["choices"][0]["message"]["content"].as_str().unwrap().contains("processed successfully"));
+    assert!(body["choices"][0]["message"]["content"].as_str().unwrap().contains("Hello from mock"));
 }
 
 #[tokio::test]

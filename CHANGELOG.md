@@ -1,5 +1,50 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Multi-Model Consensus Review Script** – `scripts/consensus_review.ps1`: reusable template for parallel architect models + judge synthesis; 7 configurable parameters; architects run via parallel PowerShell jobs; supports any provider prefix
+- **Capability-Based Provider Selection** – decouples routing from hardcoded model prefixes
+  - `ModelRequirements` struct with 8 fields (`min_context_tokens`, `min_coding_score`, `min_reasoning_score`, `requires_tools`, `requires_streaming`, `requires_vision`, `max_cost_per_1k_tokens`, `preferred_provider`) and `matches(&self, caps, pricing) -> bool` method
+  - `RequirementsExtractor.build_model_requirements()` sets coding/reasoning thresholds by intent, enables `requires_tools` when tools present, sets `min_context_tokens` for large payloads
+  - `ProviderRegistry` with `register_target_with_capabilities()`, `select_targets(reqs)` that filters by capability match, sorts by cost ascending, excludes open circuits
+  - `ModelResolutionPass.select_model()` picks code/architecture/fast model based on requirements
+  - `ProviderRouter.resolve_target()` falls back to `registry.select_targets()` when no prefix match
+- **Continuous Feedback Calibration** – closed-loop capability adjustments from telemetry
+  - `ModelPerformanceStats` struct and `get_model_stats(window_hours)` on `EvidenceRepository` trait
+  - SQL aggregation with `HAVING COUNT(*) >= 30` cold-start guardrail
+  - `FeedbackCalibrator` engine: health penalty factor on `success_rate < 0.95`, EMA smoothing, `min_score_floor = 0.1`
+  - `spawn_calibration_loop()` background Tokio task at configurable interval
+  - `get_capabilities()` / `update_capabilities()` on `ProviderRegistry` with atomic version bump
+  - 3 unit tests: cold-start skip, penalty, recovery
+- **Circuit Breaker** – `CircuitBreaker` (Closed/Open/Half-Open state machine) and `CircuitBreakingProvider` wrapper with configurable thresholds, cooldown, and success recovery; integrated into `ProviderRouter` for automatic fallthrough on failure
+- **ModelCatalog** – typed struct mapping roles (code, debug, architecture, general, creative, analysis, fast, cheap) to model names with sensible defaults
+- **Scheduler Concurrency** – `max_concurrent_nodes` config driving `buffer_unordered` in `DefaultScheduler` for bounded parallel execution; `Backoff` full-jitter retry on node failures
+- **NodeExecutionResult.output** – per-node output capture propagated to `ExecutionResult.outputs` for downstream access
+- **OTel Tracing** – `telemetry::tracing` module with OpenTelemetry gRPC export (feature-gated by `otel`); `dev-console` feature for tokio-console subscriber
+- **Resource Management**
+  - `BudgetEnvelope` – atomic cost/token/iteration tracking with `record_and_check()` enforcement
+  - `ResourceGuard` – RAII-style commit/rollback for cross-request quota safety
+  - `ResourceManager` trait with `reserve()`, `commit()`, `rollback()` for concurrency-safe budgeting
+- **Pipeline Server Module** – `PipelineContext` with typed per-request state (request, context, requirements, IR, graph, resource guard, execution result, response, budget envelope); supports cancellation via `CancellationToken`
+- **CI Hardening** – GitHub Actions workflows for test, clippy, cargo-audit, cargo-deny; `deny.toml` for license + vulnerability checking
+- **Benchmarks** – Criterion benchmarks for compilation throughput and cache performance (`benches/compilation.rs`, `benches/cache.rs`)
+
+### Changed
+- **ZenProvider Transport Timeout** – increased from 30s → 300s (`src/providers/zen.rs:7`) to accommodate long-running prompts on OpenCodeZen API (observed >100s for medium-length judge prompts)
+- **HNSW Vector Cache** – semantic cache upgraded from brute-force `Vec<CacheEntry>` linear scan to HNSW (`usearch`) with `HashMap<u64, CacheEntry>` for O(log n) nearest-neighbor search; configurable dimensions, connectivity, and expansion params
+- **Transport Layer** – unified `Transport` trait with typed `TransportRequest`/`TransportResponse`/`TransportEvent`/`TransportError` structs; `HttpTransport` with retry + full-jitter exponential backoff; `StdioTransport` and `WebSocketTransport` refactored to new signatures
+- **ProviderRouter** – wrapped providers in `CircuitBreakingProvider`; changed from single-provider resolve to multi-provider fallthrough with circuit-breaker skip
+- **SqliteEvidenceRepository** – `record()` and `snapshot()` migrated from synchronous `Mutex` to `tokio::task::spawn_blocking` with `Arc<Mutex<Connection>>` for non-blocking async operation
+- **Scheduler** – `DefaultScheduler` accepts `max_concurrent` param; execution uses `buffer_unordered` for bounded parallelism; retries use `Backoff` full-jitter backoff instead of fixed delay; `NodeExecutionResult` gains `output` field propagated to `ExecutionResult`
+- **Observability** – `tracing::instrument` on 17 key methods across scheduler, executor, transport; optional OTel (`otel` feature) and tokio-console (`dev-console` feature) subscribers; subscriber initialized at startup
+- **Budget Pass** – graph lowering eliminated; budget enforcement moved to runtime via `BudgetEnvelope`
+- **WorkQueue** – loop back-edges excluded from initial `total_incoming` counts for clean loop header initialization
+- **Zero Rust Warnings** – all dead_code and unused imports removed or annotated
+
+### Fixed
+- ProviderRegistry replaced `tokio::sync::watch` with `Arc<AtomicU64>` to resolve Sync constraint preventing `Arc<ProviderRegistry>: Send`
+
 ## [0.8.0] – 2026-07-18
 
 ### Added

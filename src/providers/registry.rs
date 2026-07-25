@@ -1,0 +1,240 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use super::router::ProviderTarget;
+
+#[derive(Debug, Clone)]
+pub struct ProviderRegistryConfig {
+    pub targets: HashMap<String, Vec<String>>, // prefix -> target_names
+}
+
+pub struct ProviderRegistry {
+    targets: parking_lot::RwLock<HashMap<String, Arc<ProviderTarget>>>,
+    prefixes: parking_lot::RwLock<Vec<(Vec<String>, Arc<ProviderTarget>)>>,
+    capabilities: parking_lot::RwLock<HashMap<String, super::ModelCapabilities>>,
+    pricing: parking_lot::RwLock<HashMap<String, super::ModelPricing>>,
+    default_target: Arc<ProviderTarget>,
+    version: Arc<AtomicU64>,
+}
+
+impl ProviderRegistry {
+    pub fn new(default_target: ProviderTarget) -> Self {
+        Self {
+            targets: parking_lot::RwLock::new(HashMap::new()),
+            prefixes: parking_lot::RwLock::new(Vec::new()),
+            capabilities: parking_lot::RwLock::new(HashMap::new()),
+            pricing: parking_lot::RwLock::new(HashMap::new()),
+            default_target: Arc::new(default_target),
+            version: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn register_target(&self, prefixes: Vec<String>, target: ProviderTarget) {
+        let target_arc = Arc::new(target);
+        {
+            let mut targets = self.targets.write();
+            targets.insert(target_arc.name.clone(), target_arc.clone());
+        }
+        {
+            let mut prefix_list = self.prefixes.write();
+            prefix_list.push((prefixes, target_arc));
+        }
+        self.version.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn register_target_with_capabilities(
+        &self,
+        prefixes: Vec<String>,
+        target: ProviderTarget,
+        caps: super::ModelCapabilities,
+        pricing: super::ModelPricing,
+    ) {
+        let name = target.name.clone();
+        self.register_target(prefixes, target);
+        self.capabilities.write().insert(name.clone(), caps);
+        self.pricing.write().insert(name, pricing);
+    }
+
+    pub fn get_capabilities(&self, name: &str) -> Option<super::ModelCapabilities> {
+        self.capabilities.read().get(name).cloned()
+    }
+
+    pub fn update_capabilities(&self, name: &str, caps: super::ModelCapabilities) {
+        let mut map = self.capabilities.write();
+        if map.contains_key(name) {
+            map.insert(name.to_string(), caps);
+            self.version.fetch_add(1, Ordering::Release);
+        }
+    }
+
+
+    pub fn unregister_target(&self, name: &str) -> bool {
+        let removed = {
+            let mut targets = self.targets.write();
+            targets.remove(name).is_some()
+        };
+        if removed {
+            let mut prefix_list = self.prefixes.write();
+            prefix_list.retain(|(_, target)| target.name != name);
+            self.capabilities.write().remove(name);
+            self.pricing.write().remove(name);
+            self.version.fetch_add(1, Ordering::Release);
+        }
+        removed
+    }
+
+    pub fn get_matching_targets(&self, model: &str) -> Vec<Arc<ProviderTarget>> {
+        let prefix_list = self.prefixes.read();
+        let mut matched = Vec::new();
+        for (prefixes, target) in prefix_list.iter() {
+            for prefix in prefixes {
+                if model.starts_with(prefix) {
+                    matched.push(target.clone());
+                    break;
+                }
+            }
+        }
+        if matched.is_empty() {
+            matched.push(self.default_target.clone());
+        }
+        matched
+    }
+
+    pub fn select_targets(&self, reqs: &super::ModelRequirements) -> Vec<Arc<ProviderTarget>> {
+        let targets = self.targets.read();
+        let caps_map = self.capabilities.read();
+        let pricing_map = self.pricing.read();
+
+        let mut candidates: Vec<Arc<ProviderTarget>> = targets
+            .values()
+            .filter(|t| t.can_execute())
+            .filter(|t| {
+                caps_map.get(&t.name).zip(pricing_map.get(&t.name))
+                    .map(|(c, p)| reqs.matches(c, p))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+
+        candidates.sort_by(|a, b| {
+            let cost_a = pricing_map.get(&a.name)
+                .map(|p| p.input_cost_per_1k + p.output_cost_per_1k)
+                .unwrap_or(f64::MAX);
+            let cost_b = pricing_map.get(&b.name)
+                .map(|p| p.input_cost_per_1k + p.output_cost_per_1k)
+                .unwrap_or(f64::MAX);
+            cost_a.partial_cmp(&cost_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        candidates
+    }
+
+    pub fn version(&self) -> Arc<AtomicU64> {
+        self.version.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::circuit_breaker::CircuitBreaker;
+    use super::super::{ChatProvider, ModelCapabilities, ModelPricing, ModelRequirements};
+    use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice};
+    use async_trait::async_trait;
+    use std::sync::Arc;
+
+    struct DummyProvider;
+    #[async_trait]
+    impl ChatProvider for DummyProvider {
+        fn name(&self) -> &str { "dummy" }
+        async fn chat_completion(&self, _req: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
+            Ok(ChatCompletionResponse {
+                id: "dummy".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: "dummy".into(),
+                choices: vec![Choice { index: 0, message: ChatMessage { role: "assistant".into(), content: "dummy".into() }, finish_reason: "stop".into() }],
+                usage: None,
+            })
+        }
+    }
+
+    fn dummy_target(name: &str) -> ProviderTarget {
+        ProviderTarget::new(
+            name.into(),
+            CircuitBreaker::new(3, 2, 5),
+            Box::new(|| Arc::new(DummyProvider)),
+        )
+    }
+
+    fn cheap_caps() -> ModelCapabilities {
+        ModelCapabilities {
+            coding_score: 0.5, reasoning_score: 0.5, max_context_tokens: 32_000,
+            supports_tools: false, supports_streaming: true, supports_vision: false, supports_json_mode: true,
+        }
+    }
+
+    fn premium_caps() -> ModelCapabilities {
+        ModelCapabilities {
+            coding_score: 0.95, reasoning_score: 0.95, max_context_tokens: 200_000,
+            supports_tools: true, supports_streaming: true, supports_vision: true, supports_json_mode: true,
+        }
+    }
+
+    fn cheap_pricing() -> ModelPricing {
+        ModelPricing { input_cost_per_1k: 0.15, output_cost_per_1k: 0.60 }
+    }
+
+    fn premium_pricing() -> ModelPricing {
+        ModelPricing { input_cost_per_1k: 10.0, output_cost_per_1k: 30.0 }
+    }
+
+    #[test]
+    fn test_select_target_by_capability() {
+        let registry = ProviderRegistry::new(dummy_target("default"));
+        registry.register_target_with_capabilities(vec!["cheap/".into()], dummy_target("cheap-model"), cheap_caps(), cheap_pricing());
+        registry.register_target_with_capabilities(vec!["premium/".into()], dummy_target("premium-model"), premium_caps(), premium_pricing());
+
+        let req = ModelRequirements { requires_tools: true, requires_vision: true, ..Default::default() };
+        let matching = registry.select_targets(&req);
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].name, "premium-model");
+    }
+
+    #[test]
+    fn test_select_target_cost_sorting() {
+        let registry = ProviderRegistry::new(dummy_target("default"));
+        registry.register_target_with_capabilities(vec!["cheap/".into()], dummy_target("cheap-model"), cheap_caps(), cheap_pricing());
+        registry.register_target_with_capabilities(vec!["premium/".into()], dummy_target("premium-model"), premium_caps(), premium_pricing());
+
+        let req = ModelRequirements { requires_streaming: true, ..Default::default() };
+        let matching = registry.select_targets(&req);
+        assert_eq!(matching.len(), 2);
+        assert_eq!(matching[0].name, "cheap-model");
+        assert_eq!(matching[1].name, "premium-model");
+    }
+
+    #[test]
+    fn test_select_target_circuit_breaker_filtering() {
+        let registry = ProviderRegistry::new(dummy_target("default"));
+        let broken_breaker = CircuitBreaker::new(1, 2, 60);
+        broken_breaker.record_failure();
+        let broken_target = ProviderTarget::new("broken".into(), broken_breaker, Box::new(|| Arc::new(DummyProvider)));
+        registry.register_target_with_capabilities(vec!["broken/".into()], broken_target, cheap_caps(), cheap_pricing());
+        registry.register_target_with_capabilities(vec!["good/".into()], dummy_target("good-model"), cheap_caps(), cheap_pricing());
+
+        let matching = registry.select_targets(&ModelRequirements::default());
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].name, "good-model");
+    }
+
+    #[test]
+    fn test_select_target_no_matches_returns_empty() {
+        let registry = ProviderRegistry::new(dummy_target("default"));
+        registry.register_target_with_capabilities(vec!["basic/".into()], dummy_target("basic-model"), cheap_caps(), cheap_pricing());
+
+        let req = ModelRequirements { max_cost_per_1k_tokens: Some(0.01), ..Default::default() };
+        let matching = registry.select_targets(&req);
+        assert!(matching.is_empty());
+    }
+}

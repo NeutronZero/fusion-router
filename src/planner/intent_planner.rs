@@ -253,6 +253,7 @@ mod tests {
             original_text: "test".to_string(),
             execution_intent,
             output_preferences: None,
+            model_requirements: None,
         }
     }
 

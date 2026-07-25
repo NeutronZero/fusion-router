@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+pub mod error;
 pub mod execution;
+
+pub use error::{PipelineStage, RouterError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +70,8 @@ pub struct Requirements {
     pub execution_intent: Option<execution::ExecutionIntent>,
     #[serde(default)]
     pub output_preferences: Option<execution::OutputPreferences>,
+    #[serde(default, skip)]
+    pub model_requirements: Option<crate::providers::ModelRequirements>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -215,6 +220,8 @@ pub struct ExecutionInstance {
     pub outputs: HashMap<Uuid, serde_json::Value>,
     pub reservation_id: Uuid,
     pub created_at: i64,
+    #[serde(skip)]
+    pub budget_envelope: Option<crate::resource::BudgetEnvelope>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -308,7 +315,7 @@ pub struct ProviderRequest {
 pub struct ProviderResponse {
     pub content: String,
     pub model: String,
-    pub usage: Option<UsageInfo>,
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,13 +324,6 @@ pub struct NodeExecutionResult {
     pub usage: Option<Usage>,
     pub latency_ms: u64,
     pub output: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UsageInfo {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,6 +387,38 @@ pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatStreamChunk {
+    pub content: Option<String>,
+    pub finish_reason: Option<String>,
+    pub usage: Option<Usage>,
+}
+
+impl ChatStreamChunk {
+    pub fn from_sse_data(data: &str) -> anyhow::Result<Option<Self>> {
+        let trimmed = data.trim();
+        if trimmed.is_empty() || trimmed == "[DONE]" {
+            return Ok(None);
+        }
+        let json_str = trimmed.strip_prefix("data: ").unwrap_or(trimmed);
+        let body: serde_json::Value = serde_json::from_str(json_str)?;
+        let content = body["choices"][0]["delta"]["content"].as_str().map(|s| s.to_string());
+        if content.as_deref() == Some("") {
+            let finish = body["choices"][0]["finish_reason"].as_str().map(|s| s.to_string());
+            let usage = body["usage"].as_object().map(|u| Usage {
+                prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+                completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
+                total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
+            });
+            if finish.is_some() || usage.is_some() {
+                return Ok(Some(ChatStreamChunk { content: None, finish_reason: finish, usage }));
+            }
+            return Ok(None);
+        }
+        Ok(Some(ChatStreamChunk { content, finish_reason: None, usage: None }))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]

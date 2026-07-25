@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 use crate::providers::circuit_breaker::CircuitBreaker;
 use crate::providers::ChatProvider;
-use crate::types::{ChatCompletionRequest, ChatCompletionResponse};
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk};
 
+#[allow(dead_code)]
 pub struct CircuitBreakingProvider {
     inner: Arc<dyn ChatProvider + Send + Sync>,
     breaker: CircuitBreaker,
@@ -44,6 +46,25 @@ impl ChatProvider for CircuitBreakingProvider {
             Ok(response) => {
                 self.breaker.record_success();
                 Ok(response)
+            }
+            Err(e) => {
+                self.breaker.record_failure();
+                Err(e)
+            }
+        }
+    }
+
+    async fn chat_stream(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ChatStreamChunk>>> {
+        if !self.breaker.can_execute() {
+            return Err(anyhow::anyhow!("Circuit breaker is OPEN for provider: {}", self.name));
+        }
+        match self.inner.chat_stream(request).await {
+            Ok(stream) => {
+                self.breaker.record_success();
+                Ok(stream)
             }
             Err(e) => {
                 self.breaker.record_failure();

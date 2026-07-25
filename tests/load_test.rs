@@ -58,7 +58,11 @@ impl EvidenceRepository for NoopEvidence {
             model_rankings: vec![],
         })
     }
+    async fn get_model_stats(&self, _window_hours: u32) -> anyhow::Result<Vec<fusion_router::telemetry::ModelPerformanceStats>> {
+        Ok(vec![])
+    }
 }
+
 
 fn build_app(quota: &Quota) -> Router {
     let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(LoadMockProvider);
@@ -95,6 +99,45 @@ fn make_request_body() -> serde_json::Value {
         "model": "test-model",
         "messages": [{"role": "user", "content": "Hello from load test"}]
     })
+}
+
+#[tokio::test]
+async fn test_response_contains_actual_llm_output() {
+    let quota = Quota {
+        max_daily_cost: 1000.0,
+        max_daily_tokens: 1_000_000,
+        max_concurrent: 100,
+        provider_limits: Default::default(),
+    };
+    let app = build_app(&quota);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+
+    let resp = client
+        .post(format!("http://{}/v1/chat/completions", addr))
+        .json(&make_request_body())
+        .send()
+        .await
+        .unwrap();
+
+    assert!(resp.status().is_success(), "Request should succeed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let content = body["choices"][0]["message"]["content"].as_str().unwrap_or("");
+
+    // The response must NOT be the static placeholder — it should contain actual LLM output
+    assert_ne!(
+        content,
+        "Request processed successfully.",
+        "Response must contain actual LLM-generated content, not a static placeholder"
+    );
+    assert!(!content.is_empty(), "Response content must not be empty");
 }
 
 #[tokio::test]
@@ -414,7 +457,7 @@ async fn test_loop_iteration_stress() {
         ],
         edges: vec![
             ExecutionEdge { from: loop_id, to: body_id, condition: None },
-            ExecutionEdge { from: body_id, to: loop_id, condition: Some("loop".into()) },
+            ExecutionEdge { from: body_id, to: loop_id, condition: None },
             ExecutionEdge { from: loop_id, to: exit_id, condition: Some("exit".into()) },
         ],
         metadata: GraphMetadata {
@@ -460,7 +503,7 @@ async fn test_compilation_throughput() {
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
             Box::new(BudgetOptimisationPass { resource_manager }),
-            Box::new(ModelResolutionPass { model_catalog: Default::default() }),
+            Box::new(ModelResolutionPass { model_catalog: Default::default(), model_requirements: None }),
         ],
     };
 
@@ -657,4 +700,50 @@ async fn test_high_concurrency_scheduling() {
         .filter(|r| r.as_ref().map(|ir| ir.is_ok()).unwrap_or(false))
         .count();
     println!("High concurrency schedule: {}/100 succeeded", successes);
+}
+
+#[tokio::test]
+async fn test_budget_no_race_on_concurrent_reserve() {
+    use fusion_router::resource::{DefaultResourceManager, ResourceManager};
+    use fusion_router::types::{ExecutionGraph, GraphMetadata};
+
+    let quota = Quota {
+        max_daily_cost: 0.7,
+        max_daily_tokens: 1_000_000,
+        max_concurrent: 100,
+        provider_limits: Default::default(),
+    };
+    let rm = std::sync::Arc::new(DefaultResourceManager::new(quota));
+
+    let graph = ExecutionGraph {
+        graph_id: Uuid::nil(),
+        nodes: vec![],
+        edges: vec![],
+        metadata: GraphMetadata {
+            estimated_cost: 0.6,
+            estimated_tokens: 100,
+            max_depth: 0,
+            node_count: 0,
+        },
+        total_tokens: 100,
+        total_cost: 1,
+    };
+
+    let mut handles = Vec::new();
+    for _ in 0..5 {
+        let rm = rm.clone();
+        let g = graph.clone();
+        handles.push(tokio::spawn(async move {
+            rm.try_reserve(&g).await
+        }));
+    }
+
+    let results: Vec<_> = futures::future::join_all(handles).await;
+    let successes = results.iter().filter(|r| r.as_ref().map(|ok| *ok).unwrap_or(false)).count();
+
+    assert_eq!(
+        successes, 1,
+        "Exactly one reserve should succeed with tight budget, got {}",
+        successes
+    );
 }

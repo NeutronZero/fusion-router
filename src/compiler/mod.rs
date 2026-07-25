@@ -21,11 +21,25 @@ pub trait CompilerPass: Send + Sync {
 #[async_trait]
 impl Compiler for DefaultCompiler {
     async fn compile(&self, ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
+        let snapshot = ir.clone();
         let mut current = ir;
 
         for pass in &self.passes {
             tracing::debug!(pass = %pass.name(), "running compiler pass");
-            current = pass.apply(current).await?;
+            match pass.apply(current.clone()).await {
+                Ok(next) => {
+                    current = next;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        pass = %pass.name(),
+                        error = %e,
+                        plan_id = %snapshot.plan_id,
+                        "compiler pass failed; transaction rolled back to initial IR snapshot"
+                    );
+                    return Err(e);
+                }
+            }
         }
 
         lower_to_graph(current)
@@ -70,7 +84,7 @@ pub(crate) fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerE
         });
     }
 
-    let total_cost = ir.metadata.estimated_cost.ceil() as u64;
+    let total_cost = (ir.metadata.estimated_cost * 1000.0) as u64;
     let total_tokens = ir.metadata.estimated_tokens;
 
     Ok(ExecutionGraph {

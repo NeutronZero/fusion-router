@@ -33,6 +33,18 @@ impl CompilerPass for ConstraintValidationPass {
 
 pub struct ModelResolutionPass {
     pub model_catalog: ModelCatalog,
+    pub model_requirements: Option<crate::providers::ModelRequirements>,
+}
+
+impl ModelResolutionPass {
+    fn select_model(&self) -> &str {
+        match &self.model_requirements {
+            Some(reqs) if reqs.requires_tools => &self.model_catalog.code,
+            Some(reqs) if reqs.min_coding_score.map_or(false, |s| s >= 0.8) => &self.model_catalog.code,
+            Some(reqs) if reqs.min_reasoning_score.map_or(false, |s| s >= 0.8) => &self.model_catalog.architecture,
+            _ => &self.model_catalog.fast,
+        }
+    }
 }
 
 #[async_trait]
@@ -54,7 +66,7 @@ impl CompilerPass for ModelResolutionPass {
                 }
                 _ => {
                     if node.model.is_none() {
-                        node.model = Some(self.model_catalog.fast.clone());
+                        node.model = Some(self.select_model().to_string());
                     }
                 }
             }
@@ -249,4 +261,84 @@ fn three_color_cycle_detect(edges: &[(Uuid, Uuid)]) -> Result<(), Uuid> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ModelCatalog;
+    use crate::providers::ModelRequirements;
+    use uuid::Uuid;
+
+    fn make_ir(model: Option<String>) -> WorkflowIR {
+        WorkflowIR {
+            plan_id: Uuid::new_v4(),
+            nodes: vec![crate::types::IRNode {
+                id: Uuid::new_v4(),
+                kind: crate::types::IRNodeKind::Generate,
+                strategy: crate::types::StrategyKind::Single,
+                model,
+                config: std::collections::HashMap::new(),
+            }],
+            edges: vec![],
+            metadata: crate::types::IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_default_model_is_fast() {
+        let pass = ModelResolutionPass {
+            model_catalog: ModelCatalog::default(),
+            model_requirements: None,
+        };
+        let ir = make_ir(None);
+        let result = pass.apply(ir).await.unwrap();
+        assert_eq!(result.nodes[0].model.as_deref(), Some("gpt-4o-mini"));
+    }
+
+    #[tokio::test]
+    async fn test_tools_requirement_picks_code_model() {
+        let pass = ModelResolutionPass {
+            model_catalog: ModelCatalog::default(),
+            model_requirements: Some(ModelRequirements {
+                requires_tools: true,
+                ..Default::default()
+            }),
+        };
+        let ir = make_ir(None);
+        let result = pass.apply(ir).await.unwrap();
+        assert_eq!(result.nodes[0].model.as_deref(), Some("claude-sonnet-4-20250514"));
+    }
+
+    #[tokio::test]
+    async fn test_high_reasoning_picks_architecture() {
+        let pass = ModelResolutionPass {
+            model_catalog: ModelCatalog::default(),
+            model_requirements: Some(ModelRequirements {
+                min_reasoning_score: Some(0.85),
+                ..Default::default()
+            }),
+        };
+        let ir = make_ir(None);
+        let result = pass.apply(ir).await.unwrap();
+        assert_eq!(result.nodes[0].model.as_deref(), Some("claude-opus-4-20250514"));
+    }
+
+    #[tokio::test]
+    async fn test_explicit_model_not_overridden() {
+        let pass = ModelResolutionPass {
+            model_catalog: ModelCatalog::default(),
+            model_requirements: Some(ModelRequirements {
+                requires_tools: true,
+                ..Default::default()
+            }),
+        };
+        let ir = make_ir(Some("custom-model".into()));
+        let result = pass.apply(ir).await.unwrap();
+        assert_eq!(result.nodes[0].model.as_deref(), Some("custom-model"));
+    }
 }

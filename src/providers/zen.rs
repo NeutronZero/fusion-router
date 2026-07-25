@@ -5,7 +5,7 @@ use std::time::Duration;
 
 pub fn new_zen_provider(api_key: String) -> Provider {
     let model = Box::new(ZenModel::new("opencode-zen-model".to_string()));
-    let transport = Box::new(HttpTransport::new(Duration::from_secs(30)));
+    let transport = Box::new(HttpTransport::new(Duration::from_secs(300)));
     Provider::new(model, transport, api_key)
 }
 

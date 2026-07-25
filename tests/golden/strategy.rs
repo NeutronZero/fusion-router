@@ -40,7 +40,7 @@ fn test_chain_strategy_produces_pipeline() {
     let strategy = ChainStrategy {
         stages: vec![
             Box::new(SingleStrategy),
-            Box::new(ReflectionStrategy),
+            Box::new(ReflectionStrategy::default()),
         ],
     };
 

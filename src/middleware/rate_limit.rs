@@ -47,8 +47,15 @@ impl RateLimiter {
         tokio::spawn(async move {
             loop {
                 sleep(interval).await;
-                let cutoff = Instant::now() - Duration::from_secs(interval.as_secs() * 2);
-                buckets.retain(|_, b| b.last_access > cutoff);
+                let buckets = buckets.clone();
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    let cutoff = Instant::now() - Duration::from_secs(interval.as_secs() * 2);
+                    buckets.retain(|_, b| b.last_access > cutoff);
+                })
+                .await
+                {
+                    tracing::warn!(error = %e, "Rate limiter cleanup panicked, restarting");
+                }
             }
         });
     }

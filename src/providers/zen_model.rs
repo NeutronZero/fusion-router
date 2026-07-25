@@ -48,15 +48,19 @@ impl Model for ZenModel {
 
     fn format_request(&self, req: &ChatCompletionRequest, api_key: &str) -> anyhow::Result<TransportRequest> {
         let base_url = std::env::var("OPENCODEZEN_BASE_URL")
-            .unwrap_or_else(|_| "https://api.opencode.ai/v1".to_string());
+            .unwrap_or_else(|_| "https://opencode.ai/zen/v1".to_string());
         let url = format!("{}/chat/completions", base_url);
         
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
         headers.insert("Content-Type".to_string(), "application/json".to_string());
 
+        let api_model = req.model
+            .strip_prefix("zen/").or_else(|| req.model.strip_prefix("opencode/"))
+            .unwrap_or(&req.model);
+
         let body = serde_json::json!({
-            "model": req.model,
+            "model": api_model,
             "messages": req.messages,
             "stream": req.stream,
             "temperature": req.temperature,

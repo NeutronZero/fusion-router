@@ -262,6 +262,7 @@ mod tests {
             original_text: "test".to_string(),
             execution_intent: None,
             output_preferences: None,
+            model_requirements: None,
         };
         reqs.execution_intent = request.execution.clone();
         reqs.output_preferences = request.output.clone();

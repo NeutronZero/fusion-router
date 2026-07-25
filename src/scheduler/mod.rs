@@ -12,4 +12,14 @@ pub trait Scheduler: Send + Sync {
         instance: &mut ExecutionInstance,
         executor: &dyn crate::executor::Executor,
     ) -> Result<ExecutionResult, crate::types::SchedulerError>;
+
+    async fn run_with_cancellation(
+        &self,
+        instance: &mut ExecutionInstance,
+        executor: &dyn crate::executor::Executor,
+        cancellation_token: &tokio_util::sync::CancellationToken,
+    ) -> Result<ExecutionResult, crate::types::SchedulerError> {
+        let _ = cancellation_token;
+        self.run(instance, executor).await
+    }
 }
