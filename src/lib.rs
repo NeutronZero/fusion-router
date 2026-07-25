@@ -18,3 +18,6 @@ pub mod workflow;
 pub mod tools;
 pub mod cache;
 pub mod middleware;
+
+#[cfg(feature = "wasm-plugins")]
+pub mod wasm;

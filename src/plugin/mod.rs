@@ -19,6 +19,13 @@ pub type BoxedStrategy = Box<dyn Strategy + Send + Sync>;
 pub type BoxedPass = Box<dyn CompilerPass + Send + Sync>;
 pub type BoxedTool = Arc<dyn Tool + Send + Sync>;
 
+#[cfg(feature = "wasm-plugins")]
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct WasmConfig {
+    #[serde(default)]
+    pub functions: Vec<String>,
+}
+
 pub struct PluginRegistry {
     pub providers: HashMap<String, Arc<dyn ChatProvider + Send + Sync>>,
     pub strategies: HashMap<crate::types::StrategyKind, Box<dyn Strategy + Send + Sync>>,

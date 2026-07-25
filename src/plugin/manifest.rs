@@ -12,6 +12,9 @@ pub struct PluginManifest {
     pub pass: Option<PassConfig>,
     #[serde(default)]
     pub tool: Option<ToolConfig>,
+    #[cfg(feature = "wasm-plugins")]
+    #[serde(default)]
+    pub wasm: Option<super::WasmConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
