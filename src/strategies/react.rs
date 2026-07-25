@@ -75,3 +75,73 @@ impl Strategy for ReActStrategy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind};
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    fn make_test_node() -> ExecutionNode {
+        ExecutionNode {
+            id: Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMGenerate,
+            strategy: StrategyKind::Single,
+            model: "gpt-4".to_string(),
+            retry_policy: RetryPolicy { max_retries: 3, backoff_ms: 1000 },
+            fallback: None,
+            config: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_react_produces_two_nodes() {
+        let strategy = ReActStrategy::default();
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        assert_eq!(subgraph.nodes.len(), 2);
+    }
+
+    #[test]
+    fn test_react_edges_have_loop_condition() {
+        let strategy = ReActStrategy::default();
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        assert_eq!(subgraph.edges.len(), 2);
+        assert_eq!(subgraph.edges[1].condition, Some("loop".to_string()));
+    }
+
+    #[test]
+    fn test_react_entry_is_loop() {
+        let strategy = ReActStrategy::default();
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        assert_eq!(subgraph.entry_node_id, subgraph.nodes[0].id);
+        assert!(matches!(subgraph.nodes[0].kind, ExecutionNodeKind::Loop));
+    }
+
+    #[test]
+    fn test_react_config_has_max_iterations() {
+        let strategy = ReActStrategy::default();
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        let loop_config = &subgraph.nodes[0].config;
+        assert_eq!(
+            loop_config.get("max_iterations").and_then(|v| v.as_u64()),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn test_react_custom_max_iterations() {
+        let strategy = ReActStrategy { max_iterations: 5, tool_registry: None };
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        let loop_config = &subgraph.nodes[0].config;
+        assert_eq!(
+            loop_config.get("max_iterations").and_then(|v| v.as_u64()),
+            Some(5)
+        );
+    }
+}

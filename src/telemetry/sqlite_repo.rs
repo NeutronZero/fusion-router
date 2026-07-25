@@ -215,6 +215,31 @@ impl EvidenceRepository for SqliteEvidenceRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Intent;
+
+    fn make_record(
+        model: &str,
+        provider: &str,
+        intent: Intent,
+        latency_ms: u64,
+        tokens: u32,
+        cost: f64,
+        success: bool,
+    ) -> ExecutionRecord {
+        ExecutionRecord {
+            record_id: uuid::Uuid::new_v4(),
+            plan_id: uuid::Uuid::new_v4(),
+            node_id: uuid::Uuid::new_v4(),
+            model: model.to_string(),
+            provider: provider.to_string(),
+            intent,
+            latency_ms,
+            tokens,
+            cost,
+            success,
+            timestamp: 1000000,
+        }
+    }
 
     #[tokio::test]
     async fn test_wal_journal_mode() {
@@ -230,6 +255,116 @@ mod tests {
             .unwrap();
         let _ = std::fs::remove_file(&tmp);
         assert_eq!(mode, "wal", "journal_mode should be WAL");
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_aggregation() {
+        let tmp = std::env::temp_dir()
+            .join(format!("fusion_es01_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
+
+        repo.record(make_record("gpt-4", "openai", Intent::Code, 100, 50, 0.01, true))
+            .await
+            .unwrap();
+        repo.record(make_record("gpt-4", "openai", Intent::Code, 200, 100, 0.02, false))
+            .await
+            .unwrap();
+        repo.record(make_record("claude-3", "anthropic", Intent::Debug, 150, 75, 0.015, true))
+            .await
+            .unwrap();
+        repo.record(make_record("claude-3", "anthropic", Intent::Debug, 50, 25, 0.005, true))
+            .await
+            .unwrap();
+
+        let snap = repo.snapshot().await.unwrap();
+
+        assert_eq!(snap.record_count, 4);
+
+        assert_eq!(*snap.success_rates.get("gpt-4::Code").unwrap(), 0.5);
+        assert_eq!(*snap.success_rates.get("claude-3::Debug").unwrap(), 1.0);
+
+        assert_eq!(*snap.avg_latencies.get("gpt-4").unwrap(), 150.0);
+        assert_eq!(*snap.avg_latencies.get("claude-3").unwrap(), 100.0);
+
+        assert_eq!(*snap.avg_costs.get("gpt-4").unwrap(), 0.015);
+        assert_eq!(*snap.avg_costs.get("claude-3").unwrap(), 0.01);
+
+        assert_eq!(snap.model_rankings.len(), 2);
+        assert_eq!(snap.model_rankings[0], "claude-3");
+        assert_eq!(snap.model_rankings[1], "gpt-4");
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_cold_start() {
+        let tmp = std::env::temp_dir()
+            .join(format!("fusion_es02_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
+        let snap = repo.snapshot().await.unwrap();
+
+        assert_eq!(snap.record_count, 0);
+        assert!(snap.success_rates.is_empty());
+        assert!(snap.avg_latencies.is_empty());
+        assert!(snap.avg_costs.is_empty());
+        assert!(snap.model_rankings.is_empty());
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_record_execution() {
+        let tmp = std::env::temp_dir()
+            .join(format!("fusion_tl01_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
+        let rec = make_record("gpt-4", "openai", Intent::General, 100, 50, 0.01, true);
+        repo.record(rec).await.unwrap();
+
+        let snap = repo.snapshot().await.unwrap();
+        assert_eq!(snap.record_count, 1);
+        assert_eq!(snap.success_rates.len(), 1);
+        assert_eq!(snap.model_rankings.len(), 1);
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_get_model_stats() {
+        let tmp = std::env::temp_dir()
+            .join(format!("fusion_tl02_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
+
+        repo.record(make_record("gpt-4", "openai", Intent::Code, 100, 50, 0.01, true))
+            .await
+            .unwrap();
+        repo.record(make_record("gpt-4", "openai", Intent::Debug, 200, 100, 0.02, false))
+            .await
+            .unwrap();
+        repo.record(make_record("claude-3", "anthropic", Intent::Code, 150, 75, 0.015, true))
+            .await
+            .unwrap();
+
+        let stats = repo.get_model_stats(0).await.unwrap();
+
+        assert_eq!(stats.len(), 2);
+
+        let gpt4 = stats.iter().find(|s| s.model == "gpt-4").unwrap();
+        assert_eq!(gpt4.total_requests, 2);
+        assert_eq!(gpt4.success_count, 1);
+
+        let claude = stats.iter().find(|s| s.model == "claude-3").unwrap();
+        assert_eq!(claude.total_requests, 1);
+        assert_eq!(claude.success_count, 1);
+
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 

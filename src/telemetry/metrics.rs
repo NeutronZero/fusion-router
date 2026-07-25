@@ -59,3 +59,43 @@ pub fn render_metrics() -> String {
     encoder.encode(&metric_families, &mut buffer).unwrap();
     String::from_utf8(buffer).unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metrics_instance_is_singleton() {
+        let a = FusionMetrics::instance();
+        let b = FusionMetrics::instance();
+        assert!(std::ptr::eq(a, b));
+    }
+
+    #[test]
+    fn test_metrics_increment_counters() {
+        let metrics = FusionMetrics::instance();
+        let before = metrics.requests_total.get();
+        metrics.requests_total.inc();
+        assert_eq!(metrics.requests_total.get(), before + 1);
+    }
+
+    #[test]
+    fn test_metrics_render_contains_expected() {
+        let _ = FusionMetrics::instance();
+        let output = render_metrics();
+        assert!(output.contains("fusionrouter_requests_total"));
+        assert!(output.contains("fusionrouter_errors_total"));
+        assert!(output.contains("fusionrouter_tokens_total"));
+    }
+
+    #[test]
+    fn test_metrics_observe_duration() {
+        let metrics = FusionMetrics::instance();
+        metrics
+            .request_duration_seconds
+            .with_label_values(&["test_route"])
+            .observe(0.042);
+        let output = render_metrics();
+        assert!(output.contains("fusionrouter_request_duration_seconds"));
+    }
+}

@@ -74,3 +74,63 @@ fn estimate_cost(_requirements: &Requirements) -> f64 {
 fn estimate_tokens(_requirements: &Requirements) -> u64 {
     1000
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_requirements(intent: Intent, complexity: ComplexityLevel) -> Requirements {
+        Requirements {
+            intent_classification: intent,
+            complexity,
+            has_files: false,
+            context_window: 4096,
+            original_text: String::new(),
+            execution_intent: None,
+            output_preferences: None,
+            model_requirements: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_simple_planner_returns_single_generate_node() {
+        let planner = SimplePlanner;
+        let reqs = make_requirements(Intent::General, ComplexityLevel::Low);
+        let ir = planner.plan(&reqs, &[], None).await;
+        assert_eq!(ir.nodes.len(), 1);
+        assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
+    }
+
+    #[test]
+    fn test_simple_planner_strategy_selection() {
+        let critical = make_requirements(Intent::General, ComplexityLevel::Critical);
+        assert_eq!(select_strategy(&critical), StrategyKind::Consensus);
+
+        let high = make_requirements(Intent::General, ComplexityLevel::High);
+        assert_eq!(select_strategy(&high), StrategyKind::Reflection);
+
+        let medium = make_requirements(Intent::General, ComplexityLevel::Medium);
+        assert_eq!(select_strategy(&medium), StrategyKind::Single);
+
+        let low = make_requirements(Intent::General, ComplexityLevel::Low);
+        assert_eq!(select_strategy(&low), StrategyKind::Single);
+    }
+
+    #[test]
+    fn test_simple_planner_model_selection() {
+        for intent in &[Intent::Code, Intent::Debug, Intent::Architecture, Intent::Analysis, Intent::Creative, Intent::General] {
+            let reqs = make_requirements(intent.clone(), ComplexityLevel::Medium);
+            let model = select_model(&reqs);
+            assert!(!model.is_empty(), "Model should not be empty for {:?}", intent);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_simple_planner_metadata() {
+        let planner = SimplePlanner;
+        let reqs = make_requirements(Intent::General, ComplexityLevel::Low);
+        let ir = planner.plan(&reqs, &[], None).await;
+        assert!(ir.metadata.estimated_cost > 0.0);
+        assert!(ir.metadata.estimated_tokens > 0);
+    }
+}

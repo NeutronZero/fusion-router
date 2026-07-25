@@ -63,7 +63,7 @@ fn bench_compilation(c: &mut Criterion) {
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
             Box::new(BudgetOptimisationPass { resource_manager }),
-            Box::new(ModelResolutionPass { model_catalog: Default::default() }),
+            Box::new(ModelResolutionPass { model_catalog: Default::default(), model_requirements: None }),
         ],
     };
 

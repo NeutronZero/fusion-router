@@ -193,3 +193,242 @@ impl WorkQueue {
             .map(|(to, _)| *to)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{
+        ExecutionNodeKind, GraphMetadata, RetryPolicy, StrategyKind,
+    };
+
+    fn make_uuid(id: u32) -> Uuid {
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&id.to_le_bytes());
+        Uuid::from_bytes(bytes)
+    }
+
+    fn make_node(id: u32, kind: ExecutionNodeKind) -> ExecutionNode {
+        ExecutionNode {
+            id: make_uuid(id),
+            kind,
+            strategy: StrategyKind::Single,
+            model: String::new(),
+            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            fallback: None,
+            config: HashMap::new(),
+        }
+    }
+
+    fn make_edge(from: u32, to: u32, condition: Option<&str>) -> ExecutionEdge {
+        ExecutionEdge {
+            from: make_uuid(from),
+            to: make_uuid(to),
+            condition: condition.map(|s| s.to_string()),
+        }
+    }
+
+    fn make_graph(nodes: Vec<ExecutionNode>, edges: Vec<ExecutionEdge>) -> ExecutionGraph {
+        ExecutionGraph {
+            graph_id: make_uuid(0),
+            nodes,
+            edges,
+            metadata: GraphMetadata {
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+                max_depth: 0,
+                node_count: 0,
+            },
+            total_tokens: 0,
+            total_cost: 0,
+        }
+    }
+
+    /// SC-01: DAG with 3 independent nodes (no edges). All 3 should be ready on init.
+    #[test]
+    fn test_independent_nodes_all_ready() {
+        let nodes = vec![
+            make_node(1, ExecutionNodeKind::LLMGenerate),
+            make_node(2, ExecutionNodeKind::LLMGenerate),
+            make_node(3, ExecutionNodeKind::LLMGenerate),
+        ];
+        let graph = make_graph(nodes, vec![]);
+        let wq = WorkQueue::new(graph);
+        let node_states = HashMap::new();
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 3);
+    }
+
+    /// SC-02: Nodes A → B → C. Only A ready initially; after A completes, B ready; then C.
+    #[test]
+    fn test_sequential_dependency() {
+        let nodes = vec![
+            make_node(1, ExecutionNodeKind::LLMGenerate),
+            make_node(2, ExecutionNodeKind::LLMGenerate),
+            make_node(3, ExecutionNodeKind::LLMGenerate),
+        ];
+        let edges = vec![make_edge(1, 2, None), make_edge(2, 3, None)];
+        let graph = make_graph(nodes, edges);
+        let mut wq = WorkQueue::new(graph);
+        let node_states = HashMap::new();
+
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, make_uuid(1));
+
+        wq.mark_completed(make_uuid(1));
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, make_uuid(2));
+
+        wq.mark_completed(make_uuid(2));
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, make_uuid(3));
+    }
+
+    /// SC-03: Two predecessors feeding into join node.
+    /// Join only becomes ready after both predecessors complete.
+    #[test]
+    fn test_join_node() {
+        let nodes = vec![
+            make_node(1, ExecutionNodeKind::LLMGenerate),
+            make_node(2, ExecutionNodeKind::LLMGenerate),
+            make_node(3, ExecutionNodeKind::Join),
+        ];
+        let edges = vec![make_edge(1, 3, None), make_edge(2, 3, None)];
+        let graph = make_graph(nodes, edges);
+        let mut wq = WorkQueue::new(graph);
+        let node_states = HashMap::new();
+
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 2);
+
+        wq.mark_completed(make_uuid(1));
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, make_uuid(2));
+
+        wq.mark_completed(make_uuid(2));
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, make_uuid(3));
+    }
+
+    /// SC-04: Conditional node with two outgoing edges. On completion,
+    /// only the edge matching the output condition is activated.
+    #[test]
+    fn test_conditional_branch() {
+        let nodes = vec![
+            make_node(1, ExecutionNodeKind::Conditional),
+            make_node(2, ExecutionNodeKind::LLMGenerate),
+            make_node(3, ExecutionNodeKind::LLMGenerate),
+        ];
+        let edges = vec![
+            make_edge(1, 2, Some("a")),
+            make_edge(1, 3, Some("b")),
+        ];
+        let graph = make_graph(nodes, edges);
+        let mut wq = WorkQueue::new(graph);
+        let node_states = HashMap::new();
+
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, make_uuid(1));
+
+        wq.mark_conditional_completed(make_uuid(1));
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 0);
+
+        wq.activate_edge(make_uuid(1), make_uuid(2));
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, make_uuid(2));
+        assert!(!wq.ready.contains(&make_uuid(3)));
+    }
+
+    /// SC-05: Loop node with body nodes. reset_loop_body clears completion
+    /// state and recomputes ready set.
+    #[test]
+    fn test_loop_body_reset() {
+        let nodes = vec![
+            make_node(1, ExecutionNodeKind::Loop),
+            make_node(2, ExecutionNodeKind::LLMGenerate),
+            make_node(3, ExecutionNodeKind::LLMGenerate),
+        ];
+        let edges = vec![make_edge(1, 2, None), make_edge(1, 3, None)];
+        let graph = make_graph(nodes, edges);
+        let mut wq = WorkQueue::new(graph);
+
+        wq.mark_completed(make_uuid(1));
+        wq.mark_completed(make_uuid(2));
+        wq.mark_completed(make_uuid(3));
+
+        assert!(wq.is_done(&HashMap::new()));
+
+        wq.reset_loop_body(&[make_uuid(2), make_uuid(3)]);
+
+        assert!(!wq.completed.contains(&make_uuid(2)));
+        assert!(!wq.completed.contains(&make_uuid(3)));
+        let node_states = HashMap::new();
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 2);
+    }
+
+    /// SC-06: mark_in_progress removes from ready; mark_completed activates downstream.
+    #[test]
+    fn test_concurrent_execution_tracking() {
+        let nodes = vec![
+            make_node(1, ExecutionNodeKind::LLMGenerate),
+            make_node(2, ExecutionNodeKind::LLMGenerate),
+            make_node(3, ExecutionNodeKind::LLMGenerate),
+        ];
+        let edges = vec![make_edge(1, 3, None)];
+        let graph = make_graph(nodes, edges);
+        let mut wq = WorkQueue::new(graph);
+        let node_states = HashMap::new();
+
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 2);
+
+        wq.mark_in_progress(make_uuid(1));
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, make_uuid(2));
+
+        wq.mark_completed(make_uuid(1));
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 2);
+        let ids: HashSet<_> = ready.iter().map(|n| n.id).collect();
+        assert!(ids.contains(&make_uuid(2)));
+        assert!(ids.contains(&make_uuid(3)));
+    }
+
+    /// SC-07: mark_failed removes from ready and completed; is_done returns
+    /// true when nodes are failed.
+    #[test]
+    fn test_cancellation_via_failed() {
+        let nodes = vec![
+            make_node(1, ExecutionNodeKind::LLMGenerate),
+            make_node(2, ExecutionNodeKind::LLMGenerate),
+        ];
+        let edges = vec![make_edge(1, 2, None)];
+        let graph = make_graph(nodes, edges);
+        let mut wq = WorkQueue::new(graph);
+        let node_states = HashMap::new();
+
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, make_uuid(1));
+
+        wq.mark_failed(make_uuid(1));
+        assert!(wq.failed.contains(&make_uuid(1)));
+        assert!(!wq.ready.contains(&make_uuid(1)));
+        let ready = wq.get_ready(&node_states);
+        assert_eq!(ready.len(), 0);
+
+        // Downstream node 2 never became ready; cancel it too.
+        wq.mark_failed(make_uuid(2));
+
+        assert!(wq.is_done(&HashMap::new()));
+    }
+}

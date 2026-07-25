@@ -375,3 +375,82 @@ fn error_response(request_id: Uuid, model: &str, error: &str) -> ChatCompletionR
         usage: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn test_health_endpoint() {
+        let res = crate::server::health::health_handler().await;
+        assert_eq!(res["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_ready_endpoint() {
+        use crate::config::{
+            AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig,
+            ResourceConfig, ServerConfig, StrategyConfig, ToolsConfig,
+        };
+        let config = AppConfig {
+            server: ServerConfig {
+                host: "0.0.0.0".into(),
+                port: 0,
+                shutdown_timeout_secs: 30,
+                cors: CorsConfig::default(),
+            },
+            resources: ResourceConfig {
+                max_daily_cost: 100.0,
+                max_daily_tokens: 100000,
+                max_concurrent: 10,
+                max_concurrent_nodes: 16,
+                provider_limits: Default::default(),
+            },
+            policies: vec![],
+            providers: Default::default(),
+            strategies: StrategyConfig { consensus_count: 3 },
+            tools: ToolsConfig::default(),
+            auth: AuthConfig::default(),
+            rate_limiting: RateLimitingConfig::default(),
+            logging: LoggingConfig::default(),
+            model_catalog: Default::default(),
+        };
+        let state = AppState::new(
+            Arc::new(crate::providers::openrouter::OpenRouterProvider::new(
+                "test".into(),
+            )),
+            crate::resource::DefaultResourceManager::new(config.to_quota()),
+            Arc::new(
+                crate::telemetry::SqliteEvidenceRepository::new(":memory:").unwrap(),
+            ),
+            config,
+        );
+        let (status, res) =
+            crate::server::health::ready_handler(axum::extract::State(state)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(res["status"], "ok");
+    }
+
+    #[test]
+    fn test_invalid_json_returns_400() {
+        let bad_json = r#"{"model": "test"}"#;
+        let result: Result<ChatCompletionRequest, _> = serde_json::from_str(bad_json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_error_response_format() {
+        let request_id = Uuid::new_v4();
+        let response = error_response(request_id, "test-model", "something went wrong");
+        assert_eq!(response.model, "test-model");
+        assert_eq!(response.choices[0].finish_reason, "error");
+        assert!(
+            response.choices[0]
+                .message
+                .content
+                .contains("something went wrong")
+        );
+        assert_eq!(response.object, "chat.completion");
+    }
+}

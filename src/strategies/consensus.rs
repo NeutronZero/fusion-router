@@ -70,3 +70,68 @@ impl Strategy for ConsensusStrategy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind};
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    fn make_test_node() -> ExecutionNode {
+        ExecutionNode {
+            id: Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMGenerate,
+            strategy: StrategyKind::Single,
+            model: "gpt-4".to_string(),
+            retry_policy: RetryPolicy { max_retries: 3, backoff_ms: 1000 },
+            fallback: None,
+            config: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_consensus_default_count() {
+        let strategy = ConsensusStrategy::default();
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        assert_eq!(subgraph.nodes.len(), 4);
+    }
+
+    #[test]
+    fn test_consensus_custom_count() {
+        let strategy = ConsensusStrategy { count: 5 };
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        assert_eq!(subgraph.nodes.len(), 6);
+    }
+
+    #[test]
+    fn test_consensus_edges_from_all_generators_to_judge() {
+        let strategy = ConsensusStrategy { count: 3 };
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        let judge_id = subgraph.nodes.last().unwrap().id;
+        for edge in &subgraph.edges {
+            assert_eq!(edge.to, judge_id);
+        }
+        assert_eq!(subgraph.edges.len(), 3);
+    }
+
+    #[test]
+    fn test_consensus_judge_kind() {
+        let strategy = ConsensusStrategy::default();
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        let judge_node = subgraph.nodes.last().unwrap();
+        assert!(matches!(judge_node.kind, ExecutionNodeKind::LLMJudge));
+    }
+
+    #[test]
+    fn test_consensus_entry_is_first_generator() {
+        let strategy = ConsensusStrategy { count: 3 };
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        assert_eq!(subgraph.entry_node_id, subgraph.nodes[0].id);
+    }
+}

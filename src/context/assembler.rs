@@ -132,4 +132,56 @@ mod tests {
             total,
         );
     }
+
+    #[test]
+    fn test_estimate_tokens_basic() {
+        assert_eq!(super::estimate_tokens(""), 0);
+        assert_eq!(super::estimate_tokens("a"), 1);
+        assert_eq!(super::estimate_tokens("abcd"), 1);
+        assert_eq!(super::estimate_tokens("abcde"), 2);
+        assert_eq!(super::estimate_tokens("hello world"), 3);
+        assert_eq!(super::estimate_tokens("你好世界"), 3);
+    }
+
+    #[test]
+    fn test_full_budget_no_trimming() {
+        let assembler = DefaultContextAssembler::new();
+        let messages = vec![
+            ChatMessage { role: "system".into(), content: "sys".into() },
+            ChatMessage { role: "user".into(), content: "hello".into() },
+        ];
+        let result = assembler.trim_messages(&messages, 10);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content, "sys");
+        assert_eq!(result[1].content, "hello");
+    }
+
+    #[test]
+    fn test_trim_reverse_chronological() {
+        let assembler = DefaultContextAssembler::new();
+        let messages = vec![
+            ChatMessage { role: "system".into(), content: "sys".into() },
+            ChatMessage { role: "user".into(), content: "A".repeat(100).into() },
+            ChatMessage { role: "user".into(), content: "B".repeat(10).into() },
+        ];
+        let result = assembler.trim_messages(&messages, 15);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].role, "system");
+        assert_eq!(result[1].content, "B".repeat(10));
+    }
+
+    #[test]
+    fn test_empty_messages_handling() {
+        let assembler = DefaultContextAssembler::new();
+        let messages = vec![
+            ChatMessage { role: "system".into(), content: "".into() },
+            ChatMessage { role: "user".into(), content: "".into() },
+            ChatMessage { role: "assistant".into(), content: "   ".into() },
+        ];
+        let result = assembler.trim_messages(&messages, 10);
+        assert_eq!(result.len(), 3);
+        let result = assembler.trim_messages(&messages, 0);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "system");
+    }
 }

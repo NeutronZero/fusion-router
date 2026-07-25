@@ -260,3 +260,198 @@ impl Executor for DefaultExecutor {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::strategies::consensus::ConsensusStrategy;
+    use crate::strategies::single::SingleStrategy;
+    use crate::types::*;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    struct MockChatProvider;
+
+    #[async_trait]
+    impl ChatProvider for MockChatProvider {
+        async fn chat_completion(
+            &self,
+            _request: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
+            Ok(ChatCompletionResponse {
+                id: "mock".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: "mock-model".into(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: "mock response".into(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
+                usage: Some(Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 20,
+                    total_tokens: 30,
+                }),
+            })
+        }
+
+        fn name(&self) -> &str {
+            "mock"
+        }
+    }
+
+    struct CapturingMockProvider(Arc<std::sync::Mutex<Option<ChatCompletionRequest>>>);
+
+    #[async_trait]
+    impl ChatProvider for CapturingMockProvider {
+        async fn chat_completion(
+            &self,
+            request: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
+            *self.0.lock().unwrap() = Some(request.clone());
+            Ok(ChatCompletionResponse {
+                id: "mock".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: request.model.clone(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: "mock response".into(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
+                usage: Some(Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 20,
+                    total_tokens: 30,
+                }),
+            })
+        }
+
+        fn name(&self) -> &str {
+            "capturing"
+        }
+    }
+
+    fn make_llm_node(strategy: StrategyKind) -> ExecutionNode {
+        ExecutionNode {
+            id: Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMGenerate,
+            strategy,
+            model: "gpt-4".to_string(),
+            retry_policy: RetryPolicy {
+                max_retries: 3,
+                backoff_ms: 1000,
+            },
+            fallback: None,
+            config: HashMap::new(),
+        }
+    }
+
+    fn make_judge_node(strategy: StrategyKind) -> ExecutionNode {
+        ExecutionNode {
+            id: Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMJudge,
+            strategy,
+            model: "gpt-4".to_string(),
+            retry_policy: RetryPolicy {
+                max_retries: 3,
+                backoff_ms: 1000,
+            },
+            fallback: None,
+            config: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_node_single_strategy() {
+        let provider = Arc::new(MockChatProvider);
+        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
+        let executor = DefaultExecutor::new(provider, strategies);
+        let node = make_llm_node(StrategyKind::Single);
+
+        let result = executor.execute_node(&node).await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        assert_eq!(
+            result.output,
+            Some(serde_json::Value::String("mock response".into()))
+        );
+        let usage = result.usage.expect("usage should be present");
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 20);
+        assert_eq!(usage.total_tokens, 30);
+    }
+
+    #[tokio::test]
+    async fn test_execute_node_strategy_fallback() {
+        let provider = Arc::new(MockChatProvider);
+        let strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        let executor = DefaultExecutor::new(provider, strategies);
+        let node = make_llm_node(StrategyKind::Fusion);
+
+        let result = executor.execute_node(&node).await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_strategy_single() {
+        let provider = Arc::new(MockChatProvider);
+        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
+        let executor = DefaultExecutor::new(provider, strategies);
+        let node = make_llm_node(StrategyKind::Single);
+
+        let subgraph = executor.resolve_strategy(&node).await;
+
+        assert_eq!(subgraph.nodes.len(), 1);
+        assert!(matches!(subgraph.nodes[0].kind, ExecutionNodeKind::LLMGenerate));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_strategy_consensus() {
+        let provider = Arc::new(MockChatProvider);
+        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        strategies.insert(StrategyKind::Consensus, Box::new(ConsensusStrategy::default()));
+        let executor = DefaultExecutor::new(provider, strategies);
+        let node = make_llm_node(StrategyKind::Consensus);
+
+        let subgraph = executor.resolve_strategy(&node).await;
+
+        assert_eq!(subgraph.nodes.len(), 4);
+        assert!(matches!(subgraph.nodes[0].kind, ExecutionNodeKind::LLMGenerate));
+        assert!(matches!(
+            subgraph.nodes.last().unwrap().kind,
+            ExecutionNodeKind::LLMJudge
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_build_request_injects_system_prompt() {
+        let captured = Arc::new(std::sync::Mutex::new(None::<ChatCompletionRequest>));
+        let provider = Arc::new(CapturingMockProvider(captured.clone()));
+        let strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        let executor = DefaultExecutor::new(provider, strategies);
+        let node = make_judge_node(StrategyKind::Fusion);
+
+        let _ = executor.execute_node(&node).await;
+
+        let request = captured.lock().unwrap().take().unwrap();
+        let has_system = request.messages.iter().any(|m| m.role == "system");
+        assert!(has_system, "expected a system message to be injected");
+        let first_role = &request.messages[0].role;
+        assert_eq!(first_role, "system", "system message should be first");
+        assert!(
+            request.messages[0].content.contains("judge"),
+            "system prompt should reference 'judge' role"
+        );
+    }
+}

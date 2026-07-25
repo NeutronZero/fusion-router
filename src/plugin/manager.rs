@@ -113,3 +113,59 @@ impl Default for PluginManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn write_manifest(dir: &std::path::Path, name: &str, content: &str) {
+        std::fs::write(dir.join(name), content).unwrap();
+    }
+
+    #[test]
+    fn test_plugin_discovery() {
+        let dir = std::env::temp_dir().join(format!("fusion_plugins_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_manifest(
+            &dir,
+            "good.toml",
+            r#"[plugin]
+name = "test-plugin"
+version = "1.0.0"
+entry = "plugin.wasm""#,
+        );
+
+        let mut manager = PluginManager::new();
+        manager.load_manifests(dir.to_string_lossy().as_ref());
+
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(manager.manifests().len(), 1);
+        assert!(manager.manifests().contains_key("test-plugin"));
+    }
+
+    #[test]
+    fn test_malformed_manifest() {
+        let dir = std::env::temp_dir().join(format!("fusion_plugins_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_manifest(
+            &dir,
+            "good.toml",
+            r#"[plugin]
+name = "valid-plugin"
+version = "1.0.0"
+entry = "plugin.wasm""#,
+        );
+
+        write_manifest(&dir, "bad.toml", "this is not toml [[[");
+
+        let mut manager = PluginManager::new();
+        manager.load_manifests(dir.to_string_lossy().as_ref());
+
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(manager.manifests().len(), 1);
+        assert!(manager.manifests().contains_key("valid-plugin"));
+    }
+}

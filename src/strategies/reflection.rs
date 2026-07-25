@@ -83,3 +83,74 @@ impl Strategy for ReflectionStrategy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind};
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    fn make_test_node() -> ExecutionNode {
+        ExecutionNode {
+            id: Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMGenerate,
+            strategy: StrategyKind::Single,
+            model: "gpt-4".to_string(),
+            retry_policy: RetryPolicy { max_retries: 3, backoff_ms: 1000 },
+            fallback: None,
+            config: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_reflection_produces_three_nodes() {
+        let strategy = ReflectionStrategy::default();
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        assert_eq!(subgraph.nodes.len(), 3);
+    }
+
+    #[test]
+    fn test_reflection_node_kinds() {
+        let strategy = ReflectionStrategy::default();
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        assert!(matches!(subgraph.nodes[0].kind, ExecutionNodeKind::LLMGenerate));
+        assert!(matches!(subgraph.nodes[1].kind, ExecutionNodeKind::LLMReview));
+        assert!(matches!(subgraph.nodes[2].kind, ExecutionNodeKind::Gate));
+    }
+
+    #[test]
+    fn test_reflection_edges() {
+        let strategy = ReflectionStrategy::default();
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        assert_eq!(subgraph.edges.len(), 2);
+        assert_eq!(subgraph.edges[0].from, subgraph.nodes[0].id);
+        assert_eq!(subgraph.edges[0].to, subgraph.nodes[1].id);
+        assert_eq!(subgraph.edges[1].from, subgraph.nodes[1].id);
+        assert_eq!(subgraph.edges[1].to, subgraph.nodes[2].id);
+    }
+
+    #[test]
+    fn test_reflection_entry_exit() {
+        let strategy = ReflectionStrategy::default();
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        assert_eq!(subgraph.entry_node_id, subgraph.nodes[0].id);
+        assert_eq!(subgraph.exit_node_id, subgraph.nodes[2].id);
+    }
+
+    #[test]
+    fn test_reflection_config_carries_timeout() {
+        let strategy = ReflectionStrategy { max_reflection_cycles: 3, per_leg_timeout_ms: 5000 };
+        let node = make_test_node();
+        let subgraph = strategy.apply(&node);
+        let gen_config = &subgraph.nodes[0].config;
+        assert_eq!(
+            gen_config.get("per_leg_timeout_ms").and_then(|v| v.as_u64()),
+            Some(5000)
+        );
+    }
+}

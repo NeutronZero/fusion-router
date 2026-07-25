@@ -89,4 +89,38 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].i32(), Some(5));
     }
+
+    #[test]
+    fn test_fuel_metering() {
+        let runtime = WasmRuntime::new().unwrap();
+        let wat = r#"
+            (module
+                (func (export "loop_forever") (result i32)
+                    (loop (result i32)
+                        br 0
+                    )
+                )
+            )
+        "#;
+        let module = runtime.load_module(wat.as_bytes()).unwrap();
+        let linker = wasmtime::Linker::new(runtime.engine());
+        let mut store = wasmtime::Store::new(runtime.engine(), ());
+        store.set_fuel(10).unwrap();
+        let instance = linker.instantiate(&mut store, &module.module).unwrap();
+        let func = instance.get_func(&mut store, "loop_forever").unwrap();
+        let mut results = [wasmtime::Val::I32(0)];
+        let result = func.call(&mut store, &[], &mut results);
+        assert!(
+            result.is_err(),
+            "expected trap on infinite loop with limited fuel"
+        );
+    }
+
+    #[test]
+    fn test_load_invalid_wasm() {
+        let runtime = WasmRuntime::new().unwrap();
+        let invalid_bytes = b"not a valid wasm module\x00\x01\x02";
+        let result = runtime.load_module(invalid_bytes);
+        assert!(result.is_err());
+    }
 }

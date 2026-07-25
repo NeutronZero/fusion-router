@@ -169,7 +169,7 @@ pub struct ExecutionNode {
     pub config: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionNodeKind {
     LLMGenerate,
     LLMReview,
