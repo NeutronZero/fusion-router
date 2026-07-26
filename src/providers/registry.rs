@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use super::router::ProviderTarget;
+use crate::config::error::ReloadError;
+use crate::config::manager::{ConfigSubscriber, ConfigSnapshot};
 
 #[derive(Debug, Clone)]
 pub struct ProviderRegistryConfig {
@@ -15,6 +17,7 @@ pub struct ProviderRegistry {
     pricing: parking_lot::RwLock<HashMap<String, super::ModelPricing>>,
     default_target: Arc<ProviderTarget>,
     version: Arc<AtomicU64>,
+    candidates: parking_lot::RwLock<Option<HashMap<String, Arc<ProviderTarget>>>>,
 }
 
 impl ProviderRegistry {
@@ -26,6 +29,7 @@ impl ProviderRegistry {
             pricing: parking_lot::RwLock::new(HashMap::new()),
             default_target: Arc::new(default_target),
             version: Arc::new(AtomicU64::new(0)),
+            candidates: parking_lot::RwLock::new(None),
         }
     }
 
@@ -131,6 +135,92 @@ impl ProviderRegistry {
 
     pub fn version(&self) -> Arc<AtomicU64> {
         self.version.clone()
+    }
+}
+
+impl ConfigSubscriber for ProviderRegistry {
+    fn priority(&self) -> u8 {
+        10
+    }
+
+    fn prepare(&self, _old: &ConfigSnapshot, new: &ConfigSnapshot) -> Result<(), ReloadError> {
+        let mut candidates = HashMap::new();
+
+        for (name, cfg) in &new.config.providers {
+            let api_key = cfg
+                .api_key_env
+                .as_ref()
+                .ok_or_else(|| ReloadError::Subscriber {
+                    name: "ProviderRegistry".into(),
+                    reason: format!("Missing api_key_env for provider '{}'", name),
+                })
+                .and_then(|var_name| {
+                    std::env::var(var_name).map_err(|_| ReloadError::Subscriber {
+                        name: "ProviderRegistry".into(),
+                        reason: format!(
+                            "Missing env var {} for provider '{}'",
+                            var_name, name
+                        ),
+                    })
+                })?;
+
+            let circuit_breaker = super::circuit_breaker::CircuitBreaker::new(
+                cfg.failure_threshold,
+                3,
+                cfg.cooldown_secs,
+            );
+
+            let factory_name = name.clone();
+            let factory_key = api_key.clone();
+            let target = super::router::ProviderTarget::new(
+                name.clone(),
+                circuit_breaker,
+                Box::new(move || -> Arc<dyn super::ChatProvider + Send + Sync> {
+                    if factory_name == "openrouter" {
+                        Arc::new(
+                            super::openrouter::OpenRouterProvider::new(factory_key.clone()),
+                        )
+                    } else if factory_name == "zen" {
+                        Arc::new(super::zen::ZenProvider::new(factory_key.clone()))
+                    } else {
+                        Arc::new(
+                            super::openrouter::OpenRouterProvider::new(factory_key.clone()),
+                        )
+                    }
+                }),
+            );
+
+            candidates.insert(name.clone(), Arc::new(target));
+        }
+
+        *self.candidates.write() = Some(candidates);
+        Ok(())
+    }
+
+    fn commit(&self, generation: u64) {
+        let candidates = self.candidates.write().take();
+        if let Some(candidates) = candidates {
+            let mut targets = self.targets.write();
+            let old_names: Vec<String> = targets.keys().cloned().collect();
+            let new_names: Vec<String> = candidates.keys().cloned().collect();
+
+            let added: Vec<&String> =
+                new_names.iter().filter(|n| !old_names.contains(n)).collect();
+            let removed: Vec<&String> =
+                old_names.iter().filter(|n| !new_names.contains(n)).collect();
+            let updated: Vec<&String> =
+                new_names.iter().filter(|n| old_names.contains(n)).collect();
+
+            tracing::info!(
+                generation,
+                added = ?added,
+                removed = ?removed,
+                updated = ?updated,
+                "ProviderRegistry commit"
+            );
+
+            *targets = candidates;
+        }
     }
 }
 

@@ -5,7 +5,6 @@ use crate::providers::circuit_breaker::CircuitBreaker;
 use crate::providers::ChatProvider;
 use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk};
 
-#[allow(dead_code)]
 pub struct CircuitBreakingProvider {
     inner: Arc<dyn ChatProvider + Send + Sync>,
     breaker: CircuitBreaker,
