@@ -48,9 +48,13 @@ providers:
   zen:
     base_url: "https://opencode.ai/zen/v1"
     api_key_env: "OPENCODEZEN_API_KEY"
+    failure_threshold: 5
+    cooldown_secs: 30
   openrouter:
     base_url: "https://openrouter.ai/api/v1"
     api_key_env: "OPENROUTER_API_KEY"
+    failure_threshold: 5
+    cooldown_secs: 30
 
 # Authentication
 auth:
