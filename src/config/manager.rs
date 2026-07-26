@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
 
-use super::error::{ConfigValidationError, ValidationSeverity};
 use super::error::ReloadError;
 use super::AppConfig;
 
@@ -67,16 +66,7 @@ impl ConfigManager {
         let new_config: AppConfig = serde_yaml::from_str(&content)
             .map_err(|e| ReloadError::Parse(e.to_string()))?;
 
-        new_config.validate().map_err(|errors| {
-            ReloadError::Validation(
-                errors.into_iter().map(|msg| ConfigValidationError {
-                    field: String::new(),
-                    message: msg,
-                    value: None,
-                    severity: ValidationSeverity::Error,
-                }).collect()
-            )
-        })?;
+        new_config.validate().map_err(ReloadError::Validation)?;
 
         let next_gen = self.next_generation();
         let old_snapshot = self.snapshot();

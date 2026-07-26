@@ -4,6 +4,7 @@ pub mod manager;
 use std::collections::HashMap;
 use serde::Deserialize;
 
+use crate::config::error::{ConfigValidationError, ValidationSeverity};
 use crate::types::{Policy, PolicyAction, PolicyCondition, Quota, ProviderLimit};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -261,52 +262,107 @@ impl AppConfig {
         }
     }
 
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let mut errors: Vec<String> = Vec::new();
+    pub fn validate(&self) -> Result<(), Vec<ConfigValidationError>> {
+        let mut errors: Vec<ConfigValidationError> = Vec::new();
 
         if self.server.port == 0 {
-            errors.push("server.port must be greater than 0".into());
+            errors.push(ConfigValidationError {
+                field: "server.port".into(),
+                message: "port must be > 0".into(),
+                value: Some(self.server.port.to_string()),
+                severity: ValidationSeverity::Error,
+            });
         }
 
         if self.server.shutdown_timeout_secs == 0 {
-            errors.push("server.shutdown_timeout_secs must be greater than 0".into());
+            errors.push(ConfigValidationError {
+                field: "server.shutdown_timeout_secs".into(),
+                message: "shutdown_timeout_secs must be > 0".into(),
+                value: Some(self.server.shutdown_timeout_secs.to_string()),
+                severity: ValidationSeverity::Error,
+            });
         }
 
         if self.resources.max_daily_cost < 0.0 {
-            errors.push("resources.max_daily_cost must be non-negative".into());
+            errors.push(ConfigValidationError {
+                field: "resources.max_daily_cost".into(),
+                message: "max_daily_cost must be non-negative".into(),
+                value: Some(self.resources.max_daily_cost.to_string()),
+                severity: ValidationSeverity::Error,
+            });
         }
 
         if self.resources.max_concurrent == 0 {
-            errors.push("resources.max_concurrent must be greater than 0".into());
+            errors.push(ConfigValidationError {
+                field: "resources.max_concurrent".into(),
+                message: "max_concurrent must be > 0".into(),
+                value: Some(self.resources.max_concurrent.to_string()),
+                severity: ValidationSeverity::Error,
+            });
         }
 
         if self.resources.max_concurrent_nodes == 0 {
-            errors.push("resources.max_concurrent_nodes must be greater than 0".into());
+            errors.push(ConfigValidationError {
+                field: "resources.max_concurrent_nodes".into(),
+                message: "max_concurrent_nodes must be > 0".into(),
+                value: Some(self.resources.max_concurrent_nodes.to_string()),
+                severity: ValidationSeverity::Error,
+            });
         }
 
         if self.auth.enabled && self.auth.api_keys.is_empty() {
-            errors.push("auth.enabled is true but no api_keys configured".into());
+            errors.push(ConfigValidationError {
+                field: "auth.api_keys".into(),
+                message: "auth is enabled but no api_keys configured".into(),
+                value: None,
+                severity: ValidationSeverity::Error,
+            });
         }
 
         if self.rate_limiting.enabled {
             if self.rate_limiting.requests_per_minute == 0 {
-                errors.push("rate_limiting.requests_per_minute must be greater than 0".into());
+                errors.push(ConfigValidationError {
+                    field: "rate_limiting.requests_per_minute".into(),
+                    message: "requests_per_minute must be > 0".into(),
+                    value: Some(self.rate_limiting.requests_per_minute.to_string()),
+                    severity: ValidationSeverity::Error,
+                });
             }
             if self.rate_limiting.burst_size == 0 {
-                errors.push("rate_limiting.burst_size must be greater than 0".into());
+                errors.push(ConfigValidationError {
+                    field: "rate_limiting.burst_size".into(),
+                    message: "burst_size must be > 0".into(),
+                    value: Some(self.rate_limiting.burst_size.to_string()),
+                    severity: ValidationSeverity::Error,
+                });
             }
             if self.rate_limiting.cleanup_interval_secs == 0 {
-                errors.push("rate_limiting.cleanup_interval_secs must be greater than 0".into());
+                errors.push(ConfigValidationError {
+                    field: "rate_limiting.cleanup_interval_secs".into(),
+                    message: "cleanup_interval_secs must be > 0".into(),
+                    value: Some(self.rate_limiting.cleanup_interval_secs.to_string()),
+                    severity: ValidationSeverity::Error,
+                });
             }
         }
 
         match self.logging.format.as_str() {
             "text" | "json" => {}
-            other => errors.push(format!("logging.format must be 'text' or 'json', got '{}'", other)),
+            other => errors.push(ConfigValidationError {
+                field: "logging.format".into(),
+                message: "format must be 'text' or 'json'".into(),
+                value: Some(other.into()),
+                severity: ValidationSeverity::Error,
+            }),
         }
 
         if self.logging.level.is_empty() {
-            errors.push("logging.level must not be empty".into());
+            errors.push(ConfigValidationError {
+                field: "logging.level".into(),
+                message: "level must not be empty".into(),
+                value: None,
+                severity: ValidationSeverity::Error,
+            });
         }
 
         if errors.is_empty() { Ok(()) } else { Err(errors) }
