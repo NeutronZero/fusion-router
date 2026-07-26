@@ -1,6 +1,6 @@
 use fusion_router::session::checkpoint::CheckpointEngine;
 use fusion_router::session::replay::ReplayEngine;
-use fusion_router::session::store::InMemorySessionStore;
+use fusion_router::session::store::{InMemorySessionStore, SessionStore};
 use fusion_router::session::types::{ExecutionSession, SessionId, SessionSnapshot};
 use fusion_router::types::execution_context::{ExecutionContext, ExecutionEvent, ExecutionState};
 use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityInstance};
