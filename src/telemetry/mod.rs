@@ -22,6 +22,7 @@ pub use sqlite_repo::SqliteEvidenceRepository;
 
 pub mod metrics;
 pub mod stream_metrics;
+pub mod connector_metrics;
 pub mod audit;
 pub mod tracing;
 pub mod calibration;
