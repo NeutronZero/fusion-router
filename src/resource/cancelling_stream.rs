@@ -84,6 +84,7 @@ impl MeteredStream {
 
 impl Drop for MeteredStream {
     fn drop(&mut self) {
+        self.cancel.cancel();
         self.release_guard();
     }
 }

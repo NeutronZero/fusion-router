@@ -38,6 +38,10 @@ use crate::strategies::reflection::ReflectionStrategy;
 use crate::strategies::single::SingleStrategy;
 use crate::strategies::Strategy;
 use crate::telemetry::EvidenceRepository;
+use tokio_util::sync::CancellationToken;
+use crate::resource::cancelling_stream::metered_stream;
+use crate::resource::guard::ResourceGuard;
+use crate::providers::ModelPricing;
 use crate::types::*;
 use crate::server::pipeline::{
     PipelineStep, PipelineContext, ContextAssemblyStep, RequirementsExtractionStep,
@@ -222,37 +226,60 @@ async fn stream_response(
     let model_name = request.model.clone();
     let created = chrono::Utc::now().timestamp();
 
+    let _generation = state.config_manager.snapshot().generation;
+    let pricing: Option<ModelPricing> = None;
+    let resource_manager = state.resource_manager.clone();
+
     let provider = state.provider.clone();
     let inner = provider.chat_stream(&request).await;
     drop(request);
     drop(state);
 
-    let stream: BoxStream<'static, Result<Event, std::convert::Infallible>> = match inner {
-        Ok(inner_stream) => Box::pin(inner_stream.map(move |chunk_result| {
-            let id = request_id_str.clone();
-            let model = model_name.clone();
-            let payload = match chunk_result {
-                Ok(chunk) => {
-                    serde_json::json!({
-                        "id": id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {
-                                "content": chunk.content,
-                            },
-                            "finish_reason": chunk.finish_reason,
-                        }],
-                    })
-                }
-                Err(e) => {
-                    serde_json::json!({"error": e.to_string()})
-                }
+    let event_stream: BoxStream<'static, Result<Event, std::convert::Infallible>> = match inner {
+        Ok(inner_stream) => {
+            let cancel = CancellationToken::new();
+            let dummy_graph = ExecutionGraph {
+                graph_id: request_id,
+                nodes: vec![],
+                edges: vec![],
+                metadata: GraphMetadata {
+                    estimated_cost: 0.0,
+                    estimated_tokens: 0,
+                    max_depth: 0,
+                    node_count: 0,
+                },
+                total_tokens: 0,
+                total_cost: 0,
+                primitive_graph_hash: 0,
             };
-            Ok(Event::default().data(serde_json::to_string(&payload).unwrap_or_default()))
-        })),
+            let guard = ResourceGuard::new(request_id, dummy_graph, resource_manager);
+            let (metered, _meter) = metered_stream(inner_stream, guard, cancel, pricing);
+            Box::pin(metered.map(move |chunk_result| {
+                let id = request_id_str.clone();
+                let model = model_name.clone();
+                let payload = match chunk_result {
+                    Ok(chunk) => {
+                        serde_json::json!({
+                            "id": id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "content": chunk.content,
+                                },
+                                "finish_reason": chunk.finish_reason,
+                            }],
+                        })
+                    }
+                    Err(e) => {
+                        serde_json::json!({"error": e.to_string()})
+                    }
+                };
+                Ok(Event::default().data(serde_json::to_string(&payload).unwrap_or_default()))
+            }))
+        }
         Err(e) => {
             let error = serde_json::json!({"error": e.to_string()});
             Box::pin(stream::once(async move {
@@ -261,7 +288,7 @@ async fn stream_response(
         }
     };
 
-    let sse = stream.chain(stream::once(async {
+    let sse = event_stream.chain(stream::once(async {
         Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"))
     }));
 
