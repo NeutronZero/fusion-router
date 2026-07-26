@@ -25,6 +25,7 @@ pub enum ReloadError {
     Parse(String),
     Validation(Vec<ConfigValidationError>),
     Subscriber { name: String, reason: String },
+    ConnectorError(String),
 }
 
 impl fmt::Display for ReloadError {
@@ -37,6 +38,7 @@ impl fmt::Display for ReloadError {
             ReloadError::Subscriber { name, reason } => {
                 write!(f, "subscriber '{name}' rejected: {reason}")
             }
+            ReloadError::ConnectorError(msg) => write!(f, "connector error: {msg}"),
         }
     }
 }

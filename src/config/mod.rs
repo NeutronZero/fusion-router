@@ -27,6 +27,8 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub model_catalog: crate::types::ModelCatalog,
+    #[serde(default)]
+    pub connectors: HashMap<String, ConnectorConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -186,6 +188,13 @@ pub struct ProviderConfig {
     pub failure_threshold: u32,
     #[serde(default = "default_cooldown_secs")]
     pub cooldown_secs: u64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ConnectorConfig {
+    pub connector_type: String,
+    #[serde(default)]
+    pub config: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
