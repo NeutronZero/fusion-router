@@ -156,6 +156,8 @@ async fn main() {
         PathBuf::from(&config_path),
     );
 
+    state.config_manager.register_subscriber(Box::new(provider_registry.clone()));
+
     #[cfg(unix)]
     {
         let cm_for_reload = state.config_manager.clone();

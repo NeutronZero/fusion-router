@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
@@ -28,7 +29,7 @@ pub trait ConfigSubscriber: Send + Sync {
 pub struct ConfigManager {
     inner: ArcSwap<ConfigSnapshot>,
     pub config_path: PathBuf,
-    subscribers: Vec<Box<dyn ConfigSubscriber + Send + Sync>>,
+    subscribers: RwLock<Vec<Box<dyn ConfigSubscriber + Send + Sync>>>,
     generation: AtomicU64,
 }
 
@@ -46,7 +47,7 @@ impl ConfigManager {
         Self {
             inner: ArcSwap::new(Arc::new(snapshot)),
             config_path,
-            subscribers,
+            subscribers: RwLock::new(subscribers),
             generation: AtomicU64::new(generation),
         }
     }
@@ -57,6 +58,12 @@ impl ConfigManager {
 
     fn next_generation(&self) -> u64 {
         self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    pub fn register_subscriber(&self, subscriber: Box<dyn ConfigSubscriber + Send + Sync>) {
+        self.subscribers.write()
+            .expect("ConfigManager subscriber lock poisoned")
+            .push(subscriber);
     }
 
     pub async fn reload(&self) -> Result<u64, ReloadError> {
@@ -75,7 +82,9 @@ impl ConfigManager {
             config: Arc::new(new_config),
         };
 
-        let mut ordered: Vec<_> = self.subscribers.iter().collect();
+        let subscribers = self.subscribers.read()
+            .expect("ConfigManager subscriber lock poisoned");
+        let mut ordered: Vec<_> = subscribers.iter().collect();
         ordered.sort_by_key(|s| s.priority());
 
         for subscriber in &ordered {

@@ -173,6 +173,20 @@ impl ChatProvider for ProviderRegistry {
     }
 }
 
+impl ConfigSubscriber for Arc<ProviderRegistry> {
+    fn priority(&self) -> u8 {
+        (**self).priority()
+    }
+
+    fn prepare(&self, old: &ConfigSnapshot, new: &ConfigSnapshot) -> Result<(), ReloadError> {
+        (**self).prepare(old, new)
+    }
+
+    fn commit(&self, generation: u64) {
+        (**self).commit(generation)
+    }
+}
+
 impl ConfigSubscriber for ProviderRegistry {
     fn priority(&self) -> u8 {
         10
