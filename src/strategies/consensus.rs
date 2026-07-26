@@ -1,5 +1,4 @@
 use std::time::Duration;
-use uuid::Uuid;
 
 use super::{Parallelism, StreamingMode, Strategy, StrategyDescriptor};
 use crate::compiler::context::CompilationContext;
@@ -8,7 +7,7 @@ use crate::compiler::ir::{
     BarrierFailurePolicy, PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind, ReducerMode, StrategyIR,
 };
 use crate::types::{
-    ArtifactKind, ExecutionEdge, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph, RetryPolicy, StrategyKind,
+    ArtifactKind, RetryPolicy,
 };
 
 const DEFAULT_CONSENSUS_COUNT: u32 = 3;
@@ -26,7 +25,7 @@ impl Default for ConsensusStrategy {
 impl Strategy for ConsensusStrategy {
     fn descriptor(&self) -> StrategyDescriptor {
         StrategyDescriptor {
-            name: "Consensus",
+            name: "Consensus".into(),
             parallelism: Parallelism::Fixed(self.count),
             requires_barrier: true,
             supports_streaming: StreamingMode::IncrementalArtifacts,
@@ -103,85 +102,12 @@ impl Strategy for ConsensusStrategy {
         Ok(graph)
     }
 
-    fn apply(&self, node: &ExecutionNode) -> ExecutionSubgraph {
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
-
-        let mut gen_ids = Vec::new();
-
-        for _ in 0..self.count {
-            let gen_id = Uuid::new_v4();
-            nodes.push(ExecutionNode {
-                id: gen_id,
-                kind: ExecutionNodeKind::LLMGenerate,
-                strategy: StrategyKind::Single,
-                model: node.model.clone(),
-                retry_policy: node.retry_policy.clone(),
-                fallback: node.fallback.clone(),
-                config: node.config.clone(),
-            });
-            gen_ids.push(gen_id);
-        }
-
-        let judge_id = Uuid::new_v4();
-        nodes.push(ExecutionNode {
-            id: judge_id,
-            kind: ExecutionNodeKind::LLMJudge,
-            strategy: StrategyKind::Consensus,
-            model: node.model.clone(),
-            retry_policy: RetryPolicy {
-                max_retries: 1,
-                backoff_ms: 500,
-            },
-            fallback: node.fallback.clone(),
-            config: Default::default(),
-        });
-
-        for gen_id in &gen_ids {
-            edges.push(ExecutionEdge {
-                from: *gen_id,
-                to: judge_id,
-                condition: None,
-            });
-        }
-
-        let entry_node_id = gen_ids[0];
-
-        ExecutionSubgraph {
-            nodes,
-            edges,
-            entry_node_id,
-            exit_node_id: judge_id,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind};
-    use std::collections::HashMap;
-    use uuid::Uuid;
-
-    fn make_test_node() -> ExecutionNode {
-        ExecutionNode {
-            id: Uuid::new_v4(),
-            kind: ExecutionNodeKind::LLMGenerate,
-            strategy: StrategyKind::Single,
-            model: "gpt-4".to_string(),
-            retry_policy: RetryPolicy { max_retries: 3, backoff_ms: 1000 },
-            fallback: None,
-            config: HashMap::new(),
-        }
-    }
-
-    #[test]
-    fn test_consensus_default_count() {
-        let strategy = ConsensusStrategy::default();
-        let node = make_test_node();
-        let subgraph = strategy.apply(&node);
-        assert_eq!(subgraph.nodes.len(), 4);
-    }
+    use crate::compiler::ir::StrategyIR;
 
     #[test]
     fn test_consensus_lowering() {

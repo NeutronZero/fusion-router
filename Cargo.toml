@@ -1,6 +1,6 @@
 [package]
 name = "fusion-router"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
@@ -60,6 +60,10 @@ harness = false
 
 [[bench]]
 name = "cache"
+harness = false
+
+[[bench]]
+name = "strategy_lowering"
 harness = false
 
 [[example]]

@@ -63,7 +63,20 @@ impl PluginManager {
         let wasm_bytes = std::fs::read(&wasm_path)?;
         let module = runtime.load_module(&wasm_bytes)?;
         self.wasm_modules.insert(name.to_string(), module);
+
+        if let Err(e) = self.try_register_wasm_strategy(&wasm_path, name) {
+            tracing::debug!(plugin = %name, error = %e, "wasm module does not export strategy interface");
+        }
+
         tracing::info!(plugin = %name, path = %wasm_path.display(), "loaded wasm plugin");
+        Ok(())
+    }
+
+    #[cfg(feature = "wasm-plugins")]
+    fn try_register_wasm_strategy(&mut self, wasm_path: &Path, name: &str) -> anyhow::Result<()> {
+        let kind = crate::types::StrategyKind::Custom(name.to_string());
+        super::wasm::load_and_register_wasm_strategy(&mut self.registry, wasm_path, Some(kind))?;
+        tracing::info!(plugin = %name, "registered wasm strategy");
         Ok(())
     }
 

@@ -1,29 +1,50 @@
-# FusionRouter v0.8.0
+# FusionRouter v0.9.0
 
-[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](https://github.com/NeutronZero/fusion-router/releases/tag/v0.8.0)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/NeutronZero/fusion-router/releases/tag/v0.9.0)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-251%20passed-success.svg)](https://github.com/NeutronZero/fusion-router)
+[![Tests](https://img.shields.io/badge/tests-444%20passed-success.svg)](https://github.com/NeutronZero/fusion-router)
 
-An intelligent, multi-provider LLM orchestration router with DAG-based workflow planning, transactional compilation, resource budget enforcement, and semantic caching.
+An intelligent, multi-provider LLM orchestration router with compiler-driven workflow planning, optimization passes, DAG execution, and provenance-based execution replay.
 
-Supports **linear**, **conditional branching**, **loops**, **parallel split/join**, and **barrier synchronization** workflows across multiple LLM providers (OpenCode Zen, OpenRouter, Ollama).
-
----
-
-## 🌟 Key Features in v0.8.0
-
-- **7-Stage Request Pipeline**: Deterministic context assembly, intent extraction, evidence snapshotting, planning, compilation, scheduling, and provider routing.
-- **Transactional Compiler**: Snapshot-and-rollback engine with 4 optimization passes (`ConstraintValidation`, `ControlFlowValidation`, `ModelResolution`, `BudgetOptimisation`) and 3-color DFS cycle detection.
-- **6 Execution Strategies**: Built-in strategy sub-graph resolution for `Single`, `Consensus`, `Reflection`, `Chain`, `ReAct`, and `Debate` patterns with dynamic tool injection.
-- **Resource Safety & Budgeting**: RAII `ResourceGuard` auto-refunding unused quota on error/cancellation with atomic millicost and token limits.
-- **Provider Resilience**: 3-state (`Closed`, `Open`, `HalfOpen`) circuit breakers per provider with exponential backoff and prefix fallback routing.
-- **Vector Semantic Caching**: USearch HNSW vector index with cosine similarity lookup and monotonic FIFO eviction.
-- **WASM Plugin Sandbox**: Fuel-metered ($1\text{M}$ fuel default) Wasmtime runtime with deny-by-default WASI capabilities for custom plugins.
-- **Observability & Analytics**: SQLite evidence repository in WAL mode with EMA dynamic model performance calibrator ($\alpha=0.2$, $n\ge30$), Prometheus metrics endpoint (`/metrics`), and bounded audit log ring buffer.
+Supports **single-shot**, **consensus**, **reflection**, **debate**, **ReAct tool loops**, **chain pipelines**, and **fusion** strategies across multiple LLM providers (OpenRouter, OpenCode Zen, Ollama).
 
 ---
 
-## 🚀 Quick Start
+## Key Features in v0.9.0
+
+### Compiler Architecture
+- **8-Stage Compiler Pipeline**: Validation → Resolution → Lowering → Optimization → Assembly, with snapshot-and-rollback transactional semantics.
+- **Canonical `PrimitiveGraph` IR**: Lowered intermediate representation on which all optimization passes operate; `ExecutionGraph` is a mechanically derived ephemeral artifact.
+- **`StrategyIR` Lowering Contract**: Each strategy receives a `StrategyIR` enum and produces a `PrimitiveGraph` fragment via `Strategy::lower()`, decoupling strategy logic from execution metadata.
+- **Optimization Framework** (ADR-020): Pass taxonomy (Validation/Lowering/Analysis/Optimization/Instrumentation/Verification), optimization goals, legality rules, pre/post-condition contracts, and rollback-safe pipeline.
+- **Dead Node Elimination**: Removes nodes unreachable from the first node.
+- **FanOut Consolidation**: Merges adjacent FanOut nodes and eliminates single-consumer FanOuts.
+
+### Execution Strategies
+- **7 Built-in Strategies**: `Single`, `Consensus`, `Reflection`, `Chain`, `ReAct`, `Debate`, and `Fusion` (new) — all producing `PrimitiveGraph` via `Strategy::lower()`.
+- **`FusionStrategy`**: Heterogeneous model ensembles with `ModelAvailability`/`ModelCapability` hints and parallelism scaling.
+
+### Determinism & Provenance
+- **Deterministic Graph Hashing**: `PrimitiveGraph::compute_hash()` via canonical JSON serialization; `ExecutionGraph` node IDs derived from `(graph_hash, node_index)`.
+- **Provenance Schema**: Every `ExecutionResult` carries `graph_hash`, `primitive_graph_version`, `pass_manifest`, and `strategy` descriptor for full execution replay and audit.
+- **`Artifact` Trait**: Typed opaque payloads stored on `ExecutionResult` with forward-compatible clone semantics.
+
+### Observability
+- **Per-Strategy Metrics**: `fusionrouter_strategy_latency_seconds` and `_errors_total` histograms with strategy labels; `fusionrouter_graph_hash_count` provenance distribution.
+- **Structured Tracing**: Pipeline events with `request_id`, `strategy`, `latency_ms`, and `success` fields.
+- **Operator Deployment**: Docker multi-stage build (distroless base, healthcheck), deployment guide, and K8s probe contract.
+
+### Resource Safety
+- **ResourceGuard**: RAII auto-refunding unused quota on Drop if uncommitted.
+- **BudgetEnvelope**: Per-request cost/token/iteration ceilings via `Arc<AtomicU64>`.
+
+### Provider Resilience
+- **3-State Circuit Breakers** (Closed/Open/HalfOpen) per provider with exponential backoff and prefix fallback routing.
+- **Closed-Loop Calibration**: EMA smoothing ($\alpha=0.2$, $n\ge30$) of provider capability scores.
+
+---
+
+## Quick Start
 
 ### Prerequisites
 - Rust 1.75+ (2021 Edition)
@@ -33,7 +54,7 @@ Supports **linear**, **conditional branching**, **loops**, **parallel split/join
 # Run local dev server (default port 8080)
 cargo run --release
 
-# Run comprehensive test suite (251 tests)
+# Run comprehensive test suite (444 tests)
 cargo test --all-targets
 
 # Run performance benchmarks
@@ -42,36 +63,43 @@ cargo bench
 
 ---
 
-## 🏗️ Architecture Pipeline
+## Architecture Pipeline
 
 ```
   Client Request (HTTP JSON / SSE)
                │
                ▼
-   Stage 1: Context Assembly  ──────▶ Token estimation & multibyte UTF-8 trimming
+   Stage 1: Context Assembly          Token estimation & multibyte UTF-8 trimming
                │
                ▼
-   Stage 2: Requirements Extraction ─▶ Intent scoring & complexity thresholding
+   Stage 2: Requirements Extraction   Intent scoring & complexity thresholding
                │
                ▼
-   Stage 3: Evidence Snapshot ─────▶ SQLite historical latency/cost lookup
+   Stage 3: Evidence Snapshot         SQLite historical latency/cost lookup
                │
                ▼
-   Stage 4: Workflow Planner ──────▶ Static, Dynamic, or Hybrid DAG generation
+   Stage 4: Workflow Planner          Static, Dynamic, or Hybrid → WorkflowIR
                │
                ▼
-   Stage 5: Compiler Engine ───────▶ 4-Pass optimization & 3-color DFS cycle check
+   Stage 5: Compiler Engine           8-stage pipeline:
+               │                        1. ConstraintValidation
+               │                        2. ControlFlowValidation (3-color DFS)
+               │                        3. ModelResolution
+               │                        4. BudgetOptimisation
+               │                        5. LowerToGraph (WorkflowIR → PrimitiveGraph)
+               │                        6. DeadNodeElimination
+               │                        7. FanOutConsolidation
+               │                        8. PrimitiveToExecution (PrimitiveGraph → ExecutionGraph)
+               ▼
+   Stage 6: Scheduler & Executor      Parallel WorkQueue dispatch (buffer_unordered)
                │
                ▼
-   Stage 6: Scheduler & Executor ──▶ Parallel WorkQueue dispatch (buffer_unordered)
-               │
-               ▼
-   Stage 7: Provider Router ───────▶ Circuit breaker checking & LLM execution
+   Stage 7: Provider Router           Circuit breaker checking & LLM execution
 ```
 
 ---
 
-## 📡 API Endpoints
+## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -99,33 +127,41 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 
 ---
 
-## 🧪 Test Suite & Verification
+## Test Suite & Verification
 
-FusionRouter includes a comprehensive test suite verified across 251 test cases:
+FusionRouter v0.9.0 includes a comprehensive test suite verified across **444 test cases** with 0 warnings:
 
 ```
-unittests (src/lib.rs)         : 186 passed
-golden_tests (tests/golden)   :  28 passed
-integration_tests (tests/int) :   9 passed
-load_tests (tests/load_test)  :  10 passed (8 worker threads, 100 concurrent DAGs)
-security_tests (tests/sec)    :   4 passed (path traversal, shell injection, brute force)
-unit_tests (tests/unit)       :  14 passed (resilience & fault injections)
------------------------------------------------------------------------------------
-Total                         : 251 passed, 0 failed
+lib tests (src/lib.rs)               : 177 passed
+binary tests (src/main.rs)           : 177 passed
+golden optimization tests            :  43 passed
+integration tests                    :   9 passed
+load tests (100 concurrent DAGs)     :  10 passed
+security tests                       :   4 passed
+strategy SDK tests                   :   7 passed
+unit tests (resilience & injection)  :  17 passed
+----------------------------------------------------------------
+Total                                : 444 passed, 0 failed
 ```
+
+Additionally:
+- `cargo check` — 0 warnings (default features)
+- `cargo check --no-default-features --lib` — 0 warnings
+- `cargo bench` — strategy lowering benchmarks across 10 scenarios, 7 strategy types
 
 ---
 
-## 📚 Documentation
+## Documentation
 
-- [System Architecture Specification (v0.8.0)](docs/fusionrouter_architecture_v0.8.0.md)
-- [Quickstart Guide](QUICKSTART.md)
-- [Workflow IR Specification](docs/specifications/workflow-ir.md)
-- [Execution Graph Specification](docs/specifications/execution-graph.md)
+- [System Architecture Specification (v0.9.0)](docs/fusionrouter_architecture_v0.9.0.md)
 - [Architecture Decision Records (ADRs)](docs/adr/)
+- [Provenance Schema](docs/decisions/provenance-schema.md)
+- [Resource Guard Contract](docs/decisions/resource-guard-contract.md)
+- [Operator Deployment Guide](docs/operator/deployment-guide.md)
+- [Quickstart Guide](QUICKSTART.md)
 
 ---
 
-## 📄 License
+## License
 
 Dual-licensed under MIT or Apache 2.0.

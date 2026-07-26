@@ -148,6 +148,7 @@ pub enum StrategyKind {
     Debate,
     ReAct,
     Fusion,
+    Custom(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +159,8 @@ pub struct ExecutionGraph {
     pub metadata: GraphMetadata,
     pub total_tokens: u64,
     pub total_cost: u64,
+    #[serde(default)]
+    pub primitive_graph_hash: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,7 +241,7 @@ pub enum NodeState {
 
 /// Runtime ABI contract between Scheduler and Pipeline.
 /// Changes to this structure impact response building, telemetry, and execution reporting.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ExecutionResult {
     pub instance_id: Uuid,
     pub success: bool,
@@ -248,6 +251,24 @@ pub struct ExecutionResult {
     pub total_tokens: u64,
     pub terminal_node_id: Option<Uuid>,
     pub final_output: Option<serde_json::Value>,
+    #[serde(skip)]
+    pub stored_artifacts: Vec<Box<dyn Artifact>>,
+}
+
+impl Clone for ExecutionResult {
+    fn clone(&self) -> Self {
+        Self {
+            instance_id: self.instance_id,
+            success: self.success,
+            outputs: self.outputs.clone(),
+            total_latency_ms: self.total_latency_ms,
+            total_cost: self.total_cost,
+            total_tokens: self.total_tokens,
+            terminal_node_id: self.terminal_node_id,
+            final_output: self.final_output.clone(),
+            stored_artifacts: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -307,22 +328,6 @@ pub struct ExecutionSubgraph {
     pub edges: Vec<ExecutionEdge>,
     pub entry_node_id: Uuid,
     pub exit_node_id: Uuid,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderRequest {
-    pub model: String,
-    pub messages: Vec<ChatMessage>,
-    pub temperature: Option<f32>,
-    pub max_tokens: Option<u32>,
-    pub stream: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderResponse {
-    pub content: String,
-    pub model: String,
-    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,8 +446,6 @@ pub enum CompilerError {
         pass: String,
         message: String,
     },
-    #[error("Internal compiler error: {0}")]
-    Internal(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]

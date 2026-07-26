@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![cfg_attr(not(test), allow(dead_code))] // Intentional: stubs for future production wiring (CircuitBreakingProvider, WorkflowPlanner, DynamicPlanner)
 use std::sync::Arc;
 
 use axum::{routing::get, routing::post, Router};

@@ -1,7 +1,7 @@
-# FusionRouter v0.8.0 — System Architecture Specification & Engineering Reference
+# FusionRouter v0.9.0 — System Architecture Specification & Engineering Reference
 
 > **Classification**: Production-Grade Technical Architecture Document
-> **Version**: 0.8.0 | **Edition**: Rust 2021 | **Date**: 2026-07-25
+> **Version**: 0.9.0 | **Edition**: Rust 2021 | **Date**: 2026-07-26
 > **Repository**: `fusion-router`
 
 ---
@@ -41,7 +41,7 @@ FusionRouter is an **intelligent LLM orchestration router** that decouples *reas
 
 | Principle | Mechanism |
 |-----------|-----------|
-| **Strategy–Provider Decoupling** | `Strategy` trait emits `ExecutionSubgraph` DAGs independent of provider identity; `ProviderRouter` resolves physical endpoints at execution time |
+| **Strategy–Provider Decoupling** | `Strategy` trait lowers into `PrimitiveGraph` IR independent of provider identity; `ProviderRouter` resolves physical endpoints at execution time |
 | **Compile-Before-Execute** | All `WorkflowIR` passes through a transactional `Compiler` pipeline (constraint → control-flow → model resolution → budget) before any LLM call is made |
 | **RAII Resource Safety** | `ResourceGuard` auto-releases quota on `Drop` if uncommitted; `BudgetEnvelope` enforces per-request cost/token/iteration ceilings via `Arc<AtomicU64>` |
 | **Closed-Loop Calibration** | `FeedbackCalibrator` EMA-smooths observed success rates into provider capability scores, driving future routing decisions |
@@ -92,11 +92,15 @@ graph TD
         P9["⑨ Response Building<br/><code>ResponseBuilderStep</code>"]
     end
 
-    subgraph "Compiler Passes"
+    subgraph "Compiler Lowering & Optimization"
         CP1["ConstraintValidationPass<br/>Empty IR rejection"]
         CP2["ControlFlowValidationPass<br/>3-color DFS cycle detection"]
         CP3["ModelResolutionPass<br/>Catalog-based model binding"]
         CP4["BudgetOptimisationPass<br/>Quota affordability check"]
+        CP5["LowerToGraphPass<br/>WorkflowIR → PrimitiveGraph"]
+        OP1["DeadNodeEliminationPass<br/>Remove unreachable nodes"]
+        OP2["FanOutConsolidationPass<br/>Merge adjacent FanOuts"]
+        CP6["PrimitiveToExecutionPass<br/>PrimitiveGraph → ExecutionGraph"]
     end
 
     subgraph "WorkQueue Scheduler"
@@ -111,6 +115,7 @@ graph TD
         S_DEBATE["Debate<br/>N×Proposer → Judge"]
         S_REACT["ReAct<br/>Loop ↔ Generate + ToolCall"]
         S_CHAIN["Chain<br/>Sequential strategy pipeline"]
+        S_FUSION["Fusion<br/>N×diverse Generate → Judge"]
     end
 
     subgraph "Provider Router"
@@ -147,7 +152,7 @@ graph TD
     P7 --> P8
     P8 --> P9
 
-    P5 -.-> CP1 --> CP2 --> CP3 --> CP4
+    P5 -.-> CP1 --> CP2 --> CP3 --> CP4 --> CP5 --> OP1 --> OP2 --> CP6
 
     P7 --> WQ --> BUF
 
@@ -157,6 +162,7 @@ graph TD
     BUF --> S_DEBATE
     BUF --> S_REACT
     BUF --> S_CHAIN
+    BUF --> S_FUSION
 
     S_SINGLE --> PR
     S_CONSENSUS --> PR
@@ -164,6 +170,7 @@ graph TD
     S_DEBATE --> PR
     S_REACT --> PR
     S_CHAIN --> PR
+    S_FUSION --> PR
 
     S_REACT -.-> TOOLS
     S_REACT -.-> WASM
@@ -195,6 +202,7 @@ graph TD
     style CP3 fill:#7d3c98,color:#fff
     style CP4 fill:#7d3c98,color:#fff
     style WQ fill:#d4ac0d,color:#000
+    style S_FUSION fill:#1a5276,color:#fff
     style CACHE fill:#117a65,color:#fff
     style SQLITE fill:#117a65,color:#fff
     style CALIB fill:#117a65,color:#fff
@@ -233,6 +241,7 @@ pub struct PipelineContext {
     pub requirements: Option<Requirements>,
     pub evidence: Option<EvidenceSnapshot>,
     pub ir: Option<WorkflowIR>,
+    pub primitive: Option<PrimitiveGraph>,    // v0.9: canonical lowered IR
     pub graph: Option<ExecutionGraph>,
     pub resource_guard: Option<ResourceGuard>,
     pub execution_result: Option<ExecutionResult>,
@@ -410,44 +419,324 @@ pub enum IRNodeKind {
     Conditional, Loop, Split, Join, Barrier,
 }
 
-// Lowered execution-level node kinds (11 variants)
+// Lowered execution-level node kinds (10 canonical primitives)
 pub enum ExecutionNodeKind {
-    LLMGenerate, LLMReview, LLMJudge, Transform, Gate,
-    Aggregate,      // Collection/accumulation node (no implementation struct yet)
-    Conditional, Loop, Split, Join, Barrier,
+    LLMGenerate, LLMReview, LLMJudge,
+    Transform, Gate, Conditional, Loop,
+    Split, Join, Barrier,
 }
 ```
 
-#### Transactional Compiler
+#### 3.4.6 PrimitiveGraph: The Canonical Lowered IR
 
-The `DefaultCompiler` implements a **snapshot-and-rollback** transactional compilation strategy:
+`PrimitiveGraph` is the single most important data structure in the v0.9 compiler architecture. It represents the **lowered, optimizer-visible form** of a reasoning workflow — the IR on which all optimization passes operate and from which all `ExecutionGraph`s are mechanically derived.
+
+##### Purpose
+
+PrimitiveGraph serves as the **boundary between compilation stages**:
+
+| Stage | Input | Output |
+|-------|-------|--------|
+| Lowering | `WorkflowIR` | `PrimitiveGraph` |
+| Optimization | `PrimitiveGraph` | `PrimitiveGraph` (transformed in place) |
+| Assembly | `PrimitiveGraph` | `ExecutionGraph` (derived, not transformed) |
+
+##### Node Model
+
+```rust
+pub struct PrimitiveNode {
+    pub id: String,
+    pub kind: PrimitiveNodeKind,
+    pub artifact_kind: Option<String>,
+}
+
+pub enum PrimitiveNodeKind {
+    LLMGenerate { model: String, role: Option<String> },
+    LLMReview { model: String },
+    FanOut { count: u32 },
+    Barrier { min_completion: f32, timeout: Duration, on_failure: BarrierFailurePolicy },
+    Reducer { mode: ReducerMode, model: String },
+    FeedbackLoop { max_iterations: u32 },
+    ConditionalBranch { condition: String },
+}
+```
+
+`PrimitiveNodeKind` is semantically richer than `ExecutionNodeKind`. The compiler IR captures structural intent (FanOut, Barrier, Reducer) that is resolved during assembly into concrete execution primitives. Notably:
+
+| PrimitiveNodeKind | ExecutionNodeKind (after assembly) | Notes |
+|-------------------|------------------------------------|-------|
+| `LLMGenerate` | `LLMGenerate` | 1:1 mapping, role metadata preserved in config |
+| `LLMReview` | `LLMReview` | 1:1 mapping |
+| `FanOut` | *(filtered out)* | Structural — controls parallelism count; not a runtime primitive |
+| `Barrier` | *(filtered out)* | Structural — min_completion synchronization; edges are rewired during assembly |
+| `Reducer` | `LLMJudge` | Strategy-level adjudication node — maps to Judge in execution |
+| `FeedbackLoop` | `Loop` | Iteration control — translated to scheduler-compatible Loop node |
+| `ConditionalBranch` | `Conditional` | Branch routing — translated to Conditional |
+
+##### Struct Definition
+
+```rust
+// src/compiler/ir/primitive_ir.rs
+pub const PRIMITIVE_GRAPH_VERSION: u16 = 1;
+
+pub struct PrimitiveGraph {
+    pub version: u16,
+    pub graph_id: String,
+    pub nodes: Vec<PrimitiveNode>,
+    pub edges: Vec<PrimitiveEdge>,
+}
+
+pub struct PrimitiveEdge {
+    pub from: String,
+    pub to: String,
+    pub condition: Option<String>,
+}
+```
+
+##### Hashing & Versioning
+
+`PrimitiveGraph` implements `compute_hash()` — a deterministic hash over the full graph structure via canonical JSON serialization:
+
+```rust
+impl PrimitiveGraph {
+    pub fn compute_hash(&self) -> u64 {
+        let json = serde_json::to_string(self).unwrap_or_default();
+        let mut hasher = DefaultHasher::new();
+        json.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+```
+
+The hash is **deterministic** because `serde_json::to_string` produces consistent output for identical struct values (field order is derived from the Rust struct definition, and `Vec` iteration preserves insertion order). This hash becomes `ExecutionGraph.primitive_graph_hash` — the **provenance fingerprint** that ties every execution back to the exact PrimitiveGraph that produced it.
+
+**Version field**: `PrimitiveGraph.version` is set to `PRIMITIVE_GRAPH_VERSION` (currently `1`). This allows the runtime to detect mismatches between the compiler version that produced a `PrimitiveGraph` and the runtime version consuming it, enabling forward-compatibility checks.
+
+##### Invariants
+
+| Invariant | Enforcement |
+|-----------|-------------|
+| No cycles (except FeedbackLoop back-edges) | `ControlFlowValidationPass` (3-color DFS) |
+| All nodes reachable from root | `DeadNodeEliminationPass` |
+| Every WorkflowIR node is lowered | `LowerToGraphPass` contract — one StrategyIR per node |
+| Hash is deterministic across identical graphs | `serde_json::to_string` canonicalization |
+| FanOut/Barrier never appear in ExecutionGraph | `to_execution_graph()` filters them structurally |
+| Optimization preserves semantics | Pass-specific pre/post-conditions (see ADR-020) |
+
+##### Relationship to WorkflowIR
+
+WorkflowIR nodes carry a `strategy` field. During lowering, each node's strategy is converted to a `StrategyIR` enum, which is passed to `Strategy::lower()`. The strategy expands into a `PrimitiveGraph` fragment — typically multiple primitives connected by edges:
+
+```
+WorkflowIR                     StrategyIR          PrimitiveGraph (after lowering)
+──────────                     ──────────          ─────────────────────────────────
+Generate(strategy=Consensus)   Consensus { count } → FanOut { count }
+                                                    → LLMGenerate × N (one per worker)
+                                                    → Reducer { mode: Consensus }
+                                                    → (structurally filtered during assembly)
+
+Review(strategy=Reflection)    Reflection { cycles } → FeedbackLoop { max_iterations }
+                                                    → LLMGenerate (generator)
+                                                    → LLMReview (reviewer)
+```
+
+The lower-level `WorkflowIR` → `PrimitiveNodeKind` mapping for leaf primitives is:
+
+| Workflow IRNodeKind | StrategyIR | PrimitiveNodeKind(s) produced |
+|---------------------|------------|-------------------------------|
+| `Generate` | `StrategyIR::Single` | `LLMGenerate { model, role }` |
+| `Generate` | `StrategyIR::Consensus { count }` | `FanOut { count }` + N×`LLMGenerate` + `Reducer { mode: Consensus }` |
+| `Generate` | `StrategyIR::Reflection { cycles }` | `FeedbackLoop { cycles }` + `LLMGenerate` + `LLMReview` |
+| `Generate` | `StrategyIR::Debate { roles }` | `FanOut { count }` + N×`LLMGenerate` (differentiated by role) + `Reducer { mode: Debate }` |
+| `Judge` | `StrategyIR::Single` | `Reducer { mode, model }` |
+
+The critical architectural point: **strategy lowering is not a 1:1 node mapping.** A single WorkflowIR `Generate` node with `strategy: Consensus` expands into 4+ PrimitiveNodes. The expansion logic is encapsulated in each strategy's `lower()` implementation.
+
+##### Relationship to ExecutionGraph
+
+```
+PrimitiveGraph                ExecutionGraph
+──────────────                ──────────────
+Durable IR                    Ephemeral derived artifact
+Compiler-visible              Scheduler-visible
+Optimization passes operate   Never modified after assembly
+Persisted in provenance       Discarded after execution (may be GC'd)
+```
+
+**ExecutionGraph is purely derived.** `to_execution_graph()` performs a mechanical transformation: structural primitives (FanOut, Barrier) are filtered out, their edges are rewired, and each remaining `PrimitiveNode` is mapped to an `ExecutionNode` with deterministic UUIDs.
+
+**Node ID derivation**: ExecutionNode UUIDs are deterministically derived from the graph hash and node index to ensure identical PrimitiveGraphs always produce identical ExecutionGraphs:
+
+```rust
+// src/compiler/ir/primitive_ir.rs
+pub fn to_execution_graph(&self, strategy, retry_policy, fallback, base_config) -> ExecutionGraph {
+    let graph_hash = self.compute_hash();
+    // ...
+    for (idx, pn) in self.nodes.iter().enumerate() {
+        let uid = Uuid::from_u128(graph_hash as u128 ^ idx as u128);
+        // ...
+    }
+    ExecutionGraph {
+        graph_id: Uuid::from_u128(graph_hash as u128),
+        // ...
+        primitive_graph_hash: graph_hash,
+    }
+}
+```
+
+**Structural primitive filtering**: `FanOut { count }` and `Barrier { ... }` nodes are excluded from the ExecutionGraph. FanOut edges are forwarded directly to their consumer; Barrier nodes are collapsed — their incoming edges connect directly to their outgoing targets. This ensures the scheduler never sees structural primitives:
+
+| PrimitiveNodeKind | ExecutionGraph presence | Rationale |
+|-------------------|------------------------|-----------|
+| `LLMGenerate` | Included | Core execution unit |
+| `LLMReview` | Included | Core execution unit |
+| `Reducer` | Included as `LLMJudge` | Strategy adjudication |
+| `FeedbackLoop` | Included as `Loop` | Iteration control |
+| `ConditionalBranch` | Included as `Conditional` | Branch routing |
+| `FanOut` | **Filtered out** | Structural — parallelism is implicit in the edge topology |
+| `Barrier` | **Filtered out** | Structural — edges rewired to directly connect producers to consumers |
+
+```rust
+pub struct ExecutionGraph {
+    pub graph_id: Uuid,                     // Derived from graph_hash
+    pub nodes: Vec<ExecutionNode>,
+    pub edges: Vec<ExecutionEdge>,
+    pub metadata: GraphMetadata,
+    pub total_tokens: u64,
+    pub total_cost: u64,
+    pub primitive_graph_hash: u64,          // Provenance fingerprint
+}
+```
+
+The `graph_id` field, derived from `Uuid::from_u128(graph_hash as u128)`, provides a human-readable identifier that is deterministic across identical graphs. The `primitive_graph_hash` field preserves the raw hash for provenance comparison.
+
+#### Lowering with StrategyIR
+
+Lowering is not a simple 1:1 node translation. For each WorkflowIR node, the compiler:
+
+1. Extracts the node's `strategy` and configuration parameters
+2. Constructs a `StrategyIR` enum — a strategy-neutral intermediate representation of the node's intent
+3. Calls `Strategy::lower(&strategy_ir, &ctx)` which returns a `PrimitiveGraph` fragment
+4. Merges all fragments into the final `PrimitiveGraph`
+
+```rust
+// src/compiler/ir/strategy_ir.rs
+pub enum StrategyIR {
+    Single,
+    Consensus { count: u32 },
+    Reflection { max_cycles: u32 },
+    Debate { roles: Vec<DebateRole> },
+    ReAct { max_iterations: u32 },
+    Chain { stages: Vec<StrategyIR> },
+    Custom { name: String, config: serde_json::Value },
+}
+```
+
+The `Strategy` trait receives `&StrategyIR` (not `&ExecutionNode`) because strategies should not depend on scheduling metadata:
+
+```rust
+// src/strategies/mod.rs
+pub trait Strategy: Send + Sync {
+    fn descriptor(&self) -> StrategyDescriptor;
+    fn lower(&self, ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic>;
+}
+```
+
+#### Transactional Compiler with Optimization Pipeline
+
+The `DefaultCompiler` implements a **validate → resolve → lower → optimize → assemble** pipeline with snapshot-and-rollback transactional semantics:
 
 ```rust
 // src/compiler/mod.rs
 async fn compile(&self, ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
-    let snapshot = ir.clone();    // Pre-pass snapshot
+    let snapshot = ir.clone();                             // Pre-pass snapshot
     let mut current = ir;
     for pass in &self.passes {
         match pass.apply(current.clone()).await {
             Ok(next) => { current = next; }
-            Err(e) => {
-                // Transaction rolled back to initial IR snapshot
-                return Err(e);
-            }
+            Err(e) => { return Err(e); }                   // Rolled back to IR snapshot
         }
     }
-    lower_to_graph(current)       // Final IR → ExecutionGraph lowering
+    let primitive = self.lower(current).await?;            // WorkflowIR → PrimitiveGraph (via StrategyIR)
+    let primitive = self.optimize(primitive).await?;       // Optimization passes
+    Ok(primitive.to_execution_graph(...))                  // PrimitiveGraph → ExecutionGraph
 }
 ```
 
+#### Compiler Pipeline Flow
+
+The compiler transforms a `WorkflowIR` plan into an executable `ExecutionGraph` through four sequential phases:
+
+```mermaid
+graph LR
+    subgraph "Validation"
+        V1["ConstraintValidation"]
+        V2["ControlFlowValidation"]
+    end
+    subgraph "Resolution"
+        R1["ModelResolution"]
+        R2["BudgetOptimisation"]
+    end
+    subgraph "Lowering"
+        L["LowerToGraph"]
+    end
+    subgraph "Optimization"
+        O1["DeadNodeElimination"]
+        O2["FanOutConsolidation"]
+    end
+    subgraph "Assembly"
+        A["PrimitiveToExecution"]
+    end
+
+    WORKFLOW_IR["WorkflowIR"] --> V1 --> V2 --> R1 --> R2 --> L --> O1 --> O2 --> A --> EXEC_GRAPH["ExecutionGraph"]
+
+    style WORKFLOW_IR fill:#7d3c98,color:#fff
+    style EXEC_GRAPH fill:#1a5276,color:#fff
+```
+
+Each arrow represents a pass application. The pipeline is **linear and sequential** — no pass reordering, no concurrent passes, no iteration. This ensures deterministic output for identical inputs.
+
 #### Compiler Pass Pipeline
 
-| Pass | Struct | Responsibility |
-|------|--------|---------------|
-| 1 | `ConstraintValidationPass` | Rejects empty IR graphs |
-| 2 | `ControlFlowValidationPass` | Validates structural invariants for `Conditional`, `Loop`, `Split`, `Join`, `Barrier` nodes; runs **3-color DFS cycle detection** |
-| 3 | `ModelResolutionPass` | Binds unresolved `node.model = None` to catalog entries based on `ModelRequirements` |
-| 4 | `BudgetOptimisationPass` | Pre-flight check against `ResourceManager::can_afford()` |
+| # | Phase | Pass | Struct | Responsibility |
+|---|-------|------|--------|---------------|
+| 1 | **Validation** | V1 | `ConstraintValidationPass` | Rejects empty IR graphs |
+| 2 | **Validation** | V2 | `ControlFlowValidationPass` | Structural invariants + 3-color DFS cycle detection |
+| 3 | **Resolution** | R1 | `ModelResolutionPass` | Binds unresolved `node.model = None` to catalog entries |
+| 4 | **Resolution** | R2 | `BudgetOptimisationPass` | Pre-flight check against `ResourceManager::can_afford()` |
+| 5 | **Lowering** | L | `LowerToGraphPass` | WorkflowIR → PrimitiveGraph conversion |
+| 6 | **Optimization** | O1 | `DeadNodeEliminationPass` | Removes nodes unreachable from first node |
+| 7 | **Optimization** | O2 | `FanOutConsolidationPass` | Merges adjacent FanOuts, removes single-consumer FanOuts |
+| 8 | **Assembly** | A | `PrimitiveToExecutionPass` | PrimitiveGraph → ExecutionGraph with hash fingerprinting |
+
+#### Optimization Pass Contract
+
+All optimization passes implement `OptimizationPass` with goal introspection and pre/post-condition verification:
+
+```rust
+pub enum OptimizationGoal {
+    DeadCodeElimination, Consolidation, Inlining,
+    StrengthReduction, Parallelization, Specialization,
+}
+
+pub trait OptimizationPass: Send + Sync {
+    fn goal(&self) -> OptimizationGoal;
+    fn preconditions(&self) -> Vec<&'static str>;
+    fn postconditions(&self) -> Vec<&'static str>;
+    fn optimize(&self, graph: &PrimitiveGraph) -> Result<PrimitiveGraph, CompilerError>;
+}
+```
+
+#### Optimization Pipeline Safety
+
+The `OptimizationPipeline` applies passes sequentially with rollback safety:
+
+1. **Snapshot**: `graph.clone()` before each pass
+2. **Apply**: `pass.optimize(&snapshot)`
+3. **Rollback**: On any failure, return the last known-good graph (not the IR snapshot)
+4. **Short-circuit**: On catastrophic error, fall back to the unoptimized `PrimitiveGraph`
+
+Seven legality rules govern all v0.9 optimization passes (ADR-020 §3.2): correctness preservation, type preservation, termination guarantee, idempotency, observability preservation, bounded overhead, and determinism.
 
 #### 3-Color DFS Cycle Detection
 
@@ -632,6 +921,24 @@ pub struct WorkQueue {
 - **Dependency tracking**: Nodes become `ready` when `satisfied_incoming == total_incoming`
 - **Loop body reset**: `reset_loop_body(&[Uuid])` clears completion/progress/failure state for loop iteration re-execution
 - **Conditional routing**: `mark_conditional_completed()` + selective `activate_edge()` enables branch-only activation
+
+**Node state machine**:
+
+Each node in the `WorkQueue` transitions through four states during its lifecycle:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Ready: All incoming deps satisfied
+    Ready --> Running: buffer_unordered dispatch
+    Running --> Completed: Success
+    Running --> Failed: Error / budget exceeded
+    Failed --> Pending: Retry (if retries < max_retries)
+    Failed --> Fallback: Fallback node configured
+    Completed --> Pending: Loop body reset (reset_loop_body)
+```
+
+The `Pending → Ready → Running → Completed` path is the happy path. The `Failed → Pending` transition represents retry with exponential backoff. The `Completed → Pending` transition happens only for loop body nodes during `reset_loop_body`.
 
 **Concurrent execution** is achieved via `stream::buffer_unordered(self.max_concurrent)` (default 16), enabling parallel node execution within a single DAG level.
 
@@ -824,43 +1131,95 @@ Routing logic: model names prefixed with `opencode/` or `zen/` route to ZenProvi
 
 ### 3.7 Reasoning Strategies
 
-All strategies implement the `Strategy` trait, producing `ExecutionSubgraph` DAGs:
+All strategies implement the `Strategy` trait, producing `PrimitiveGraph` fragments that are assembled by the `LowerToGraphPass` into the full graph:
 
 ```rust
+// src/strategies/mod.rs
 pub trait Strategy: Send + Sync {
-    fn apply(&self, node: &ExecutionNode) -> ExecutionSubgraph;
+    fn descriptor(&self) -> StrategyDescriptor;
+    fn lower(&self, ir: &StrategyIR, ctx: &CompilationContext)
+        -> Result<PrimitiveGraph, CompilerDiagnostic>;
+}
+
+pub struct StrategyDescriptor {
+    pub name: String,
+    pub parallelism: Parallelism,
+    pub requires_barrier: bool,
+    pub supports_streaming: StreamingMode,
+    pub retry_policy: RetryPolicy,
+    pub expected_outputs: Vec<ArtifactKind>,
 }
 ```
 
+The `lower()` method receives a `StrategyIR` (not `ExecutionNode`) — a strategy-neutral enum that captures the node's intent without exposing execution metadata:
+
+```rust
+pub enum StrategyIR {
+    Single,
+    Consensus { count: u32 },
+    Reflection { max_cycles: u32 },
+    Debate { roles: Vec<DebateRole> },
+    ReAct { max_iterations: u32 },
+    Chain { stages: Vec<StrategyIR> },
+    Custom { name: String, config: serde_json::Value },
+}
+```
+
+Each strategy's `lower()` implementation expands its `StrategyIR` into a `PrimitiveGraph` fragment using compiler primitives (`FanOut`, `Reducer`, `FeedbackLoop`, `Barrier`, etc.). These fragments are then merged by the `LowerToGraphPass` into the canonical graph.
+
+#### StrategyDescriptor
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `name` | `String` | Human-readable strategy name (e.g., `"consensus"`) |
+| `parallelism` | `Parallelism` | `Sequential`, `Fixed(u32)`, or `Unlimited` |
+| `requires_barrier` | `bool` | Whether the strategy requires a Barrier synchronization primitive |
+| `supports_streaming` | `StreamingMode` | `None`, `IncrementalArtifacts`, `IncrementalReduction`, or `Full` |
+| `retry_policy` | `RetryPolicy` | Default retry behavior for nodes produced by this strategy |
+| `expected_outputs` | `Vec<ArtifactKind>` | Typed artifacts this strategy produces |
+
 #### Strategy Catalog
 
-| Strategy | Struct | Subgraph Topology |
-|----------|--------|-------------------|
-| **Single** | `SingleStrategy` | `[node]` — 1:1 passthrough |
-| **Consensus** | `ConsensusStrategy { count: u32 }` | `N × LLMGenerate ──→ LLMJudge` (parallel fan-out + adjudication) |
-| **Reflection** | `ReflectionStrategy { max_reflection_cycles, per_leg_timeout_ms }` | `LLMGenerate → LLMReview → Gate` (generator-reviewer loop) |
-| **Debate** | `DebateStrategy { debaters, judge }` | `N × Proposer(Strategy) ──→ Judge(Strategy)` (composable nested strategies) |
-| **ReAct** | `ReActStrategy { max_iterations, tool_registry }` | `Loop ↔ LLMGenerate` with tool execution (reason-act cycle) |
-| **Chain** | `ChainStrategy { stages: Vec<Box<dyn Strategy>> }` | Sequential pipeline of strategies |
+| Strategy | Struct | PrimitiveGraph Topology |
+|----------|--------|------------------------|
+| **Single** | `SingleStrategy` | `LLMGenerate { model, role }` — 1:1 passthrough |
+| **Consensus** | `ConsensusStrategy` | `FanOut { count }` → N×`LLMGenerate` → `Reducer { mode: Consensus }` |
+| **Reflection** | `ReflectionStrategy` | `FeedbackLoop { max_cycles }` → `LLMGenerate` + `LLMReview` (self-review loop) |
+| **Debate** | `DebateStrategy` | `FanOut` → N×`LLMGenerate` (differentiated by role/stance) → `Reducer { mode: Debate }` |
+| **ReAct** | `ReActStrategy` | `FeedbackLoop { max_iterations }` ↔ `LLMGenerate` (reason-act cycle) |
+| **Chain** | `ChainStrategy` | Sequential pipeline — N stages, each produced by a nested strategy's `lower()` |
+| **Fusion** | `FusionStrategy` | N×`LLMGenerate` (diverse models via `ModelHints`) → `Reducer` |
 
 > [!NOTE]
-> `StrategyKind::Fusion` exists as a variant in the `StrategyKind` enum but has **no corresponding implementation struct**. It is parseable by `DynamicPlanner` but would fall through to passthrough execution in `DefaultExecutor::resolve_strategy()`. This is a reserved/dead variant for future use.
+> Since v0.9, `StrategyKind::Fusion` has a full implementation. `FusionStrategy` accepts `ModelAvailability`/`ModelCapability` hints via `with_model_hints()` builder, and uses `CompilationContext.max_parallelism` for scaling.
 
 #### Consensus Strategy Detail
 
 ```rust
 impl Strategy for ConsensusStrategy {
-    fn apply(&self, node: &ExecutionNode) -> ExecutionSubgraph {
-        // Create `count` parallel LLMGenerate nodes
-        for _ in 0..self.count {
-            nodes.push(ExecutionNode { kind: LLMGenerate, strategy: Single, .. });
+    fn descriptor(&self) -> StrategyDescriptor {
+        StrategyDescriptor {
+            name: "consensus".into(),
+            parallelism: Parallelism::Fixed(self.descriptor.count),
+            requires_barrier: false,
+            supports_streaming: StreamingMode::IncrementalReduction,
+            retry_policy: RetryPolicy { max_retries: 2, backoff_ms: 1000 },
+            expected_outputs: vec![ArtifactKind::Consensus],
         }
-        // Create single LLMJudge node
-        nodes.push(ExecutionNode { kind: LLMJudge, strategy: Consensus, .. });
-        // All generators → judge
-        for gen_id in &gen_ids {
-            edges.push(ExecutionEdge { from: *gen_id, to: judge_id, .. });
-        }
+    }
+    fn lower(&self, ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
+        let count = match ir {
+            StrategyIR::Consensus { count } => *count,
+            _ => self.descriptor.count,
+        };
+        let mut graph = PrimitiveGraph::new("consensus");
+        let fanout = graph.add_node(PrimitiveNode {
+            id: "fanout".into(),
+            kind: PrimitiveNodeKind::FanOut { count },
+            artifact_kind: None,
+        });
+        // ... generator nodes, reducer node, edges ...
+        Ok(graph)
     }
 }
 ```
@@ -869,13 +1228,35 @@ impl Strategy for ConsensusStrategy {
 
 ```rust
 impl Strategy for ReActStrategy {
-    fn apply(&self, node: &ExecutionNode) -> ExecutionSubgraph {
-        let loop_node = ExecutionNode { kind: Loop, config: { max_iterations }, .. };
-        let gen_node  = ExecutionNode { kind: LLMGenerate, config: { available_tools }, .. };
-        edges = [
-            loop_id → gen_id,                         // Loop body entry
-            gen_id → loop_id (condition: "loop"),      // Loop back-edge
-        ];
+    fn descriptor(&self) -> StrategyDescriptor {
+        StrategyDescriptor {
+            name: "react".into(),
+            parallelism: Parallelism::Sequential,
+            requires_barrier: false,
+            supports_streaming: StreamingMode::IncrementalArtifacts,
+            retry_policy: RetryPolicy { max_retries: 2, backoff_ms: 1000 },
+            expected_outputs: vec![ArtifactKind::Generic],
+        }
+    }
+    fn lower(&self, ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
+        let max_iterations = match ir {
+            StrategyIR::ReAct { max_iterations } => *max_iterations,
+            _ => 10,
+        };
+        let mut graph = PrimitiveGraph::new("react");
+        let loop_node = graph.add_node(PrimitiveNode {
+            id: "loop".into(),
+            kind: PrimitiveNodeKind::FeedbackLoop { max_iterations },
+            artifact_kind: None,
+        });
+        let gen_node = graph.add_node(PrimitiveNode {
+            id: "generator".into(),
+            kind: PrimitiveNodeKind::LLMGenerate { model: ctx.available_models.first().cloned().unwrap_or_default(), role: Some("Agent".into()) },
+            artifact_kind: Some("Generic".into()),
+        });
+        graph.add_edge(loop_node, gen_node, None);
+        graph.add_edge(gen_node, loop_node, Some("loop".into()));
+        Ok(graph)
     }
 }
 ```
@@ -1059,6 +1440,20 @@ pub struct PluginManifest {
 
 The `PluginManager` discovers manifests from the `plugins/` directory, loads native dynamic libraries via `libloading`, and instantiates WASM modules for sandboxed execution.
 
+#### WASM Strategy Integration (v0.9)
+
+Since v0.9, WASM modules can export custom strategies via a 5-function FFI bridge:
+
+| Export | Signature | Purpose |
+|--------|-----------|---------|
+| `memory` | `→ wasmtime::Memory` | Shared linear memory for argument passing |
+| `fusion_strategy_name` | `(ptr, len) → ()` | Returns strategy name string |
+| `fusion_strategy_descriptor` | `(ptr, len) → ()` | Returns JSON `StrategyDescriptor` |
+| `fusion_strategy_lower` | `(ptr, len) → ()` | Returns JSON `PrimitiveGraph` lowering |
+| `alloc` | `(size) → ptr` | Memory allocator for host-to-guest data transfer |
+
+`PluginManager::load_wasm_plugin()` reads a `.wasm` path from `StrategyConfig.wasm_path`, instantiates the module, and wraps exports as a `WasmStrategy` implementing the `Strategy` trait. All WASM calls execute inside `tokio::task::spawn_blocking` to prevent blocking the Tokio worker loop.
+
 ---
 
 ### 3.11 Tools & Registry
@@ -1120,13 +1515,31 @@ All database operations use `tokio::task::spawn_blocking` to offload synchronous
 #### Prometheus Metrics
 
 The `FusionMetrics` collector exposes:
-- `requests_total` (counter)
-- `request_duration_seconds` (histogram)
-- `errors_total` (counter)
-- `tokens_total` (counter)
-- `provider_latency_seconds` (histogram)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `fusionrouter_requests_total` | Counter | — | Total requests processed |
+| `fusionrouter_request_duration_seconds` | Histogram | — | Request latency distribution |
+| `fusionrouter_errors_total` | Counter | — | Total errors |
+| `fusionrouter_tokens_total` | Counter | — | Total tokens consumed |
+| `fusionrouter_provider_latency_seconds` | Histogram | `provider` | Provider-level latency |
+| `fusionrouter_strategy_latency_seconds` | Histogram | `strategy` | Per-strategy latency (Single, Consensus, Reflection, Debate, ReAct, Chain, Fusion) |
+| `fusionrouter_strategy_errors_total` | Counter | `strategy` | Per-strategy error count |
+| `fusionrouter_graph_hash_count` | Counter | `graph_hash` | Execution graph provenance distribution |
 
 Exposed at `GET /metrics` in Prometheus text format.
+
+#### Structured Tracing
+
+Key pipeline stages emit structured tracing events with fields for operational analysis:
+
+| Event | Fields | Trigger |
+|-------|--------|---------|
+| `pipeline.started` | `request_id` | Request enters pipeline |
+| `pipeline.completed` | `request_id`, `latency_ms`, `success` | Request exits pipeline |
+| `pipeline.failed` | `request_id`, `stage`, `error` | Pipeline error |
+| `strategy.lowered` | `request_id`, `strategy`, `node_count` | Strategy lowering complete |
+| `strategy.executed` | `request_id`, `strategy`, `latency_ms`, `success` | Strategy execution complete |
 
 #### Tracing
 
@@ -1137,6 +1550,46 @@ Exposed at `GET /metrics` in Prometheus text format.
 #### Audit Log
 
 `AuditLog` implements a bounded ring buffer emitting JSON Lines audit entries for compliance.
+
+---
+
+### 3.13 Artifact Model
+
+Since v0.9, every `ExecutionResult` carries an optional **artifact vector** — typed, opaque payloads produced during execution.
+
+```rust
+// src/types/artifact.rs
+pub trait Artifact: Send + Sync {
+    fn artifact_type(&self) -> &'static str;
+}
+
+pub struct ExecutionResult {
+    pub answer: String,
+    pub metrics: ExecutionMetrics,
+    pub provenance: Provenance,
+    pub stored_artifacts: Vec<Box<dyn Artifact>>,   // v0.9
+}
+```
+
+**Clone semantics**: `ExecutionResult` implements `Clone` by skipping `stored_artifacts` (trait objects are not `Clone`). The `Clone` impl copies all scalar fields and sets `stored_artifacts` to an empty vec.
+
+**Provenance schema** (per `docs/decisions/provenance-schema.md`):
+
+v0.9 provenance captures the full **compiler identity** and **optimization history** that produced a given execution:
+
+| Field | Type | Source | Purpose |
+|-------|------|--------|---------|
+| `graph_hash` | `u64` | `PrimitiveGraph::compute_hash()` | Uniquely identifies the graph topology — used as cache key and replay identifier |
+| `primitive_graph_version` | `semver::Version` | Compiler version at lowering time | Tracks the compiler generation that produced this graph |
+| `pass_manifest` | `Vec<String>` | Compiler pass pipeline | Ordered list of all passes applied (e.g., `["constraint_validation", "model_resolution", "dead_node_elimination", "fan_out_consolidation"]`) |
+| `strategy` | `StrategyDescriptor` | Strategy lowering | Name + kind + version of the strategy that produced the final execution |
+| `compiler_build` | `String` (v0.10+) | `env!("CARGO_PKG_VERSION")` | The exact compiler binary version — enables confirming which build produced the graph |
+| `optimization_level` | `String` (v0.10+) | Compiler configuration | The optimization profile used (e.g., `"-O1"`, `"-O2"`) |
+| `compiler_git_sha` | `String` (v0.10+) | `env!("VERGEN_GIT_SHA")` | Source commit at compile time — enables exact replay from source |
+| `pass_order` | `Vec<String>` (v0.10+) | Compiler pass pipeline | Canonical pass ordering fingerprint — independent of pass_manifest for ordering verification |
+
+> [!NOTE]
+> Fields marked v0.10+ are **reserved** in the provenance schema but not yet populated at runtime. The struct definition includes them as `Option<String>` to maintain forward compatibility without breaking the ABI. See `docs/adr/ADR-017-execution-runtime-abi.md` for ABI stability requirements.
 
 ---
 
@@ -1172,7 +1625,8 @@ x-api-key: sk-fusion-xxx
 | **5b** | **Compilation: ControlFlowValidation** | No Conditional/Loop/Split/Join/Barrier nodes → structural checks skipped. No edges → DFS cycle detection is trivially satisfied | ✓ |
 | **5c** | **Compilation: ModelResolution** | All 5 nodes already have `model = Some("claude-sonnet-4-20250514")` from planner → no catalog lookup needed | Models pre-bound |
 | **5d** | **Compilation: BudgetOptimisation** | `ResourceManager::can_afford()` → estimated cost $0.05, tokens 5000 → daily budget sufficient | ✓ |
-| **5e** | **Compilation: Lowering** | `lower_to_graph()` maps `IRNodeKind::Generate` → `ExecutionNodeKind::LLMGenerate`, `IRNodeKind::Judge` → `ExecutionNodeKind::LLMJudge`. Default `RetryPolicy { max_retries: 2, backoff_ms: 1000 }` applied. Edge-free IR becomes a graph with all nodes having 0 incoming edges | `ExecutionGraph` with 5 independent nodes |
+| **5e** | **Compilation: Lowering** | `LowerToGraphPass` maps `IRNodeKind::Generate` → `PrimitiveNodeKind::LLMGenerate`, `IRNodeKind::Judge` → `PrimitiveNodeKind::LLMJudge`. Default `RetryPolicy { max_retries: 2, backoff_ms: 1000 }` applied. Produces `PrimitiveGraph` with 5 nodes, no edges | `PrimitiveGraph` (canonical lowered IR) |
+| **5f** | **Compilation: Optimization** | `DeadNodeEliminationPass` — all 5 nodes reachable from first node → no removals. `FanOutConsolidationPass` — no FanOut nodes → no transformations. `PrimitiveToExecutionPass` assembles final `ExecutionGraph` with `primitive_graph_hash` fingerprint | `ExecutionGraph` with 5 independent nodes |
 | **6** | **Resource Reservation** | `try_reserve()` under `Mutex` → atomically reserves estimated cost/tokens. `BudgetEnvelope::new()` → per-request ceilings. `ResourceGuard` created (RAII) | Guard active; auto-releases on any failure path |
 | **7** | **Scheduling & Execution** | `WorkQueue::new(graph)` → all 5 nodes have 0 incoming deps → all immediately ready. `buffer_unordered(16)` dispatches all 5 concurrently. **Strategy resolution at execution time**: `DefaultExecutor::resolve_strategy()` expands each node's `StrategyKind` — the 3 Single nodes pass through 1:1, the Reflection node expands to a Generate→Review→Gate subgraph, the Consensus-Judge node evaluates all outputs. Each LLM call routes via `ProviderRouter` → CircuitBreaker `can_execute()` → OpenRouter API. Tool calls detected in responses are dispatched to `ToolRegistry` (built from server config, not request payload) | Budget envelope checked after each node; cancellation token polled every iteration |
 | **8** | **Telemetry** | `ExecutionRecord` written to SQLite via `spawn_blocking` for each completed node | WAL mode ensures non-blocking reads |
@@ -1247,8 +1701,13 @@ fusion-router/
 │   │   └── workflow.rs                # WorkflowPlanner: Static/Dynamic/Hybrid mode orchestrator over WorkflowRegistry
 │   │
 │   ├── compiler/
-│   │   ├── mod.rs                     # Compiler trait, DefaultCompiler (transactional pass pipeline), lower_to_graph
-│   │   └── passes.rs                  # ConstraintValidation, ControlFlowValidation (3-color DFS), ModelResolution, BudgetOptimisation
+│   │   ├── mod.rs                     # Compiler trait, DefaultCompiler (lower → optimize → assemble pipeline)
+│   │   ├── passes.rs                  # ConstraintValidation, ControlFlowValidation, ModelResolution, BudgetOptimisation, LowerToGraph, PrimitiveToExecution
+│   │   ├── primitive_graph.rs         # PrimitiveGraph: canonical lowered IR with to_execution_graph()
+│   │   └── optimization/
+│   │       ├── mod.rs                 # OptimizationPass trait, OptimizationGoal enum, OptimizationPipeline (rollback-safe)
+│   │       ├── dead_node_elimination.rs  # DeadNodeEliminationPass: removes unreachable nodes
+│   │       └── fan_out_consolidation.rs # FanOutConsolidationPass: merges adjacent FanOuts
 │   │
 │   ├── scheduler/
 │   │   ├── mod.rs                     # Scheduler trait
@@ -1259,13 +1718,14 @@ fusion-router/
 │   │   └── mod.rs                     # Executor trait, DefaultExecutor: strategy resolution, LLM dispatch, tool invocation, cache integration
 │   │
 │   ├── strategies/
-│   │   ├── mod.rs                     # Strategy trait definition
+│   │   ├── mod.rs                     # Strategy trait: descriptor() + lower() → PrimitiveGraph
 │   │   ├── single.rs                  # 1:1 passthrough
 │   │   ├── consensus.rs               # N×Generate → Judge (parallel fan-out)
 │   │   ├── reflection.rs              # Generate → Review → Gate (self-improvement loop)
 │   │   ├── debate.rs                  # N×Proposer → Judge (composable debate)
 │   │   ├── react.rs                   # Loop ↔ Generate (reason-act tool cycle)
-│   │   └── chain.rs                   # Sequential strategy pipeline
+│   │   ├── chain.rs                   # Sequential strategy pipeline
+│   │   └── fusion.rs                  # FusionStrategy: N×diverse Generate with ModelHints (v0.9)
 │   │
 │   ├── providers/
 │   │   ├── mod.rs                     # ChatProvider/Model traits, ModelCapabilities, ModelRequirements, ModelPricing
@@ -1322,9 +1782,10 @@ fusion-router/
 │   │   └── backoff.rs                 # Exponential backoff with jitter
 │   │
 │   ├── types/
-│   │   ├── mod.rs                     # Core domain types: ChatCompletionRequest, WorkflowIR, ExecutionGraph, etc.
+│   │   ├── mod.rs                     # Core domain types: ChatCompletionRequest, WorkflowIR, ExecutionGraph, PrimitiveGraph, etc.
+│   │   ├── artifact.rs               # Artifact trait, stored_artifacts on ExecutionResult (v0.9)
 │   │   ├── error.rs                   # PipelineStage, RouterError (stage attribution, HTTP status mapping)
-│   │   └── execution.rs               # ExecutionIntent, OutputPreferences, ExecutionReport
+│   │   └── execution.rs               # ExecutionIntent, OutputPreferences, ExecutionReport, Provenance
 │   │
 │   ├── models/
 │   │   └── mod.rs                     # Reserved for phase 6 model definitions
@@ -1337,9 +1798,12 @@ fusion-router/
 │       └── request_id.rs              # x-request-id generation/passthrough
 │
 ├── tests/                             # Integration tests
+│   └── golden/
+│       └── optimization.rs            # 16 golden tests for DeadNodeElimination + FanOutConsolidation
 ├── benches/
 │   ├── compilation.rs                 # Compiler pass benchmarks
-│   └── cache.rs                       # Semantic cache benchmarks
+│   ├── cache.rs                       # Semantic cache benchmarks
+│   └── strategy_lowering.rs           # Criterion benchmarks: 10 scenarios across 7 strategy types
 ├── docs/                              # Additional documentation
 ├── scripts/                           # Utility scripts
 └── deny.toml                          # cargo-deny configuration
@@ -1364,29 +1828,23 @@ This section systematically cross-references every subsystem, trait interface, a
 
 ### 7.1 🔴 Design Gaps (Critical Functional Holes)
 
-#### Gap #1: `ExecutionNodeKind::Aggregate` Missing Implementation
-* **Code Reality**: `ExecutionNodeKind::Aggregate` exists in `src/types/mod.rs` (line 179) and matches an empty arm in `DefaultExecutor::execute_node` (`src/executor/mod.rs` line 225). Any `ExecutionGraph` containing an `Aggregate` node completes with `NodeState::Succeeded` but emits `output: None`, dropping upstream data.
-* **Architectural Resolution**:
-  1. **Compiler Safeguard**: Add an explicit check in `ControlFlowValidationPass` (`src/compiler/passes.rs`):
-     ```rust
-     if node.kind == ExecutionNodeKind::Aggregate {
-         return Err(CompilerError::UnsupportedNodeKind {
-             node_id: node.id,
-             kind: "Aggregate".to_string(),
-             reason: "Aggregate node engine deferred to v0.9.0".to_string(),
-         });
-     }
-     ```
-  2. **v0.9.0 Reducer Specification**: `AggregateNode` will consume outputs from all incoming fan-in edges, serializing them into a JSON array `{"aggregated_outputs": [...]}` passed to downstream nodes.
+#### Gap #1: Aggregation / Reducer Node (Removed from v0.9 Scope)
+* **Code Reality**: `ExecutionNodeKind::Aggregate` was removed from the v0.9 runtime primitive set during the scheduler primitive consolidation. The canonical 10 primitives (`LLMGenerate`, `LLMReview`, `LLMJudge`, `Transform`, `Gate`, `Conditional`, `Loop`, `Split`, `Join`, `Barrier`) now cover all scheduling behavior without an explicit aggregation node. Fan-in data merging (previously planned as `Aggregate`) is handled at the strategy level: strategies that produce multiple outputs (Consensus, Debate, Fusion) embed their own adjudication logic in the lowering step.
+* **v0.9 Status**: Gap closed by scope reduction — aggregation is a strategy-level concern, not a scheduler primitive.
+* **Architectural Rationale**:
+   1. **Strategy-level adjudication**: ConsensusStrategy lowers to LLMJudge that evaluates all generator outputs within the subgraph. No separate aggregation node is needed.
+   2. **Primitive minimality**: Reducing from 12 to 10 primitives lowers the compiler's validation surface area (fewer node kinds to validate in ControlFlowValidationPass) and simplifies the scheduler's dispatch logic.
+   3. **Future consideration**: If cross-strategy aggregation is required in a later release, a new primitive can be added at that time through the standard ADR process. The compiler validation pass would need a corresponding update.
 
 #### Gap #2: `DynamicPlanner` Emits Unhandled `StrategyKind::Fusion` Nodes
 * **Code Reality**: `DynamicPlanner::parse_workflow_ir()` (`src/planner/dynamic_planner.rs` line 148) parses `"Fusion"` into `StrategyKind::Fusion`. In `DefaultExecutor::resolve_strategy()`, `self.strategies.get(&node.strategy)` returns `None` for `Fusion` (no struct registered), causing a silent fall-through to single-node passthrough (`ExecutionSubgraph { nodes: vec![node.clone()], edges: vec![] }`).
+* **v0.9 Status**: **Resolved** — `FusionStrategy` is implemented at `src/strategies/fusion.rs` with `ModelAvailability`/`ModelCapability` hints and `with_model_hints()` builder. The `lower()` method produces a heterogeneous `N × LLMGenerate → LLMJudge` PrimitiveGraph. The `active_count()` method handles parallelism scaling.
 * **Architectural Resolution**:
-  1. **Compiler Validation Pass**: Update `ControlFlowValidationPass` to validate that every node's `strategy` is registered in `Executor::strategies`.
-  2. **Planner Fallback Sanitization**: Update `DynamicPlanner::parse_workflow_ir()` to clamp unknown or unregistered strategies to `StrategyKind::Single`:
-     ```rust
-     "Fusion" => StrategyKind::Single, // Clamped until Fusion strategy engine is implemented
-     ```
+   1. **Compiler Validation Pass**: Update `ControlFlowValidationPass` to validate that every node's `strategy` is registered in `Executor::strategies`.
+   2. **Planner Fallback Sanitization**: Update `DynamicPlanner::parse_workflow_ir()` to clamp unknown or unregistered strategies to `StrategyKind::Single`:
+      ```rust
+      "Fusion" => StrategyKind::Fusion, // Now resolved — routes to FusionStrategy
+      ```
 
 #### Gap #3: `SearchTool` Mock Implementation
 * **Code Reality**: `SearchTool` (`src/tools/builtin.rs`) returns hardcoded mock search JSON.
@@ -1538,18 +1996,55 @@ This section systematically cross-references every subsystem, trait interface, a
 
 ---
 
-### 7.5 v0.9.0 Architectural Backlog Summary
+### 7.5 v0.9.0 Architectural Backlog — Resolved & Remaining
+
+#### Resolved in v0.9.0
+
+| Backlog Feature | Resolution |
+|----------------|------------|
+| **Fusion Strategy Engine** | `FusionStrategy` implemented at `src/strategies/fusion.rs` with `ModelAvailability`/`ModelCapability` hints |
+| **Provenance Schema** | `Provenance` struct on `ExecutionResult` with `graph_hash`, `primitive_graph_version`, `pass_manifest`, `strategy` |
+| **WASM Strategy Bridge** | 5-export FFI contract (`memory`, `fusion_strategy_name/descriptor/lower`, `alloc`) in `src/plugin/wasm.rs` |
+| **Per-Strategy Metrics** | `fusionrouter_strategy_latency_seconds` / `_errors_total` histograms + `graph_hash_count` counter |
+| **Optimization Passes** | `DeadNodeEliminationPass` + `FanOutConsolidationPass` under `OptimizationPipeline` with rollback safety |
+| **Artifact Model** | `Artifact` trait + `stored_artifacts: Vec<Box<dyn Artifact>>` on `ExecutionResult` |
+| **Golden Tests** | 16 golden tests for optimization passes across DNE + FanOut consolidation |
+| **Strategy Benchmarks** | 10 scenarios across 7 strategy types (512ns Single → 18µs Consensus/5) |
+| **Structured Tracing** | Pipeline events with `request_id`, `strategy`, `latency_ms`, `success` fields |
+
+#### Remaining for v0.10+
 
 | Backlog Feature | Target Component | Architectural Specification |
 |-----------------|------------------|-----------------------------|
 | **Streaming Metering** | `StreamingResourceGuard` | Token-counting transform wrapper around SSE stream channels |
 | **Hot-Reload Config** | `AppState.config` | `arc_swap::ArcSwap` re-parsing YAML configuration on `SIGHUP` |
 | **Planning Quota Metering** | `DynamicPlanner` | Deducting `zen-7b` planning tokens from request's `BudgetEnvelope` |
-| **Reducer Node Engine** | `AggregateNode` | Fan-in JSON merger combining upstream DAG outputs into array payload |
+| **Cross-Strategy Aggregation** | TBD | If fan-in merging across strategies is needed, a new primitive would follow the standard ADR process |
 | **Real Web Search** | `SearchTool` | Production Tavily / Serper API HTTP adapter replacing mock JSON |
 
 ---
 
-> **Document Revision 5 (Final v0.8.0 Baseline)**: Formally validated v0.8.0 specification baseline. Includes boot-time fail-fast validation for Ollama aliases, code comment contracts for reserved trait parameters, and structured v0.9.0 backlog mapping.
+> **Document Revision 6 (v0.9.0 Update)**: Baseline updated from v0.8.0 to v0.9.0. Covers compiler optimization framework (ADR-020), optimization pass pipeline, strategy trait migration (`apply()` → `lower()` → `PrimitiveGraph`), FusionStrategy implementation, Artifact trait integration, per-strategy metrics, structured tracing, WASM strategy bridge, and operator deployment docs. 444 tests passing with 0 warnings. Backlog items deferred to v0.10+.
+
+---
+
+### v0.9.0 References
+
+| Document | Purpose |
+|----------|---------|
+| `docs/adr/ADR-020-compiler-optimization-framework.md` | Optimization pass taxonomy, legality rules, pass contract, selection criteria |
+| `docs/adr/ADR-019-primitive-execution-graph-alignment.md` | PrimitiveGraph as canonical IR, apply() removal, to_execution_graph() |
+| `docs/adr/ADR-018-strategy-sdk.md` | Strategy SDK trait contract with lower() returning PrimitiveGraph |
+| `docs/adr/ADR-017-execution-runtime-abi.md` | ExecutionResult runtime ABI |
+| `docs/adr/ADR-007-error-handling.md` | Stage-attributed error model |
+| `docs/adr/ADR-008-telemetry.md` | Metrics, tracing, audit logging architecture |
+| `docs/adr/ADR-009-configuration.md` | Configuration loading and validation |
+| `docs/adr/ADR-010-plugin-system.md` | Plugin registry, manifest, WASM integration |
+| `docs/adr/ADR-011-testing-strategy.md` | Golden test framework, optimization pass testing |
+| `docs/adr/ADR-012-security-model.md` | Defense-in-depth security architecture |
+| `docs/decisions/provenance-schema.md` | ExecutionResult provenance field specification |
+| `docs/decisions/resource-guard-contract.md` | RAII Drop vs commit() semantics |
+| `docs/operator/deployment-guide.md` | Docker multi-stage build, K8s probes, production config |
+| `docs/roadmap-v0.9.md` | v0.9 roadmap status (✅ Complete) |
 
 

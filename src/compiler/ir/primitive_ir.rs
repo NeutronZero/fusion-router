@@ -1,7 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
+use uuid::Uuid;
+
+use crate::types::{
+    ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata, StrategyKind,
+    RetryPolicy, FallbackConfig,
+};
 
 pub const PRIMITIVE_GRAPH_VERSION: u16 = 1;
 
@@ -128,6 +135,146 @@ impl PrimitiveGraph {
             }
         }
         out
+    }
+
+    /// Deterministically produce an ExecutionGraph from this PrimitiveGraph.
+    /// Node UUIDs are derived from (graph_hash, node_index) so identical
+    /// PrimitiveGraphs always produce identical ExecutionGraphs.
+    pub fn to_execution_graph(
+        &self,
+        strategy: StrategyKind,
+        retry_policy: &RetryPolicy,
+        fallback: &Option<FallbackConfig>,
+        base_config: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> ExecutionGraph {
+        let graph_hash = self.compute_hash();
+
+        let skippable: HashSet<&str> = self
+            .nodes
+            .iter()
+            .filter(|n| {
+                matches!(
+                    n.kind,
+                    PrimitiveNodeKind::FanOut { .. } | PrimitiveNodeKind::Barrier { .. }
+                )
+            })
+            .map(|n| n.id.as_str())
+            .collect();
+
+        let mut id_to_uuid: std::collections::HashMap<&str, Uuid> = std::collections::HashMap::new();
+        let mut exec_nodes: Vec<ExecutionNode> = Vec::new();
+
+        for (idx, pn) in self.nodes.iter().enumerate() {
+            if skippable.contains(pn.id.as_str()) {
+                continue;
+            }
+            if id_to_uuid.contains_key(pn.id.as_str()) {
+                continue;
+            }
+
+            let uid = Uuid::from_u128(graph_hash as u128 ^ idx as u128);
+            id_to_uuid.insert(pn.id.as_str(), uid);
+
+            let (kind, model) = match &pn.kind {
+                PrimitiveNodeKind::LLMGenerate { model, role: _ } => {
+                    (ExecutionNodeKind::LLMGenerate, model.clone())
+                }
+                PrimitiveNodeKind::LLMReview { model } => {
+                    (ExecutionNodeKind::LLMReview, model.clone())
+                }
+                PrimitiveNodeKind::Reducer { model, .. } => {
+                    (ExecutionNodeKind::LLMJudge, model.clone())
+                }
+                PrimitiveNodeKind::FeedbackLoop { .. } => {
+                    (ExecutionNodeKind::Loop, String::new())
+                }
+                PrimitiveNodeKind::ConditionalBranch { .. } => {
+                    (ExecutionNodeKind::Conditional, String::new())
+                }
+                _ => continue,
+            };
+
+            let mut config = base_config.clone();
+            if let PrimitiveNodeKind::FeedbackLoop { max_iterations } = &pn.kind {
+                config.insert("max_iterations".into(), serde_json::json!(max_iterations));
+            }
+
+            exec_nodes.push(ExecutionNode {
+                id: uid,
+                kind,
+                strategy: strategy.clone(),
+                model,
+                retry_policy: retry_policy.clone(),
+                fallback: fallback.clone(),
+                config,
+            });
+        }
+
+        let mut incoming_edges: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        for pe in &self.edges {
+            incoming_edges
+                .entry(pe.to.as_str())
+                .or_default()
+                .push(pe.from.as_str());
+        }
+
+        let mut exec_edges: Vec<ExecutionEdge> = Vec::new();
+        for pe in &self.edges {
+            let from_skip = skippable.contains(pe.from.as_str());
+            let to_skip = skippable.contains(pe.to.as_str());
+
+            match (from_skip, to_skip) {
+                (false, false) => {
+                    if let (Some(&f), Some(&t)) =
+                        (id_to_uuid.get(pe.from.as_str()), id_to_uuid.get(pe.to.as_str()))
+                    {
+                        exec_edges.push(ExecutionEdge {
+                            from: f,
+                            to: t,
+                            condition: pe.condition.clone(),
+                        });
+                    }
+                }
+                (false, true) => {
+                    if let Some(&from_id) = id_to_uuid.get(pe.from.as_str()) {
+                        let after_barrier: Vec<&str> = self
+                            .edges
+                            .iter()
+                            .filter(|e| {
+                                e.from == pe.to && !skippable.contains(e.to.as_str())
+                            })
+                            .map(|e| e.to.as_str())
+                            .collect();
+                        for target in after_barrier {
+                            if let Some(&to_id) = id_to_uuid.get(target) {
+                                exec_edges.push(ExecutionEdge {
+                                    from: from_id,
+                                    to: to_id,
+                                    condition: None,
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        ExecutionGraph {
+            graph_id: Uuid::from_u128(graph_hash as u128),
+            nodes: exec_nodes,
+            edges: exec_edges,
+            metadata: GraphMetadata {
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+                max_depth: 0,
+                node_count: id_to_uuid.len() as u32,
+            },
+            total_tokens: 0,
+            total_cost: 0,
+            primitive_graph_hash: graph_hash,
+        }
     }
 
     /// Export graph to Graphviz DOT syntax

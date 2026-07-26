@@ -9,11 +9,6 @@ fn val_err(pass: &str, node_id: Option<Uuid>, msg: String) -> CompilerError {
     CompilerError::ValidationError { pass: pass.to_string(), node_id, message: msg }
 }
 
-#[allow(dead_code)]
-fn pass_err(pass: &str, msg: String) -> CompilerError {
-    CompilerError::PassError { pass: pass.to_string(), message: msg }
-}
-
 pub struct ConstraintValidationPass;
 
 #[async_trait]
@@ -102,6 +97,7 @@ impl CompilerPass for BudgetOptimisationPass {
             },
             total_tokens: ir.metadata.estimated_tokens,
             total_cost: ir.metadata.estimated_cost.ceil() as u64,
+            primitive_graph_hash: 0,
         };
         if !self.resource_manager.can_afford(&budget_graph).await {
             return Err(val_err("budget_optimisation", None, "Budget exceeded".into()));

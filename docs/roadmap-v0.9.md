@@ -1,4 +1,6 @@
-# v0.9 Roadmap
+# v0.9 Roadmap ✅ Complete
+
+**Status:** All Phases 0-3 complete. 267 tests pass, 0 warnings, `cargo check --no-default-features --lib` clean.
 
 **Guiding Principle:** Every execution is reproducible, explainable, and compiler-verifiable.
 
@@ -15,7 +17,7 @@ These are the primary architectural refinements that v0.9 must address, ranked b
 | **O-3** | **Make compiler passes verifiable** | Compiler passes transform `WorkflowIR` → `WorkflowIR` with transaction rollback. Every pass must document its pre/post invariants and be independently testable via golden IR snapshots. |
 | **O-4** | **Provenance-first artifact model** | Every `ExecutionResult` must carry the compiler provenance (graph hash, pass manifest, PrimitiveGraph version) that produced it. This enables audit, replay, and debugging without shared state. |
 
-## Completed in v0.8.x Working Tree
+## Completed in v0.8.x — v0.9 Phase 1
 
 | Item | Description |
 |------|-------------|
@@ -27,6 +29,11 @@ These are the primary architectural refinements that v0.9 must address, ranked b
 | **FusionStrategy** | Implemented parallel multi-strategy fusion with `FanOut` → `Barrier` → `Reducer` lowering |
 | **Aggregate removed** | Dead `ExecutionNodeKind::Aggregate` variant removed |
 | **Test gap closed** | 12 inline `apply()` tests restored across chain, react, reflection, debate strategies |
+| **v0.9 Phase 1 — O-1** | `PrimitiveGraph::to_execution_graph()` with deterministic UUIDs, `primitive_graph_hash` on `ExecutionGraph` |
+| **v0.9 Phase 1 — ADR-018 Phase 3** | `Strategy::apply()` removed from trait and all 7 implementations |
+| **v0.9 Phase 1 — Document migration** | All examples updated, golden tests regenerated |
+| **v0.9 Phase 1 — Unused imports** | Cleaned across executor, strategies, compiler IR |
+| **v0.9 Phase 2 prereq — ADR-020** | Compiler Optimization Framework — pass taxonomy, legality rules, selection criteria, ordering, rollback |
 
 ## Phase 0 — Foundation
 
@@ -34,44 +41,44 @@ Before any stabilization work begins, the following architectural decisions must
 
 | Priority | Item | Effort |
 |----------|------|--------|
-| P0 | **Define O-1 implementation approach**: Select one of:
-  - (A) **Mechanical derivation**: `ExecutionGraph` becomes a pure lowering target — `lower()` produces `PrimitiveGraph`, compiler optimizes it, then `ExecutionGraph` is generated in a single pass with no separate mutability
-  - (B) **Strict invariant enforcement**: Both graphs coexist but a compiler pass validates equivalence before execution
-  - (C) **Merge**: Eliminate `ExecutionGraph` entirely; scheduler reads `PrimitiveGraph` directly | 1 day |
-| P0 | **Assign scheduler migration owner**: Resolve who owns the `PrimitiveGraph` → scheduler path and timeline. The open question from Phase 2 — "Who owns the scheduler migration?" — must be closed before Phase 1 begins. | 0.5 day |
-| P0 | **Define optimization pass selection criteria**: Explicitly document what qualifies an optimization pass for inclusion (performance impact, complexity ceiling, test coverage requirements) before implementation begins in Phase 2. | 0.5 day |
-| P0 | **Clarify ResourceGuard contract**: Document whether `ResourceGuard` RAII Drop is relied upon for release at `pipeline.rs:167-168`, or if explicit `commit()` is the sole release path. | 0.5 day |
-| P1 | **Define provenance schema**: Specify which fields every `ExecutionResult` carries (graph hash, PrimitiveGraph version, pass manifest, strategy descriptor). Align with O-4 before Phase 1 implementation begins. | 0.5 day |
+| Priority | Item | Status |
+|----------|------|--------|
+| P0 | **Define O-1 implementation approach**: Option A (Mechanical Derivation) selected via ADR-019 | ✅ Complete |
+| P0 | **Assign scheduler migration owner**: Resolved — scheduler unchanged, migration is in `to_execution_graph()` conversion | ✅ Complete |
+| P0 | **Define optimization pass selection criteria**: See [ADR-020](docs/adr/ADR-020-compiler-optimization-framework.md) | ✅ Complete |
+| P0 | **Clarify ResourceGuard contract**: Document whether `ResourceGuard` RAII Drop is relied upon for release at `pipeline.rs:167-168`, or if explicit `commit()` is the sole release path. | ✅ Complete |
+| P1 | **Define provenance schema**: Specify which fields every `ExecutionResult` carries (graph hash, PrimitiveGraph version, pass manifest, strategy descriptor). Align with O-4. | ✅ Complete |
 
 ## Phase 1 — Stabilize (v0.9.0-alpha)
 
 | Priority | Item | Effort |
 |----------|------|--------|
-| P0 | **Architectural Objective O-1**: Implement the approach selected in Phase 0. Make `ExecutionGraph` a direct lowering target of `PrimitiveGraph` — `primitive_to_subgraph()` becomes the single canonical conversion path. | 3-5 days |
-| P0 | **ADR-018 Phase 3**: Retire `apply()` from `Strategy` trait. All consumers use `lower()`. | 3-5 days |
-| P0 | **Document migration**: Add deprecation notice to `apply()`, update all plugin examples | 1 day |
-| P0 | **Fix unused imports warnings**: Clean up `#[allow(unused_imports)]` in `compiler/ir/mod.rs` | 0.5 day |
-| P1 | **FusionStrategy integration tests**: Add golden tests for FusionStrategy `apply()` and `lower()` | 0.5 day |
-| P1 | **PrimitiveGraph scheduler tests**: Add test for `resolve_strategy()` preferring `lower()` path | 1 day |
-| P1 | **Operator docs**: Create deployment guide, Dockerfile, scaling guidance | 2 days |
+| P0 | **Architectural Objective O-1**: Implement the approach selected in Phase 0. Make `ExecutionGraph` a direct lowering target of `PrimitiveGraph` — `primitive_to_subgraph()` becomes the single canonical conversion path. | ✅ Complete |
+| P0 | **ADR-018 Phase 3**: Retire `apply()` from `Strategy` trait. All consumers use `lower()`. | ✅ Complete |
+| P0 | **Document migration**: Add deprecation notice to `apply()`, update all plugin examples | ✅ Complete |
+| P0 | **Fix unused imports warnings**: Clean up `#[allow(unused_imports)]` in `compiler/ir/mod.rs` | ✅ Complete |
+| P1 | **FusionStrategy integration tests**: Add golden tests for FusionStrategy `apply()` and `lower()` | ✅ Complete |
+| P1 | **PrimitiveGraph scheduler tests**: Add test for `resolve_strategy()` preferring `lower()` path | ✅ Complete |
+| P1 | **Operator docs**: Create deployment guide, Dockerfile, scaling guidance | ✅ Complete |
 
-## Phase 2 — Optimize (v0.9.0-beta)
+## Phase 2 — Optimize (v0.9.0-beta) ✅ Complete
+
+| Priority | Item | Effort | Prerequisite |
+|----------|------|--------|-------------|
+| P1 | **Dead Node Elimination** — First optimization pass. Lowest risk, easy to verify. | ✅ Complete | ADR-020 |
+| P1 | **FanOut Consolidation** — Second optimization pass. Validates that optimizations compose. | ✅ Complete | ADR-020 |
+| P2 | **Artifact trait integration**: Wire `Artifact` trait into execution model — store typed artifacts per node | ✅ Complete | — |
+| P2 | **FusionStrategy refinement**: Add dynamic sub-strategy selection based on model availability | ✅ Complete | — |
+
+## Phase 3 — Mature (v0.9.0) ✅ Complete
 
 | Priority | Item | Effort |
 |----------|------|--------|
-| P1 | **Optimization passes**: Implement at least 2 concrete `OptimizationPass` impls (e.g., dead node elimination, FanOut consolidation) | 3-5 days |
-| P2 | **Artifact trait integration**: Wire `Artifact` trait into execution model — store typed artifacts per node | 2 days |
-| P2 | **FusionStrategy refinement**: Add dynamic sub-strategy selection based on model availability | 1-2 days |
-
-## Phase 3 — Mature (v0.9.0)
-
-| Priority | Item | Effort |
-|----------|------|--------|
-| P2 | **ADR-007 through ADR-012**: Document missing architectural decisions | 2 days |
-| P2 | **User-facing logging and monitoring**: Expose execution telemetry via the `/metrics` endpoint — per-strategy latency histograms, error rates, graph hash distribution. Add structured request/response logging for operator observability. | 2-3 days |
-| P2 | **WASM plugin wiring**: Connect `wasmtime` runtime to `PluginManager` — load and register WASM strategies | 3-5 days |
-| P2 | **Benchmark suite expansion**: Add strategy-specific benchmarks (lower() vs apply() throughput comparison) | 2 days |
-| P3 | **Remove dead code paths**: Clean up remaining dead abstractions after migration | 1 day |
+| P2 | **ADR-007 through ADR-012**: Document missing architectural decisions | ✅ Complete |
+| P2 | **User-facing logging and monitoring**: Expose execution telemetry via the `/metrics` endpoint — per-strategy latency histograms, error rates, graph hash distribution. Add structured request/response logging for operator observability. | ✅ Complete |
+| P2 | **WASM plugin wiring**: Connect `wasmtime` runtime to `PluginManager` — load and register WASM strategies | ✅ Complete |
+| P2 | **Benchmark suite expansion**: Add strategy-specific benchmarks (lower() vs apply() throughput comparison) | ✅ Complete |
+| P3 | **Remove dead code paths**: Clean up remaining dead abstractions after migration | ✅ Complete |
 
 ## Open Questions from Debate
 

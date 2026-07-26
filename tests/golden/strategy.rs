@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use fusion_router::compiler::context::CompilationContext;
+use fusion_router::compiler::ir::StrategyIR;
 use fusion_router::strategies::Strategy;
 use fusion_router::strategies::chain::ChainStrategy;
 use fusion_router::strategies::debate::DebateStrategy;
@@ -44,14 +46,24 @@ fn test_chain_strategy_produces_pipeline() {
         ],
     };
 
-    let sub = strategy.apply(&make_node());
+    let ctx = CompilationContext::new();
+    let ir = StrategyIR::Chain {
+        stages: vec![StrategyIR::Single, StrategyIR::Reflection { max_cycles: 3 }],
+    };
+    let pg = strategy.lower(&ir, &ctx).unwrap();
+    let node = make_node();
+    let eg = pg.to_execution_graph(
+        node.strategy.clone(),
+        &node.retry_policy,
+        &node.fallback,
+        &node.config,
+    );
 
-    assert!(sub.nodes.len() >= 2, "Chain should produce at least 2 nodes");
-    assert!(!sub.edges.is_empty(), "Chain should produce at least 1 edge connecting stages");
-    assert_ne!(sub.entry_node_id, sub.exit_node_id, "Entry and exit should differ in a multi-stage chain");
+    assert!(eg.nodes.len() >= 2, "Chain should produce at least 2 nodes");
+    assert!(!eg.edges.is_empty(), "Chain should produce at least 1 edge connecting stages");
 
-    let gen_count = sub.nodes.iter().filter(|n| is_gen(&n.kind)).count();
-    let review_count = sub.nodes.iter().filter(|n| is_review(&n.kind)).count();
+    let gen_count = eg.nodes.iter().filter(|n| is_gen(&n.kind)).count();
+    let review_count = eg.nodes.iter().filter(|n| is_review(&n.kind)).count();
     assert!(gen_count >= 1, "Chain should include at least 1 Generate node");
     assert!(review_count >= 1, "Chain should include at least 1 Review node");
 }
@@ -60,19 +72,19 @@ fn test_chain_strategy_produces_pipeline() {
 fn test_react_strategy_produces_loop() {
     let strategy = ReActStrategy::default();
 
-    let sub = strategy.apply(&make_node());
+    let ctx = CompilationContext::new();
+    let pg = strategy.lower(&StrategyIR::ReAct { max_iterations: 10 }, &ctx).unwrap();
+    let node = make_node();
+    let eg = pg.to_execution_graph(
+        node.strategy.clone(),
+        &node.retry_policy,
+        &node.fallback,
+        &node.config,
+    );
 
-    assert_eq!(sub.nodes.len(), 2, "ReAct should produce exactly 2 nodes (Loop + Generate)");
-    assert_eq!(sub.edges.len(), 2, "ReAct should produce 2 edges (forward + loop-back)");
-
-    let has_loop = sub.nodes.iter().any(|n| is_loop(&n.kind));
+    assert_eq!(eg.nodes.len(), 1, "ReAct should produce exactly 1 node (FeedbackLoop)");
+    let has_loop = eg.nodes.iter().any(|n| is_loop(&n.kind));
     assert!(has_loop, "ReAct should include a Loop control node");
-
-    let has_loop_back = sub.edges.iter().any(|e| e.condition.as_deref() == Some("loop"));
-    assert!(has_loop_back, "ReAct should have a loop-back edge");
-
-    let entry_is_loop = sub.nodes.iter().any(|n| n.id == sub.entry_node_id && is_loop(&n.kind));
-    assert!(entry_is_loop, "ReAct entry should be the Loop node");
 }
 
 #[test]
@@ -85,14 +97,31 @@ fn test_debate_strategy_produces_parallel_judge() {
         judge: Box::new(SingleStrategy),
     };
 
-    let sub = strategy.apply(&make_node());
+    let ctx = CompilationContext::new();
+    let ir = StrategyIR::Debate {
+        roles: vec![
+            fusion_router::compiler::ir::DebateRole {
+                name: "Defender".into(),
+                model: "gpt-4".into(),
+                stance: "Defend".into(),
+            },
+            fusion_router::compiler::ir::DebateRole {
+                name: "Critic".into(),
+                model: "gpt-4".into(),
+                stance: "Critique".into(),
+            },
+        ],
+    };
+    let pg = strategy.lower(&ir, &ctx).unwrap();
+    let node = make_node();
+    let eg = pg.to_execution_graph(
+        node.strategy.clone(),
+        &node.retry_policy,
+        &node.fallback,
+        &node.config,
+    );
 
-    assert!(sub.nodes.len() >= 3, "Debate should produce at least 3 nodes (2 debaters + 1 judge)");
-
-    let edges_to_judge = sub.edges.iter().filter(|e| e.to == sub.exit_node_id).count();
-    assert!(edges_to_judge >= 2, "Debate should have at least 2 edges feeding into judge");
-
-    assert_ne!(sub.entry_node_id, sub.exit_node_id, "Entry and exit should differ");
+    assert!(eg.nodes.len() >= 3, "Debate should produce at least 3 nodes (2 debaters + 1 reducer)");
 }
 
 #[test]
@@ -101,20 +130,29 @@ fn test_chain_strategy_single_stage_passthrough() {
         stages: vec![Box::new(SingleStrategy)],
     };
 
-    let sub = strategy.apply(&make_node());
+    let ctx = CompilationContext::new();
+    let ir = StrategyIR::Chain {
+        stages: vec![StrategyIR::Single],
+    };
+    let pg = strategy.lower(&ir, &ctx).unwrap();
+    let node = make_node();
+    let eg = pg.to_execution_graph(
+        node.strategy.clone(),
+        &node.retry_policy,
+        &node.fallback,
+        &node.config,
+    );
 
-    assert_eq!(sub.nodes.len(), 1, "Single-stage chain should produce exactly 1 node");
-    assert_eq!(sub.edges.len(), 0, "Single-stage chain should have no edges");
-    assert_eq!(sub.entry_node_id, sub.exit_node_id, "Entry and exit should be same for single stage");
+    assert_eq!(eg.nodes.len(), 1, "Single-stage chain should produce exactly 1 node");
 }
 
 #[test]
 fn test_react_strategy_custom_max_iterations() {
     let strategy = ReActStrategy { max_iterations: 5, tool_registry: None };
 
-    let sub = strategy.apply(&make_node());
+    let ctx = CompilationContext::new();
+    let pg = strategy.lower(&StrategyIR::ReAct { max_iterations: 5 }, &ctx).unwrap();
 
-    let loop_node = sub.nodes.iter().find(|n| is_loop(&n.kind)).unwrap();
-    let max_iter = loop_node.config.get("max_iterations").and_then(|v| v.as_u64());
-    assert_eq!(max_iter, Some(5), "Loop node should have config max_iterations = 5");
+    let loop_node = &pg.nodes[0];
+    assert!(matches!(loop_node.kind, fusion_router::compiler::ir::PrimitiveNodeKind::FeedbackLoop { max_iterations: 5 }));
 }

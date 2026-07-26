@@ -74,6 +74,7 @@ async fn test_scheduler_parity_and_budget_enforcement() {
         },
         total_tokens: 100,
         total_cost: 10,
+        primitive_graph_hash: 0,
     };
 
     let mut outputs = HashMap::new();
@@ -152,6 +153,7 @@ async fn test_terminal_node_response_selection() {
         },
         total_tokens: 100,
         total_cost: 10,
+        primitive_graph_hash: 0,
     };
 
     let mut outputs = HashMap::new();

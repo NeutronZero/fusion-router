@@ -76,6 +76,7 @@ mod tests {
             },
             total_tokens: 200,
             total_cost: 2,
+            primitive_graph_hash: 0,
         };
 
         let reserved = manager.try_reserve(&graph).await;
@@ -113,6 +114,7 @@ mod tests {
             },
             total_tokens: 200,
             total_cost: 2,
+            primitive_graph_hash: 0,
         };
 
         let reserved = manager.try_reserve(&graph).await;

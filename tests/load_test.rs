@@ -370,6 +370,7 @@ async fn test_concurrent_dag_workflows() {
         },
         total_tokens: 1000,
         total_cost: 1,
+        primitive_graph_hash: 0,
     };
 
     let start = Instant::now();
@@ -465,6 +466,7 @@ async fn test_loop_iteration_stress() {
         },
         total_tokens: 25000,
         total_cost: 1,
+        primitive_graph_hash: 0,
     };
 
     let mut instance = scheduler.schedule(graph, ReservationId(Uuid::new_v4()));
@@ -674,6 +676,7 @@ async fn test_high_concurrency_scheduling() {
             },
             total_tokens: n as u64 * 100,
             total_cost: n as u64,
+            primitive_graph_hash: 0,
         }
     }
 
@@ -727,6 +730,7 @@ async fn test_budget_no_race_on_concurrent_reserve() {
         },
         total_tokens: 100,
         total_cost: 1,
+        primitive_graph_hash: 0,
     };
 
     let mut handles = Vec::new();

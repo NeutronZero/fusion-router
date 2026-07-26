@@ -135,12 +135,12 @@ impl AppState {
             ],
             judge: Box::new(SingleStrategy),
         }));
-        strategies.insert(StrategyKind::Fusion, Box::new(FusionStrategy {
-            sub_strategies: vec![
-                Box::new(SingleStrategy),
-                Box::new(ConsensusStrategy::default()),
+        strategies.insert(StrategyKind::Fusion, Box::new(FusionStrategy::new(
+            vec![
+                Box::new(SingleStrategy) as Box<dyn Strategy>,
+                Box::new(ConsensusStrategy::default()) as Box<dyn Strategy>,
             ],
-        }));
+        )));
 
         let executor = Arc::new(DefaultExecutor::new(
             provider.clone(),
@@ -267,19 +267,26 @@ async fn process_request(
     let cancellation_token = tokio_util::sync::CancellationToken::new();
     let mut pctx = PipelineContext::new(request_id, request.clone(), cancellation_token);
 
+    tracing::info!(
+        request_id = %request_id,
+        model = %request.model,
+        message_count = request.messages.len(),
+        "request received"
+    );
+
     // 1. Context Assembly
     let step_ctx = ContextAssemblyStep {
         assembler: state.context_assembler.clone(),
     };
     let context_snapshot = step_ctx.execute(request.clone(), &mut pctx).await?;
-    tracing::debug!(messages = context_snapshot.messages.len(), "context assembled");
+    tracing::debug!(messages = context_snapshot.messages.len(), request_id = %request_id, "context assembled");
 
     // 2. Requirements Extraction
     let step_reqs = RequirementsExtractionStep {
         extractor: state.requirements_extractor.clone(),
     };
     let reqs = step_reqs.execute(context_snapshot, &mut pctx).await?;
-    tracing::debug!(intent = ?reqs.intent_classification, complexity = ?reqs.complexity, "requirements extracted");
+    tracing::debug!(intent = ?reqs.intent_classification, complexity = ?reqs.complexity, request_id = %request_id, "requirements extracted");
 
     // 3. Evidence Snapshot
     let step_evidence = EvidenceSnapshotStep {
@@ -294,19 +301,28 @@ async fn process_request(
         policies,
     };
     let ir = step_plan.execute((reqs.clone(), evidence), &mut pctx).await?;
-    tracing::debug!(plan_id = %ir.plan_id, nodes = ir.nodes.len(), "plan created");
+    tracing::debug!(plan_id = %ir.plan_id, nodes = ir.nodes.len(), request_id = %request_id, "plan created");
 
     // 5. Compilation
     let step_compile = CompilationStep {
         compiler: state.compiler.clone(),
     };
     let graph = step_compile.execute(ir, &mut pctx).await?;
-    tracing::debug!(
+    tracing::info!(
+        request_id = %request_id,
         graph_id = %graph.graph_id,
+        node_count = graph.nodes.len(),
         estimated_cost = graph.metadata.estimated_cost,
         estimated_tokens = graph.metadata.estimated_tokens,
         "graph compiled"
     );
+
+    // Record graph hash distribution
+    let hash_str = format!("{:016x}", graph.primitive_graph_hash);
+    crate::telemetry::metrics::FusionMetrics::instance()
+        .graph_hash_count
+        .with_label_values(&[&hash_str])
+        .inc();
 
     // 6. Resource Reservation with RAII Guard
     let step_reserve = ResourceReservationStep {
@@ -322,10 +338,12 @@ async fn process_request(
     };
     let result = step_exec.execute((graph.clone(), reservation), &mut pctx).await?;
 
-    tracing::debug!(
+    tracing::info!(
+        request_id = %request_id,
         instance_id = %result.instance_id,
         success = result.success,
         latency_ms = result.total_latency_ms,
+        tokens = result.total_tokens,
         "execution complete"
     );
 

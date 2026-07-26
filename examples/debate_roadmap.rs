@@ -8,7 +8,7 @@ use fusion_router::providers::ChatProvider;
 use fusion_router::strategies::debate::DebateStrategy;
 use fusion_router::strategies::single::SingleStrategy;
 use fusion_router::strategies::Strategy;
-use fusion_router::types::ChatCompletionRequest;
+use fusion_router::types::{ChatCompletionRequest, ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind};
 
 const ROADMAP: &str = include_str!("../docs/roadmap-v0.9.md");
 
@@ -100,11 +100,29 @@ async fn main() -> anyhow::Result<()> {
     let graph = debate_strategy.lower(&ir, &ctx).expect("lowering failed");
     let hash = graph.compute_hash();
 
+    let template = ExecutionNode {
+        id: uuid::Uuid::nil(),
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Debate,
+        model: "default".into(),
+        retry_policy: RetryPolicy { max_retries: 2, backoff_ms: 1000 },
+        fallback: None,
+        config: std::collections::HashMap::new(),
+    };
+    let execution_graph = graph.to_execution_graph(
+        template.strategy.clone(),
+        &template.retry_policy,
+        &template.fallback,
+        &template.config,
+    );
+
     println!("Strategy:          Debate");
     println!("Graph Hash:        0x{:x}", hash);
     println!("PrimitiveGraph v{}", PRIMITIVE_GRAPH_VERSION);
     println!("Node Count:        {}", graph.nodes.len());
     println!("Edge Count:        {}", graph.edges.len());
+    println!("ExecutionGraph Node Count: {}", execution_graph.nodes.len());
+    println!("ExecutionGraph Primitive Hash: 0x{:x}", execution_graph.primitive_graph_hash);
     println!("OptimizationPass:  {} (no passes registered)", OptimizationPipeline::new().run(graph.clone()).ok().map(|_| "idempotent").unwrap_or("none"));
     println!();
 
@@ -208,6 +226,7 @@ async fn main() -> anyhow::Result<()> {
     println!("\n--- Provenance ---");
     println!("Graph Hash:        0x{:x}", hash);
     println!("PrimitiveGraph v{}", PRIMITIVE_GRAPH_VERSION);
+    println!("ExecutionGraph Primitive Hash: 0x{:x}", execution_graph.primitive_graph_hash);
     println!("OptimizationPass:  None (idempotent)");
     println!("Artifact:          Debate");
 

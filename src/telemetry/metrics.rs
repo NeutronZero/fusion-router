@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 use prometheus::{
-    HistogramVec, IntCounter, TextEncoder, Encoder,
+    HistogramVec, IntCounter, IntCounterVec, TextEncoder, Encoder,
 };
 
 static METRICS: OnceLock<FusionMetrics> = OnceLock::new();
@@ -11,11 +11,21 @@ pub struct FusionMetrics {
     pub errors_total: IntCounter,
     pub tokens_total: IntCounter,
     pub provider_latency_seconds: HistogramVec,
+    pub strategy_latency_seconds: HistogramVec,
+    pub strategy_errors_total: IntCounterVec,
+    pub graph_hash_count: IntCounterVec,
 }
 
 fn safe_int_counter(name: &str, help: &str) -> IntCounter {
     let opts = prometheus::Opts::new(name, help);
     let counter = IntCounter::with_opts(opts).unwrap();
+    let _ = prometheus::default_registry().register(Box::new(counter.clone()));
+    counter
+}
+
+fn safe_int_counter_vec(name: &str, help: &str, labels: &[&str]) -> IntCounterVec {
+    let opts = prometheus::Opts::new(name, help);
+    let counter = IntCounterVec::new(opts, labels).unwrap();
     let _ = prometheus::default_registry().register(Box::new(counter.clone()));
     counter
 }
@@ -55,6 +65,21 @@ impl FusionMetrics {
                 "fusionrouter_provider_latency_seconds",
                 "Provider latency in seconds",
                 &["provider"]
+            ),
+            strategy_latency_seconds: safe_histogram_vec(
+                "fusionrouter_strategy_latency_seconds",
+                "Per-strategy latency in seconds",
+                &["strategy"]
+            ),
+            strategy_errors_total: safe_int_counter_vec(
+                "fusionrouter_strategy_errors_total",
+                "Per-strategy error count",
+                &["strategy"]
+            ),
+            graph_hash_count: safe_int_counter_vec(
+                "fusionrouter_graph_hash_count",
+                "Graph hash distribution",
+                &["graph_hash"]
             ),
         }
     }
@@ -105,5 +130,41 @@ mod tests {
             .observe(0.042);
         let output = render_metrics();
         assert!(output.contains("fusionrouter_request_duration_seconds"));
+    }
+
+    #[test]
+    fn test_metrics_strategy_latency() {
+        let metrics = FusionMetrics::instance();
+        metrics
+            .strategy_latency_seconds
+            .with_label_values(&["Single"])
+            .observe(0.125);
+        let output = render_metrics();
+        assert!(output.contains("fusionrouter_strategy_latency_seconds"));
+        assert!(output.contains("strategy=\"Single\""));
+    }
+
+    #[test]
+    fn test_metrics_strategy_errors() {
+        let metrics = FusionMetrics::instance();
+        metrics
+            .strategy_errors_total
+            .with_label_values(&["Consensus"])
+            .inc();
+        let output = render_metrics();
+        assert!(output.contains("fusionrouter_strategy_errors_total"));
+        assert!(output.contains("strategy=\"Consensus\""));
+    }
+
+    #[test]
+    fn test_metrics_graph_hash_distribution() {
+        let metrics = FusionMetrics::instance();
+        metrics
+            .graph_hash_count
+            .with_label_values(&["abc123"])
+            .inc();
+        let output = render_metrics();
+        assert!(output.contains("fusionrouter_graph_hash_count"));
+        assert!(output.contains("graph_hash=\"abc123\""));
     }
 }

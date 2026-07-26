@@ -1,5 +1,7 @@
 mod manager;
 mod manifest;
+#[cfg(feature = "wasm-plugins")]
+pub mod wasm;
 
 #[allow(unused_imports)]
 pub use manager::PluginManager;

@@ -97,6 +97,7 @@ pub(crate) fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerE
             max_depth: 1,
             node_count: ir.nodes.len() as u32,
         },
+        primitive_graph_hash: 0,
         total_tokens,
         total_cost,
     })

@@ -52,6 +52,7 @@ async fn test_resource_quota_exhausted_globally() {
         },
         total_tokens: 60,
         total_cost: 500,
+        primitive_graph_hash: 0,
     };
 
     assert!(manager.try_reserve(&graph).await);
@@ -64,6 +65,7 @@ async fn test_resource_quota_exhausted_globally() {
             max_depth: 1,
             node_count: 0,
         },
+        primitive_graph_hash: 0,
         ..graph
     };
     assert!(!manager.try_reserve(&graph2).await);
@@ -105,6 +107,7 @@ async fn test_panic_in_executor_releases_quota() {
         },
         total_tokens: 200,
         total_cost: 2000,
+        primitive_graph_hash: 0,
     };
 
     assert!(manager.try_reserve(&graph).await);

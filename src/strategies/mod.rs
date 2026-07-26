@@ -1,4 +1,4 @@
-use crate::types::{ExecutionNode, ExecutionSubgraph, RetryPolicy, ArtifactKind};
+use crate::types::{RetryPolicy, ArtifactKind};
 use crate::compiler::context::CompilationContext;
 use crate::compiler::diagnostics::CompilerDiagnostic;
 use crate::compiler::ir::{StrategyIR, PrimitiveGraph};
@@ -19,9 +19,9 @@ pub enum StreamingMode {
     Full,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StrategyDescriptor {
-    pub name: &'static str,
+    pub name: String,
     pub parallelism: Parallelism,
     pub requires_barrier: bool,
     pub supports_streaming: StreamingMode,
@@ -32,7 +32,6 @@ pub struct StrategyDescriptor {
 pub trait Strategy: Send + Sync {
     fn descriptor(&self) -> StrategyDescriptor;
     fn lower(&self, ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic>;
-    fn apply(&self, node: &ExecutionNode) -> ExecutionSubgraph;
 }
 
 pub mod single;

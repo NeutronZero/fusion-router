@@ -7,18 +7,95 @@ use crate::compiler::ir::{
     BarrierFailurePolicy, PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind, ReducerMode, StrategyIR,
 };
 use crate::types::{
-    ArtifactKind, ExecutionEdge, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph, RetryPolicy, StrategyKind,
+    ArtifactKind, RetryPolicy,
 };
-use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub enum ModelCapability {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ModelAvailability {
+    pub has_high_capability: bool,
+    pub has_medium_capability: bool,
+    pub eligible_models: Vec<String>,
+}
+
+impl ModelAvailability {
+    pub fn from_models(models: &[String]) -> Self {
+        let high_keywords = ["gpt-4", "claude-opus", "gemini-ultra", "claude-3.5", "o1", "o3"];
+        let medium_keywords = ["gpt-4o-mini", "claude-sonnet", "gemini-pro", "claude-haiku"];
+        let has_high = models.iter().any(|m| high_keywords.iter().any(|k| m.contains(k)));
+        let has_medium = models.iter().any(|m| medium_keywords.iter().any(|k| m.contains(k)));
+        Self {
+            has_high_capability: has_high,
+            has_medium_capability: has_medium || has_high,
+            eligible_models: models.to_vec(),
+        }
+    }
+
+    pub fn capability(&self) -> ModelCapability {
+        if self.has_high_capability {
+            ModelCapability::High
+        } else if self.has_medium_capability {
+            ModelCapability::Medium
+        } else {
+            ModelCapability::Low
+        }
+    }
+}
 
 pub struct FusionStrategy {
     pub sub_strategies: Vec<Box<dyn Strategy>>,
+    pub model_hints: Option<ModelAvailability>,
+}
+
+impl FusionStrategy {
+    pub fn new(sub_strategies: Vec<Box<dyn Strategy>>) -> Self {
+        Self {
+            sub_strategies,
+            model_hints: None,
+        }
+    }
+
+    pub fn with_model_hints(mut self, hints: ModelAvailability) -> Self {
+        self.model_hints = Some(hints);
+        self
+    }
+
+    fn active_count(&self) -> usize {
+        match &self.model_hints {
+            Some(h) if !h.has_high_capability && !h.has_medium_capability => {
+                self.sub_strategies.len().min(1)
+            }
+            Some(h) if !h.has_high_capability => {
+                self.sub_strategies.len().min(2)
+            }
+            _ => self.sub_strategies.len(),
+        }
+    }
+
+    fn select_model(&self, ctx: &CompilationContext) -> String {
+        if let Some(hints) = &self.model_hints {
+            if let Some(best) = hints.eligible_models.first() {
+                return best.clone();
+            }
+        }
+        ctx.available_models.first().cloned().unwrap_or_else(|| "default".into())
+    }
 }
 
 impl Strategy for FusionStrategy {
     fn descriptor(&self) -> StrategyDescriptor {
+        let expected = match self.model_hints.as_ref().map(|h| h.capability()) {
+            Some(ModelCapability::High) => vec![ArtifactKind::Debate, ArtifactKind::Generic],
+            _ => vec![ArtifactKind::Generic],
+        };
         StrategyDescriptor {
-            name: "Fusion",
+            name: "Fusion".into(),
             parallelism: Parallelism::Unlimited,
             requires_barrier: true,
             supports_streaming: StreamingMode::IncrementalArtifacts,
@@ -26,12 +103,12 @@ impl Strategy for FusionStrategy {
                 max_retries: 2,
                 backoff_ms: 1000,
             },
-            expected_outputs: vec![ArtifactKind::Generic],
+            expected_outputs: expected,
         }
     }
 
     fn lower(&self, _ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
-        let count = self.sub_strategies.len() as u32;
+        let count = self.active_count() as u32;
         if count < 1 {
             return Err(CompilerDiagnostic::error(
                 "E0103",
@@ -40,7 +117,7 @@ impl Strategy for FusionStrategy {
         }
 
         let mut graph = PrimitiveGraph::new("fusion_graph");
-        let model = ctx.available_models.first().cloned().unwrap_or_else(|| "default".into());
+        let model = self.select_model(ctx);
 
         if count == 1 {
             graph.add_node(PrimitiveNode {
@@ -50,6 +127,11 @@ impl Strategy for FusionStrategy {
             });
             return Ok(graph);
         }
+
+        let reducer_mode = match self.model_hints.as_ref().map(|h| h.capability()) {
+            Some(ModelCapability::High) => ReducerMode::Debate,
+            _ => ReducerMode::Merge,
+        };
 
         graph.add_node(PrimitiveNode {
             id: "fanout_fusion".into(),
@@ -84,7 +166,7 @@ impl Strategy for FusionStrategy {
         graph.add_node(PrimitiveNode {
             id: "reducer_fusion".into(),
             kind: PrimitiveNodeKind::Reducer {
-                mode: ReducerMode::Merge,
+                mode: reducer_mode,
                 model,
             },
             artifact_kind: Some("Generic".into()),
@@ -93,67 +175,5 @@ impl Strategy for FusionStrategy {
         graph.add_edge("barrier_fusion", "reducer_fusion", None);
 
         Ok(graph)
-    }
-
-    fn apply(&self, node: &ExecutionNode) -> ExecutionSubgraph {
-        if self.sub_strategies.is_empty() {
-            return ExecutionSubgraph {
-                nodes: vec![node.clone()],
-                edges: vec![],
-                entry_node_id: node.id,
-                exit_node_id: node.id,
-            };
-        }
-
-        let mut all_nodes = Vec::new();
-        let mut all_edges = Vec::new();
-        let mut exits = Vec::new();
-        let mut entry_id = None;
-
-        for sub in &self.sub_strategies {
-            let subgraph = sub.apply(node);
-            if entry_id.is_none() {
-                entry_id = Some(subgraph.entry_node_id);
-            }
-            exits.push(subgraph.exit_node_id);
-            all_nodes.extend(subgraph.nodes);
-            all_edges.extend(subgraph.edges);
-        }
-
-        if exits.len() > 1 {
-            let judge_id = Uuid::new_v4();
-            all_nodes.push(ExecutionNode {
-                id: judge_id,
-                kind: ExecutionNodeKind::LLMJudge,
-                strategy: StrategyKind::Fusion,
-                model: node.model.clone(),
-                retry_policy: RetryPolicy {
-                    max_retries: 1,
-                    backoff_ms: 500,
-                },
-                fallback: node.fallback.clone(),
-                config: Default::default(),
-            });
-            for exit_id in &exits {
-                all_edges.push(ExecutionEdge {
-                    from: *exit_id,
-                    to: judge_id,
-                    condition: None,
-                });
-            }
-            ExecutionSubgraph {
-                nodes: all_nodes,
-                edges: all_edges,
-                entry_node_id: entry_id.unwrap_or(node.id),
-                exit_node_id: judge_id,
-            }
-        } else {
-            ExecutionSubgraph {
-                nodes: all_nodes,
-                edges: all_edges,
-                entry_node_id: entry_id.unwrap_or(node.id),
-                exit_node_id: exits[0],
-            }
-        }
     }
 }

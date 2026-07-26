@@ -6,7 +6,7 @@ use fusion_router::providers::openrouter::OpenRouterProvider;
 use fusion_router::providers::ChatProvider;
 use fusion_router::strategies::consensus::ConsensusStrategy;
 use fusion_router::strategies::Strategy;
-use fusion_router::types::ChatCompletionRequest;
+use fusion_router::types::{ChatCompletionRequest, ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind};
 
 const ROADMAP: &str = include_str!("../docs/roadmap-v0.9.md");
 const CONSENSUS_COUNT: u32 = 3;
@@ -31,11 +31,29 @@ async fn main() -> anyhow::Result<()> {
     let graph = strategy.lower(&StrategyIR::Consensus { count: CONSENSUS_COUNT }, &ctx)?;
     let hash = graph.compute_hash();
 
+    let template = ExecutionNode {
+        id: uuid::Uuid::nil(),
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Consensus,
+        model: "default".into(),
+        retry_policy: RetryPolicy { max_retries: 2, backoff_ms: 1000 },
+        fallback: None,
+        config: std::collections::HashMap::new(),
+    };
+    let execution_graph = graph.to_execution_graph(
+        template.strategy.clone(),
+        &template.retry_policy,
+        &template.fallback,
+        &template.config,
+    );
+
     println!("Strategy:          Consensus");
     println!("Graph Hash:        0x{:x}", hash);
     println!("PrimitiveGraph v{}", PRIMITIVE_GRAPH_VERSION);
     println!("Node Count:        {}", graph.nodes.len());
     println!("Edge Count:        {}", graph.edges.len());
+    println!("ExecutionGraph Node Count: {}", execution_graph.nodes.len());
+    println!("ExecutionGraph Primitive Hash: 0x{:x}", execution_graph.primitive_graph_hash);
     println!("Parallel Copies:   {}", CONSENSUS_COUNT);
     println!();
 
@@ -133,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
     println!("\n--- Provenance ---");
     println!("Graph Hash:        0x{:x}", hash);
     println!("PrimitiveGraph v{}", PRIMITIVE_GRAPH_VERSION);
+    println!("ExecutionGraph Primitive Hash: 0x{:x}", execution_graph.primitive_graph_hash);
     println!("Strategy:          Consensus (x{})", CONSENSUS_COUNT);
     println!("Artifact:          Consensus");
 

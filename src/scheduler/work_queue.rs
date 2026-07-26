@@ -240,6 +240,7 @@ mod tests {
             },
             total_tokens: 0,
             total_cost: 0,
+            primitive_graph_hash: 0,
         }
     }
 

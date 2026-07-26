@@ -58,7 +58,7 @@ struct TestStrategy;
 impl Strategy for TestStrategy {
     fn descriptor(&self) -> fusion_router::strategies::StrategyDescriptor {
         fusion_router::strategies::StrategyDescriptor {
-            name: "TestStrategy",
+            name: "TestStrategy".into(),
             parallelism: fusion_router::strategies::Parallelism::Sequential,
             requires_barrier: false,
             supports_streaming: fusion_router::strategies::StreamingMode::None,
@@ -84,14 +84,6 @@ impl Strategy for TestStrategy {
         Ok(graph)
     }
 
-    fn apply(&self, node: &fusion_router::types::ExecutionNode) -> fusion_router::types::ExecutionSubgraph {
-        fusion_router::types::ExecutionSubgraph {
-            nodes: vec![node.clone()],
-            edges: vec![],
-            entry_node_id: node.id,
-            exit_node_id: node.id,
-        }
-    }
 }
 
 #[test]

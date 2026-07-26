@@ -7,7 +7,7 @@ use crate::compiler::ir::{
     BarrierFailurePolicy, PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind, ReducerMode, StrategyIR,
 };
 use crate::types::{
-    ArtifactKind, ExecutionEdge, ExecutionNode, ExecutionSubgraph, RetryPolicy,
+    ArtifactKind, RetryPolicy,
 };
 
 pub struct DebateStrategy {
@@ -18,7 +18,7 @@ pub struct DebateStrategy {
 impl Strategy for DebateStrategy {
     fn descriptor(&self) -> StrategyDescriptor {
         StrategyDescriptor {
-            name: "Debate",
+            name: "Debate".into(),
             parallelism: Parallelism::Unlimited,
             requires_barrier: true,
             supports_streaming: StreamingMode::IncrementalReduction,
@@ -96,70 +96,12 @@ impl Strategy for DebateStrategy {
         Ok(graph)
     }
 
-    fn apply(&self, node: &ExecutionNode) -> ExecutionSubgraph {
-        let mut all_nodes = Vec::new();
-        let mut all_edges = Vec::new();
-        let mut debater_exits = Vec::new();
-        let mut entry_id = None;
-
-        for debater in &self.debaters {
-            let sub = debater.apply(node);
-            if entry_id.is_none() {
-                entry_id = Some(sub.entry_node_id);
-            }
-            debater_exits.push(sub.exit_node_id);
-            all_nodes.extend(sub.nodes);
-            all_edges.extend(sub.edges);
-        }
-
-        let judge_sub = self.judge.apply(node);
-        for exit_id in &debater_exits {
-            all_edges.push(ExecutionEdge {
-                from: *exit_id,
-                to: judge_sub.entry_node_id,
-                condition: None,
-            });
-        }
-        all_nodes.extend(judge_sub.nodes);
-        all_edges.extend(judge_sub.edges);
-
-        ExecutionSubgraph {
-            nodes: all_nodes,
-            edges: all_edges,
-            entry_node_id: entry_id.unwrap_or(node.id),
-            exit_node_id: judge_sub.exit_node_id,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::compiler::ir::DebateRole;
-
-    #[test]
-    fn test_debate_produces_two_debaters_and_judge() {
-        let strategy = DebateStrategy {
-            debaters: vec![
-                Box::new(crate::strategies::single::SingleStrategy),
-                Box::new(crate::strategies::single::SingleStrategy),
-            ],
-            judge: Box::new(crate::strategies::single::SingleStrategy),
-        };
-        let node = crate::types::ExecutionNode {
-            id: uuid::Uuid::new_v4(),
-            kind: crate::types::ExecutionNodeKind::LLMGenerate,
-            strategy: crate::types::StrategyKind::Debate,
-            model: "gpt-4".to_string(),
-            retry_policy: crate::types::RetryPolicy { max_retries: 3, backoff_ms: 1000 },
-            fallback: None,
-            config: std::collections::HashMap::new(),
-        };
-        let subgraph = strategy.apply(&node);
-        assert!(subgraph.nodes.len() >= 3);
-        let edges_to_judge = subgraph.edges.iter().filter(|e| e.to == subgraph.exit_node_id).count();
-        assert!(edges_to_judge >= 2);
-    }
 
     #[test]
     fn test_debate_lowering() {

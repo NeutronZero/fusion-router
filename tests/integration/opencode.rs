@@ -161,6 +161,7 @@ async fn test_dag_split_join_workflow() {
 
     let graph = ExecutionGraph {
         graph_id: Uuid::nil(),
+        primitive_graph_hash: 0,
         nodes: vec![
             ExecutionNode {
                 id: split_id, kind: ExecutionNodeKind::Split,
