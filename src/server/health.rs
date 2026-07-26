@@ -24,9 +24,11 @@ pub async fn ready_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use crate::config::{AppConfig, ServerConfig, ResourceConfig, StrategyConfig, ToolsConfig, AuthConfig, RateLimitingConfig, LoggingConfig, CorsConfig};
+    use crate::scheduler::connector_resolver::ConnectorResolver;
 
     fn dummy_state() -> AppState {
         let config = AppConfig {
@@ -51,6 +53,7 @@ mod tests {
             rate_limiting: RateLimitingConfig::default(),
             logging: LoggingConfig::default(),
             model_catalog: Default::default(),
+            connectors: HashMap::new(),
         };
         crate::server::handlers::AppState::new(
             Arc::new(crate::providers::openrouter::OpenRouterProvider::new("test".into())),
@@ -58,6 +61,7 @@ mod tests {
             Arc::new(crate::telemetry::SqliteEvidenceRepository::new(":memory:").unwrap()),
             config,
             PathBuf::from("config/default.yaml"),
+            Arc::new(ConnectorResolver::new()),
         )
     }
 

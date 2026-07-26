@@ -42,6 +42,8 @@ use providers::openrouter::OpenRouterProvider;
 use providers::registry::ProviderRegistry;
 use providers::router::ProviderTarget;
 use providers::zen::ZenProvider;
+use scheduler::connector_resolver::ConnectorResolver;
+use scheduler::connector_subscriber::ConnectorSubscriber;
 use telemetry::SqliteEvidenceRepository;
 
 #[tokio::main]
@@ -148,15 +150,21 @@ async fn main() {
     let rate_limiting_enabled = config.rate_limiting.enabled;
     let rate_limiting_config = config.rate_limiting.clone();
 
+    let connector_resolver = Arc::new(ConnectorResolver::new());
+
     let state = server::handlers::AppState::new(
         provider_registry.clone() as Arc<dyn providers::ChatProvider + Send + Sync>,
         resource_manager,
         Arc::new(evidence_repo),
         config,
         PathBuf::from(&config_path),
+        connector_resolver.clone(),
     );
 
     state.config_manager.register_subscriber(Box::new(provider_registry.clone()));
+    state.config_manager.register_subscriber(Box::new(
+        ConnectorSubscriber::new(ConnectorResolver::clone(&connector_resolver)),
+    ));
 
     #[cfg(unix)]
     {

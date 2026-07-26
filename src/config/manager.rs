@@ -171,6 +171,7 @@ mod tests {
             rate_limiting: RateLimitingConfig::default(),
             logging: LoggingConfig::default(),
             model_catalog: ModelCatalog::default(),
+            connectors: HashMap::new(),
         }
     }
 

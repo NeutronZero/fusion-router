@@ -86,9 +86,10 @@ fn build_app(quota: &Quota) -> Router {
         rate_limiting: Default::default(),
         logging: Default::default(),
         model_catalog: Default::default(),
+        connectors: std::collections::HashMap::new(),
     };
 
-    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config, PathBuf::from("config/default.yaml"));
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config, PathBuf::from("config/default.yaml"), Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()));
     Router::new()
         .route("/v1/chat/completions", post(fusion_router::server::handlers::chat_completions))
         .layer(TraceLayer::new_for_http())

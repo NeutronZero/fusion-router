@@ -28,6 +28,7 @@ use crate::workflow::WorkflowRegistry;
 use crate::providers::ChatProvider;
 use crate::requirements::extractor::DefaultRequirementsExtractor;
 use crate::resource::DefaultResourceManager;
+use crate::scheduler::connector_resolver::ConnectorResolver;
 use crate::scheduler::default::DefaultScheduler;
 use crate::strategies::chain::ChainStrategy;
 use crate::strategies::consensus::ConsensusStrategy;
@@ -63,6 +64,7 @@ pub struct AppState {
     pub config_manager: Arc<ConfigManager>,
     pub workflow_registry: Arc<WorkflowRegistry>,
     pub tool_registry: Arc<ToolRegistry>,
+    pub connector_resolver: Arc<ConnectorResolver>,
 }
 
 impl AppState {
@@ -72,6 +74,7 @@ impl AppState {
         evidence_repository: Arc<dyn EvidenceRepository + Send + Sync>,
         config: AppConfig,
         config_path: PathBuf,
+        connector_resolver: Arc<ConnectorResolver>,
     ) -> Self {
         let context_assembler = Arc::new(DefaultContextAssembler::new());
         let requirements_extractor = Arc::new(DefaultRequirementsExtractor);
@@ -177,6 +180,7 @@ impl AppState {
             config_manager,
             workflow_registry,
             tool_registry,
+            connector_resolver,
         }
     }
 }
@@ -477,6 +481,7 @@ mod tests {
             rate_limiting: RateLimitingConfig::default(),
             logging: LoggingConfig::default(),
             model_catalog: Default::default(),
+            connectors: HashMap::new(),
         };
         let state = AppState::new(
             Arc::new(crate::providers::openrouter::OpenRouterProvider::new(
@@ -488,6 +493,7 @@ mod tests {
             ),
             config,
             PathBuf::from("config/default.yaml"),
+            Arc::new(ConnectorResolver::new()),
         );
         let (status, res) =
             crate::server::health::ready_handler(axum::extract::State(state)).await;

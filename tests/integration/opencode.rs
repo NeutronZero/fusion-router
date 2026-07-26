@@ -93,7 +93,8 @@ async fn test_chat_completion_endpoint() {
             auth: Default::default(),
             rate_limiting: Default::default(),
             logging: Default::default(),
-            model_catalog: Default::default(),
+        model_catalog: Default::default(),
+            connectors: std::collections::HashMap::new(),
         }
     });
 
@@ -103,6 +104,7 @@ async fn test_chat_completion_endpoint() {
         evidence,
         config,
         PathBuf::from("config/default.yaml"),
+        Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()),
     );
 
     let app = Router::new()
@@ -286,6 +288,7 @@ fn test_config() -> AppConfig {
         rate_limiting: RateLimitingConfig::default(),
         logging: LoggingConfig::default(),
         model_catalog: Default::default(),
+        connectors: std::collections::HashMap::new(),
     }
 }
 
@@ -298,7 +301,7 @@ async fn test_middleware_stack_rejects_unauthenticated() {
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = test_config();
 
-    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone(), PathBuf::from("config/default.yaml"));
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone(), PathBuf::from("config/default.yaml"), Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()));
 
     let rate_limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
     let app = Router::new()
@@ -347,7 +350,7 @@ async fn test_middleware_request_id_header() {
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = test_config();
 
-    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone(), PathBuf::from("config/default.yaml"));
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone(), PathBuf::from("config/default.yaml"), Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()));
 
     let rate_limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
     let app = Router::new()
@@ -408,7 +411,7 @@ async fn test_health_ready_endpoints() {
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = test_config();
 
-    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone(), PathBuf::from("config/default.yaml"));
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone(), PathBuf::from("config/default.yaml"), Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()));
 
     let rate_limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
     let app = Router::new()
