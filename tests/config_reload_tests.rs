@@ -6,13 +6,15 @@ use async_trait::async_trait;
 use fusion_router::config::manager::ConfigManager;
 use fusion_router::config::error::ReloadError;
 use fusion_router::config::{
-    AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig, ResourceConfig,
-    ServerConfig, StrategyConfig, ToolsConfig,
+    AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig,
+    ResourceConfig, ServerConfig, StrategyConfig, ToolsConfig,
 };
 use fusion_router::providers::circuit_breaker::CircuitBreaker;
 use fusion_router::providers::registry::ProviderRegistry;
 use fusion_router::providers::router::ProviderTarget;
 use fusion_router::providers::{ChatProvider, ModelRequirements};
+use fusion_router::scheduler::connector_resolver::ConnectorResolver;
+use fusion_router::scheduler::connector_subscriber::ConnectorSubscriber;
 use fusion_router::types::ModelCatalog;
 use fusion_router::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice};
 
@@ -82,6 +84,26 @@ fn empty_config() -> AppConfig {
         model_catalog: ModelCatalog::default(),
         connectors: HashMap::new(),
     }
+}
+
+/// Build a YAML config string with both providers and connectors.
+fn config_yaml_connectors(provider_block: &str, connector_block: &str) -> String {
+    format!(
+        r#"server:
+  host: "0.0.0.0"
+  port: 8080
+  shutdown_timeout_secs: 30
+resources:
+  max_daily_cost: 100.0
+  max_daily_tokens: 1000000
+  max_concurrent: 5
+  max_concurrent_nodes: 16
+providers:
+{}
+connectors:
+{}"#,
+        provider_block, connector_block
+    )
 }
 
 /// Build a YAML config string for reload.  `provider_block` goes directly
@@ -282,4 +304,94 @@ async fn test_subscriber_commit_updates_targets() {
     assert_eq!(selected[0].name, "p");
 
     std::env::remove_var("FR_TEST_COMMIT_KEY");
+}
+
+// ---------------------------------------------------------------------------
+// Test 6 — connector added via config reload
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_connector_add_via_reload() {
+    let resolver = ConnectorResolver::new();
+    let subscriber = Box::new(ConnectorSubscriber::new(resolver.clone()));
+
+    let registry = Arc::new(ProviderRegistry::new(dummy_target("default")));
+    let yaml = config_yaml_connectors(
+        "",
+        "  my-http:\n    connector_type: http\n",
+    );
+    let (config_path, _guard) = write_temp_config(&yaml);
+
+    let manager = ConfigManager::new(
+        config_path,
+        empty_config(),
+        vec![Box::new(registry), subscriber],
+    );
+
+    manager.reload().await.expect("reload should succeed");
+
+    let names = resolver.connector_names();
+    assert_eq!(names.len(), 1);
+    assert_eq!(names[0], "http");
+}
+
+// ---------------------------------------------------------------------------
+// Test 7 — connector removed via config reload
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_connector_remove_via_reload() {
+    let resolver = ConnectorResolver::new();
+    let subscriber = Box::new(ConnectorSubscriber::new(resolver.clone()));
+
+    // Pre-register a connector so it exists before reload
+    let http = Arc::new(fusion_router::connectors::http::HttpConnector::new());
+    resolver.register_connector(http);
+
+    let registry = Arc::new(ProviderRegistry::new(dummy_target("default")));
+    // Empty connectors in the new config
+    let yaml = config_yaml_connectors("", "");
+    let (config_path, _guard) = write_temp_config(&yaml);
+
+    let manager = ConfigManager::new(
+        config_path,
+        empty_config(),
+        vec![Box::new(registry), subscriber],
+    );
+
+    manager.reload().await.expect("reload should succeed");
+
+    let names = resolver.connector_names();
+    assert!(names.is_empty(), "all connectors should be removed");
+}
+
+// ---------------------------------------------------------------------------
+// Test 8 — invalid connector type in config is rejected
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_connector_invalid_type_rejected() {
+    let resolver = ConnectorResolver::new();
+    let subscriber = Box::new(ConnectorSubscriber::new(resolver.clone()));
+
+    let registry = Arc::new(ProviderRegistry::new(dummy_target("default")));
+    let yaml = config_yaml_connectors(
+        "",
+        "  bad:\n    connector_type: nonexistent\n",
+    );
+    let (config_path, _guard) = write_temp_config(&yaml);
+
+    let manager = ConfigManager::new(
+        config_path,
+        empty_config(),
+        vec![Box::new(registry), subscriber],
+    );
+
+    let err = manager.reload().await.unwrap_err();
+    match &err {
+        ReloadError::ConnectorError(msg) => {
+            assert!(msg.contains("nonexistent"), "reason should mention unknown type");
+        }
+        other => panic!("expected ReloadError::ConnectorError, got {other:?}"),
+    }
 }

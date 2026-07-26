@@ -90,3 +90,109 @@ fn create_connector(
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    fn make_snapshot(generation: u64, connectors: HashMap<String, ConnectorConfig>) -> ConfigSnapshot {
+        let config = AppConfig {
+            server: crate::config::ServerConfig {
+                host: "0.0.0.0".into(),
+                port: 8080,
+                shutdown_timeout_secs: 30,
+                cors: crate::config::CorsConfig::default(),
+            },
+            resources: crate::config::ResourceConfig {
+                max_daily_cost: 100.0,
+                max_daily_tokens: 1_000_000,
+                max_concurrent: 5,
+                max_concurrent_nodes: 16,
+                provider_limits: HashMap::new(),
+            },
+            providers: HashMap::new(),
+            policies: vec![],
+            strategies: crate::config::StrategyConfig::default(),
+            tools: crate::config::ToolsConfig::default(),
+            auth: crate::config::AuthConfig::default(),
+            rate_limiting: crate::config::RateLimitingConfig::default(),
+            logging: crate::config::LoggingConfig::default(),
+            model_catalog: crate::types::ModelCatalog::default(),
+            connectors,
+        };
+        ConfigSnapshot {
+            generation,
+            config: Arc::new(config),
+        }
+    }
+
+    #[test]
+    fn test_prepare_valid_connectors() {
+        let resolver = ConnectorResolver::new();
+        let subscriber = ConnectorSubscriber::new(resolver.clone());
+
+        let mut connectors = HashMap::new();
+        connectors.insert(
+            "my-http".to_string(),
+            ConnectorConfig {
+                connector_type: "http".to_string(),
+                config: HashMap::new(),
+            },
+        );
+        let old = make_snapshot(1, HashMap::new());
+        let new = make_snapshot(2, connectors);
+
+        assert!(subscriber.prepare(&old, &new).is_ok());
+    }
+
+    #[test]
+    fn test_prepare_invalid_connector_type() {
+        let resolver = ConnectorResolver::new();
+        let subscriber = ConnectorSubscriber::new(resolver.clone());
+
+        let mut connectors = HashMap::new();
+        connectors.insert(
+            "bad".to_string(),
+            ConnectorConfig {
+                connector_type: "nonexistent".to_string(),
+                config: HashMap::new(),
+            },
+        );
+        let old = make_snapshot(1, HashMap::new());
+        let new = make_snapshot(2, connectors);
+
+        let result = subscriber.prepare(&old, &new);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ReloadError::ConnectorError(msg) => {
+                assert!(msg.contains("nonexistent"));
+            }
+            other => panic!("expected ConnectorError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_commit_swaps_connectors() {
+        let resolver = ConnectorResolver::new();
+        let subscriber = ConnectorSubscriber::new(resolver.clone());
+
+        let mut connectors = HashMap::new();
+        connectors.insert(
+            "my-http".to_string(),
+            ConnectorConfig {
+                connector_type: "http".to_string(),
+                config: HashMap::new(),
+            },
+        );
+        let old = make_snapshot(1, HashMap::new());
+        let new = make_snapshot(2, connectors);
+
+        subscriber.prepare(&old, &new).expect("prepare should succeed");
+        subscriber.commit(2);
+
+        let names = resolver.connector_names();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0], "http");
+    }
+}

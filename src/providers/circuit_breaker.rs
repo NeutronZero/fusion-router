@@ -133,4 +133,18 @@ mod tests {
         cb.record_success();
         assert_eq!(cb.failure_count.load(Ordering::Relaxed), 0);
     }
+
+    #[test]
+    fn test_update_thresholds_affects_behavior() {
+        let cb = CircuitBreaker::new(3, 2, 30);
+        cb.update_thresholds(5, 30);
+        for _ in 0..3 {
+            cb.record_failure();
+        }
+        assert!(cb.can_execute(), "should still be closed (threshold is 5)");
+        for _ in 0..2 {
+            cb.record_failure();
+        }
+        assert!(!cb.can_execute(), "should be open after 5 failures");
+    }
 }
