@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
@@ -16,6 +17,7 @@ use crate::compiler::passes::BudgetOptimisationPass;
 use crate::compiler::passes::ControlFlowValidationPass;
 use crate::compiler::DefaultCompiler;
 use crate::compiler::passes::{ConstraintValidationPass, ModelResolutionPass};
+use crate::config::manager::ConfigManager;
 use crate::config::AppConfig;
 use crate::tools::{ToolRegistry, HTTPRequestTool, ShellCommandTool};
 use crate::tools::builtin::{CalculatorTool, SearchTool, FileReadTool};
@@ -54,7 +56,7 @@ pub struct AppState {
     pub resource_manager: Arc<DefaultResourceManager>,
     pub evidence_repository: Arc<dyn EvidenceRepository + Send + Sync>,
     pub provider: Arc<dyn ChatProvider + Send + Sync>,
-    pub config: Arc<AppConfig>,
+    pub config_manager: Arc<ConfigManager>,
     pub workflow_registry: Arc<WorkflowRegistry>,
     pub tool_registry: Arc<ToolRegistry>,
 }
@@ -65,6 +67,7 @@ impl AppState {
         resource_manager: DefaultResourceManager,
         evidence_repository: Arc<dyn EvidenceRepository + Send + Sync>,
         config: AppConfig,
+        config_path: PathBuf,
     ) -> Self {
         let context_assembler = Arc::new(DefaultContextAssembler::new());
         let requirements_extractor = Arc::new(DefaultRequirementsExtractor);
@@ -151,6 +154,12 @@ impl AppState {
             config.resources.max_concurrent_nodes as usize,
         ));
 
+        let config_manager = Arc::new(ConfigManager::new(
+            config_path,
+            config,
+            vec![],
+        ));
+
         Self {
             context_assembler,
             requirements_extractor,
@@ -161,7 +170,7 @@ impl AppState {
             resource_manager,
             evidence_repository,
             provider,
-            config: Arc::new(config),
+            config_manager,
             workflow_registry,
             tool_registry,
         }
@@ -295,7 +304,8 @@ async fn process_request(
     let evidence = step_evidence.execute((), &mut pctx).await?;
 
     // 4. Planning
-    let policies = state.config.to_policies();
+    let snapshot = state.config_manager.snapshot();
+    let policies = snapshot.config.to_policies();
     let step_plan = PlanningStep {
         planner: state.planner.clone(),
         policies,
@@ -450,6 +460,7 @@ mod tests {
                 crate::telemetry::SqliteEvidenceRepository::new(":memory:").unwrap(),
             ),
             config,
+            PathBuf::from("config/default.yaml"),
         );
         let (status, res) =
             crate::server::health::ready_handler(axum::extract::State(state)).await;

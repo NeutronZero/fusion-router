@@ -1,4 +1,5 @@
 #![cfg_attr(not(test), allow(dead_code))] // Intentional: stubs for future production wiring (CircuitBreakingProvider, WorkflowPlanner, DynamicPlanner)
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{routing::get, routing::post, Router};
@@ -38,7 +39,8 @@ mod wasm;
 use config::AppConfig;
 use providers::circuit_breaker::CircuitBreaker;
 use providers::openrouter::OpenRouterProvider;
-use providers::router::{ProviderRouter, ProviderTarget};
+use providers::registry::ProviderRegistry;
+use providers::router::ProviderTarget;
 use providers::zen::ZenProvider;
 use telemetry::SqliteEvidenceRepository;
 
@@ -86,30 +88,44 @@ async fn main() {
 
     tracing::info!("loaded config from {}", config_path);
 
-    let zen_key = std::env::var("OPENCODEZEN_API_KEY")
-        .unwrap_or_else(|_| "test-key".to_string());
-    let openrouter_key = std::env::var("OPENROUTER_API_KEY")
-        .unwrap_or_else(|_| "test-key".to_string());
-
-    let openrouter_target = ProviderTarget::new(
-        "openrouter".to_string(),
+    let default_target = ProviderTarget::new(
+        "default".to_string(),
         CircuitBreaker::new(5, 3, 30),
-        Box::new(move || -> Arc<dyn providers::ChatProvider + Send + Sync> {
-            Arc::new(OpenRouterProvider::new(openrouter_key.clone()))
+        Box::new(|| -> Arc<dyn providers::ChatProvider + Send + Sync> {
+            Arc::new(OpenRouterProvider::new(
+                std::env::var("OPENROUTER_API_KEY").unwrap_or_else(|_| "test-key".to_string())
+            ))
         }),
     );
-    let zen_target = ProviderTarget::new(
-        "zen".to_string(),
-        CircuitBreaker::new(5, 3, 30),
-        Box::new(move || -> Arc<dyn providers::ChatProvider + Send + Sync> {
-            Arc::new(ZenProvider::new(zen_key.clone()))
-        }),
-    );
+    let provider_registry = Arc::new(ProviderRegistry::new(default_target));
 
-    let provider_router: Arc<dyn providers::ChatProvider + Send + Sync> = Arc::new(
-        ProviderRouter::new(openrouter_target)
-            .with_provider(vec!["opencode/".to_string(), "zen/".to_string()], zen_target),
-    );
+    for (name, cfg) in &config.providers {
+        let api_key = cfg.api_key_env.as_ref()
+            .and_then(|var| std::env::var(var).ok())
+            .unwrap_or_else(|| format!("test-key-{name}"));
+
+        let circuit_breaker = CircuitBreaker::new(
+            cfg.failure_threshold,
+            3,
+            cfg.cooldown_secs,
+        );
+
+        let factory_name = name.clone();
+        let factory_key = api_key.clone();
+        let target = ProviderTarget::new(
+            name.clone(),
+            circuit_breaker,
+            Box::new(move || -> Arc<dyn providers::ChatProvider + Send + Sync> {
+                if factory_name == "openrouter" {
+                    Arc::new(OpenRouterProvider::new(factory_key.clone()))
+                } else {
+                    Arc::new(ZenProvider::new(factory_key.clone()))
+                }
+            }),
+        );
+
+        provider_registry.register_target(vec![name.clone() + "/"], target);
+    }
 
     tracing::info!(
         "providers configured: opencode-zen={}, openrouter={}",
@@ -133,11 +149,20 @@ async fn main() {
     let rate_limiting_config = config.rate_limiting.clone();
 
     let state = server::handlers::AppState::new(
-        provider_router,
+        provider_registry.clone() as Arc<dyn providers::ChatProvider + Send + Sync>,
         resource_manager,
         Arc::new(evidence_repo),
         config,
+        PathBuf::from(&config_path),
     );
+
+    #[cfg(unix)]
+    {
+        let cm_for_reload = state.config_manager.clone();
+        tokio::spawn(async move {
+            reload_signal(cm_for_reload).await;
+        });
+    }
 
     let mut app = Router::new()
         .route("/v1/chat/completions", post(server::handlers::chat_completions))
@@ -170,6 +195,20 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+}
+
+#[cfg(unix)]
+async fn reload_signal(config_manager: Arc<config::manager::ConfigManager>) {
+    use tokio::signal::unix;
+    let mut stream = unix::signal(unix::SignalKind::hangup())
+        .expect("failed to install SIGHUP handler");
+
+    while stream.recv().await.is_some() {
+        match config_manager.reload().await {
+            Ok(gen) => tracing::info!(generation = gen, "configuration reloaded"),
+            Err(e) => tracing::error!(error = %e, "reload failed, continuing with previous config"),
+        }
+    }
 }
 
 async fn shutdown_signal() {

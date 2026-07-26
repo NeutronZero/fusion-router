@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use async_trait::async_trait;
+use futures::stream::BoxStream;
 use super::router::ProviderTarget;
+use super::ChatProvider;
 use crate::config::error::ReloadError;
 use crate::config::manager::{ConfigSubscriber, ConfigSnapshot};
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk};
 
 #[derive(Debug, Clone)]
 pub struct ProviderRegistryConfig {
@@ -135,6 +139,37 @@ impl ProviderRegistry {
 
     pub fn version(&self) -> Arc<AtomicU64> {
         self.version.clone()
+    }
+}
+
+#[async_trait]
+impl ChatProvider for ProviderRegistry {
+    fn name(&self) -> &str {
+        "provider-registry"
+    }
+
+    async fn chat_completion(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> anyhow::Result<ChatCompletionResponse> {
+        let targets = self.get_matching_targets(&request.model);
+        let target = targets
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("No matching provider for model: {}", request.model))?;
+        let provider = target.get_or_init().await?;
+        provider.chat_completion(request).await
+    }
+
+    async fn chat_stream(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ChatStreamChunk>>> {
+        let targets = self.get_matching_targets(&request.model);
+        let target = targets
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("No matching provider for model: {}", request.model))?;
+        let provider = target.get_or_init().await?;
+        provider.chat_stream(request).await
     }
 }
 

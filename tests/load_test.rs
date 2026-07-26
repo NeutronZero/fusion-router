@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -87,7 +88,7 @@ fn build_app(quota: &Quota) -> Router {
         model_catalog: Default::default(),
     };
 
-    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config);
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config, PathBuf::from("config/default.yaml"));
     Router::new()
         .route("/v1/chat/completions", post(fusion_router::server::handlers::chat_completions))
         .layer(TraceLayer::new_for_http())

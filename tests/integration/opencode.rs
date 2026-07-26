@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{routing::get, routing::post, Router};
@@ -101,6 +102,7 @@ async fn test_chat_completion_endpoint() {
         resource_manager,
         evidence,
         config,
+        PathBuf::from("config/default.yaml"),
     );
 
     let app = Router::new()
@@ -296,7 +298,7 @@ async fn test_middleware_stack_rejects_unauthenticated() {
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = test_config();
 
-    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone());
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone(), PathBuf::from("config/default.yaml"));
 
     let rate_limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
     let app = Router::new()
@@ -345,7 +347,7 @@ async fn test_middleware_request_id_header() {
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = test_config();
 
-    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone());
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone(), PathBuf::from("config/default.yaml"));
 
     let rate_limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
     let app = Router::new()
@@ -406,7 +408,7 @@ async fn test_health_ready_endpoints() {
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = test_config();
 
-    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone());
+    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config.clone(), PathBuf::from("config/default.yaml"));
 
     let rate_limiter = middleware::rate_limit::RateLimiter::new(config.rate_limiting.clone());
     let app = Router::new()

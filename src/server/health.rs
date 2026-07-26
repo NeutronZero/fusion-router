@@ -24,8 +24,9 @@ pub async fn ready_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppConfig, ServerConfig, ResourceConfig, StrategyConfig, ToolsConfig, AuthConfig, RateLimitingConfig, LoggingConfig, CorsConfig};
+    use std::path::PathBuf;
     use std::sync::Arc;
+    use crate::config::{AppConfig, ServerConfig, ResourceConfig, StrategyConfig, ToolsConfig, AuthConfig, RateLimitingConfig, LoggingConfig, CorsConfig};
 
     fn dummy_state() -> AppState {
         let config = AppConfig {
@@ -56,6 +57,7 @@ mod tests {
             crate::resource::DefaultResourceManager::new(config.to_quota()),
             Arc::new(crate::telemetry::SqliteEvidenceRepository::new(":memory:").unwrap()),
             config,
+            PathBuf::from("config/default.yaml"),
         )
     }
 
