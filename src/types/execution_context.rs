@@ -105,6 +105,7 @@ pub struct ExecutionContext {
     pub deadline_ms: Option<u64>,
     pub state: Arc<Mutex<ExecutionState>>,
     pub trace: ExecutionTrace,
+    pub config_generation: u64,
 }
 
 impl ExecutionContext {
@@ -130,6 +131,7 @@ impl ExecutionContext {
             deadline_ms: None,
             state: Arc::new(Mutex::new(ExecutionState::Pending)),
             trace,
+            config_generation: 0,
         }
     }
 
