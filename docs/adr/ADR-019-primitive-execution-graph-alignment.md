@@ -1,9 +1,10 @@
 # ADR-019: PrimitiveGraph / ExecutionGraph Alignment
 
-- **Status**: Proposed (evaluation)
+- **Status**: Accepted
 - **Date**: July 2026
 - **Context**: FusionRouter v0.9 Phase 0 — Architectural Objective O-1
 - **Deciders**: FusionRouter Engineering Team
+- **Implementation Status**: In Progress (target: v0.9 Phase 1)
 
 ---
 
