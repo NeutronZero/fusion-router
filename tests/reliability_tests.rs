@@ -1,180 +1,205 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-
 use async_trait::async_trait;
-use fusion_plugin_api::{
-    CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance,
-    ExecutionError, ExecutionResult,
-};
-use fusion_router::executor::capability_executor::CapabilityExecutorEngine;
-use fusion_router::scheduler::connector_resolver::{Connector, ConnectorDescriptor, ConnectorResolver};
-use fusion_router::types::execution_context::ExecutionContext;
-use serde_json::json;
+use fusion_router::providers::circuit_breaker::{CircuitBreaker, CircuitState};
+use fusion_router::providers::router::{ProviderRouter, ProviderTarget};
+use fusion_router::providers::ChatProvider;
+use fusion_router::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice};
 
-/// Shared atomic counter used to alternate between success and failure.
-#[derive(Clone)]
-struct CallCounter(Arc<AtomicUsize>);
-
-impl CallCounter {
-    fn new() -> Self {
-        Self(Arc::new(AtomicUsize::new(0)))
-    }
-
-    fn next(&self) -> usize {
-        self.0.fetch_add(1, Ordering::SeqCst)
-    }
+/// A provider that succeeds for a fixed number of calls, then returns errors.
+/// Simulates a provider that goes down after an initial healthy period.
+struct FailingProvider {
+    call_count: AtomicU64,
+    success_before_fail: u64,
+    name: String,
 }
 
-/// A connector that alternates between success and failure on each execution call.
-struct FlakyConnector {
-    counter: CallCounter,
-}
-
-/// The executor returned by `FlakyConnector`, sharing its call counter.
-struct FlakyExecutor {
-    counter: CallCounter,
+impl FailingProvider {
+    fn new(name: &str, success_before_fail: u64) -> Self {
+        Self {
+            call_count: AtomicU64::new(0),
+            success_before_fail,
+            name: name.to_string(),
+        }
+    }
 }
 
 #[async_trait]
-impl CapabilityExecutor for FlakyExecutor {
-    async fn execute(
+impl ChatProvider for FailingProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn chat_completion(
         &self,
-        instance: &CapabilityInstance,
-        _input: serde_json::Value,
-    ) -> Result<ExecutionResult, ExecutionError> {
-        let count = self.counter.next();
-        if count % 2 == 0 {
-            Ok(ExecutionResult {
-                outputs: json!({"result": "ok"}),
-                metrics: std::collections::HashMap::new(),
+        _request: &ChatCompletionRequest,
+    ) -> anyhow::Result<ChatCompletionResponse> {
+        let count = self.call_count.fetch_add(1, Ordering::SeqCst);
+        if count < self.success_before_fail {
+            Ok(ChatCompletionResponse {
+                id: "test".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: self.name.clone(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: "ok".into(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
+                usage: None,
             })
         } else {
-            Err(ExecutionError {
-                connector: "flaky".into(),
-                capability: instance.contract.id.clone(),
-                reason: "simulated failure".into(),
-                retryable: true,
-            })
+            Err(anyhow::anyhow!("{} provider outage simulated", self.name))
         }
     }
 }
 
-impl Connector for FlakyConnector {
-    fn descriptor(&self) -> ConnectorDescriptor {
-        ConnectorDescriptor {
-            name: "flaky".into(),
-            version: semver::Version::new(0, 10, 0),
-            supported_capabilities: vec![CapabilityId::new("flaky.test")],
+/// A provider that always succeeds and tracks call count.
+struct AlwaysOkProvider {
+    name: String,
+    call_count: AtomicU64,
+}
+
+impl AlwaysOkProvider {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            call_count: AtomicU64::new(0),
         }
     }
+}
 
-    fn executor(&self) -> Arc<dyn CapabilityExecutor> {
-        Arc::new(FlakyExecutor {
-            counter: self.counter.clone(),
+#[async_trait]
+impl ChatProvider for AlwaysOkProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn chat_completion(
+        &self,
+        _request: &ChatCompletionRequest,
+    ) -> anyhow::Result<ChatCompletionResponse> {
+        self.call_count.fetch_add(1, Ordering::SeqCst);
+        Ok(ChatCompletionResponse {
+            id: "test".into(),
+            object: "chat.completion".into(),
+            created: 0,
+            model: self.name.clone(),
+            choices: vec![Choice {
+                index: 0,
+                message: ChatMessage {
+                    role: "assistant".into(),
+                    content: "ok".into(),
+                },
+                finish_reason: "stop".into(),
+            }],
+            usage: None,
         })
     }
 }
 
-fn make_instance() -> CapabilityInstance {
-    CapabilityInstance {
-        contract: CapabilityContract {
-            id: CapabilityId::new("flaky.test"),
-            version: semver::Version::parse("0.1.0").unwrap(),
-            description: "flaky test capability".into(),
-            inputs_schema: json!({}),
-            outputs_schema: json!({}),
-            permissions: vec![],
-            estimated_cost_usd: 0.0,
-            estimated_latency_ms: 1,
-            reliability_score: 0.5,
-            supports_streaming: false,
-        },
-        runtime_params: json!({}),
+fn test_request(model: &str) -> ChatCompletionRequest {
+    ChatCompletionRequest {
+        model: model.into(),
+        messages: vec![],
+        stream: false,
+        temperature: None,
+        max_tokens: None,
+        tools: None,
+        files: None,
+        execution: None,
+        output: None,
     }
 }
 
-#[tokio::test]
-async fn test_flaky_connector_alternates_success_failure() {
-    let resolver = ConnectorResolver::new();
-    let connector = FlakyConnector {
-        counter: CallCounter::new(),
-    };
-    resolver
-        .register_connector(Arc::new(connector))
-        .expect("registration should succeed");
-
-    let engine = CapabilityExecutorEngine::new(resolver);
-    let instance = make_instance();
-
-    // First call — succeeds (count=0, even)
-    let ctx = ExecutionContext::new(instance.clone(), "flaky".into(), json!({}));
-    let result = engine.execute_capability(&ctx).await;
-    assert!(result.is_ok(), "call 0 (even) should succeed");
-
-    // Second call — fails (count=1, odd)
-    let ctx = ExecutionContext::new(instance.clone(), "flaky".into(), json!({}));
-    let err = engine
-        .execute_capability(&ctx)
-        .await
-        .expect_err("call 1 (odd) should fail");
-    assert_eq!(err.connector, "flaky");
-    assert_eq!(err.capability.as_str(), "flaky.test");
-    assert!(err.reason.contains("simulated failure"));
-    assert!(err.retryable, "failure should be marked retryable");
-
-    // Third call — succeeds again (count=2, even)
-    let ctx = ExecutionContext::new(instance.clone(), "flaky".into(), json!({}));
-    let result = engine.execute_capability(&ctx).await;
-    assert!(result.is_ok(), "call 2 (even) should succeed");
-
-    // Fourth call — fails again (count=3, odd)
-    let ctx = ExecutionContext::new(instance, "flaky".into(), json!({}));
-    let err = engine
-        .execute_capability(&ctx)
-        .await
-        .expect_err("call 3 (odd) should fail");
-    assert_eq!(err.connector, "flaky");
-    assert!(err.retryable);
+fn make_target(
+    name: &str,
+    provider: Arc<dyn ChatProvider + Send + Sync>,
+    breaker: CircuitBreaker,
+) -> ProviderTarget {
+    ProviderTarget::new(
+        name.into(),
+        breaker,
+        Box::new(move || provider.clone()),
+    )
 }
 
 #[tokio::test]
-async fn test_no_panic_or_resource_leak_on_connector_failure() {
-    let resolver = ConnectorResolver::new();
-    let connector = FlakyConnector {
-        counter: CallCounter::new(),
-    };
-    resolver
-        .register_connector(Arc::new(connector))
-        .expect("registration should succeed");
+async fn test_provider_outage_simulation() {
+    // Phase 1: Set up providers
+    let failing = Arc::new(FailingProvider::new("primary", 2));
+    let fallback = Arc::new(AlwaysOkProvider::new("fallback"));
 
-    let engine = CapabilityExecutorEngine::new(resolver.clone());
-    let instance = make_instance();
+    // Phase 2: Create circuit breaker and verify initial Closed state
+    let breaker = CircuitBreaker::new(3, 1, 60);
+    assert_eq!(breaker.state(), CircuitState::Closed, "breaker should start Closed");
+    assert!(breaker.can_execute(), "breaker should allow execution initially");
 
-    // Run 20 calls — alternating success/failure, verify no panic
-    for i in 0..20 {
-        let ctx = ExecutionContext::new(instance.clone(), "flaky".into(), json!({}));
-        let result = engine.execute_capability(&ctx).await;
-        if i % 2 == 0 {
-            assert!(result.is_ok(), "call {} (even) should succeed", i);
-        } else {
-            assert!(result.is_err(), "call {} (odd) should fail", i);
-        }
-    }
-
-    // Verify resolver state is intact — no resource leak
-    let names = resolver.connector_names();
-    assert_eq!(names.len(), 1, "connector should still be registered");
-    assert_eq!(names[0], "flaky");
-
-    let bound = resolver.bind(&instance);
-    assert!(
-        bound.is_ok(),
-        "resolver should still bind after repeated failures"
+    let primary_target = make_target("primary", failing.clone(), breaker);
+    let fallback_target = make_target(
+        "fallback",
+        fallback.clone(),
+        CircuitBreaker::new(3, 1, 60),
+    );
+    let default_target = make_target(
+        "default",
+        Arc::new(AlwaysOkProvider::new("default")),
+        CircuitBreaker::new(3, 1, 60),
     );
 
-    // Verify executor from fresh bind still works
-    let engine2 = CapabilityExecutorEngine::new(resolver);
-    let ctx = ExecutionContext::new(instance, "flaky".into(), json!({}));
-    let result = engine2.execute_capability(&ctx).await;
-    assert!(result.is_ok(), "call after fresh bind should succeed (even count)");
+    // Phase 3: Route with primary (first match) then fallback (second match)
+    let router = ProviderRouter::new(default_target)
+        .with_provider(vec!["test/".into()], primary_target)
+        .with_provider(vec!["test/".into()], fallback_target);
+
+    let req = test_request("test/model");
+
+    // Phase 4: Primary healthy — handles requests directly
+    for i in 0..2 {
+        let resp = router.chat_completion(&req).await.unwrap();
+        assert_eq!(
+            resp.model, "primary",
+            "request {}: primary should handle while healthy",
+            i + 1
+        );
+    }
+
+    // Phase 5: Primary starts failing — fallback handles.
+    // After 3 failures the circuit opens (requests 2-4 = indices 2,3,4).
+    for i in 2..5 {
+        let resp = router.chat_completion(&req).await.unwrap();
+        assert_eq!(
+            resp.model, "fallback",
+            "request {}: fallback should handle during outage",
+            i + 1
+        );
+    }
+
+    // Phase 6: Circuit is now Open — primary skipped, fallback handles directly
+    for i in 5..8 {
+        let resp = router.chat_completion(&req).await.unwrap();
+        assert_eq!(
+            resp.model, "fallback",
+            "request {}: fallback should handle after circuit open",
+            i + 1
+        );
+    }
+
+    // Phase 7: Verify exact call counts proving circuit state transitions
+    // Primary: 2 success + 3 failures = 5 calls (no more after circuit opens)
+    assert_eq!(
+        failing.call_count.load(Ordering::Relaxed),
+        5,
+        "primary called 2x (success) + 3x (failure) before circuit opened"
+    );
+
+    // Fallback: requests 3-8 = 6 calls (all after primary started failing)
+    assert_eq!(
+        fallback.call_count.load(Ordering::Relaxed),
+        6,
+        "fallback handled all 6 requests after primary failure"
+    );
 }
