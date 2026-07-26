@@ -174,6 +174,14 @@ async fn main() {
         });
     }
 
+    // Spawn connector health checker
+    let health_checker = Arc::new(scheduler::connector_health::ConnectorHealthChecker::new(60));
+    let hc_resolver = state.connector_resolver.clone();
+    let hc_checker = health_checker.clone();
+    tokio::spawn(async move {
+        hc_checker.run(hc_resolver).await;
+    });
+
     let mut app = Router::new()
         .route("/v1/chat/completions", post(server::handlers::chat_completions))
         .route("/metrics", get(server::handlers::metrics_handler))
