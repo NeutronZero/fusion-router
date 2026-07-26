@@ -2,6 +2,17 @@
 
 Based on structured debate analysis of v0.8.0 status (see `debate_architecture.md`).
 
+## Architectural Objectives
+
+These are the primary architectural refinements that v0.9 must address, ranked by impact. They are not tasks — they are constraints that all Phase 1-3 work must respect.
+
+| Rank | Objective | Rationale |
+|------|-----------|-----------|
+| **O-1** | **Eliminate or formally constrain PrimitiveGraph/ExecutionGraph drift** | The compiler is now the architectural center. Any divergence between the compiler IR (`PrimitiveGraph`) and the runtime graph (`ExecutionGraph`) produces silent correctness failures. Whether achieved by making `ExecutionGraph` a direct lowering target, generating it mechanically from `PrimitiveGraph`, or documenting strict invariants, this must be resolved before expanding into broader optimization or plugin capabilities. |
+| **O-2** | **Complete ADR-018 migration: retire `apply()` from `Strategy` trait** | All consumers must use `lower()`. The dual-path executor (`resolve_strategy()` preferring `lower()` over `apply()`) was a transitional design; Phase 3 makes it architectural. |
+| **O-3** | **Make compiler passes verifiable** | Compiler passes transform `WorkflowIR` → `WorkflowIR` with transaction rollback. Every pass must document its pre/post invariants and be independently testable via golden IR snapshots. |
+| **O-4** | **Provenance-first artifact model** | Every `ExecutionResult` must carry the compiler provenance (graph hash, pass manifest, PrimitiveGraph version) that produced it. This enables audit, replay, and debugging without shared state. |
+
 ## Completed in v0.8.x Working Tree
 
 | Item | Description |
@@ -19,6 +30,7 @@ Based on structured debate analysis of v0.8.0 status (see `debate_architecture.m
 
 | Priority | Item | Effort |
 |----------|------|--------|
+| P0 | **Architectural Objective O-1**: Eliminate or formally constrain PrimitiveGraph/ExecutionGraph drift. Make `ExecutionGraph` a direct lowering target from `PrimitiveGraph` or enforce strict invariants. | 3-5 days |
 | P0 | **ADR-018 Phase 3**: Retire `apply()` from `Strategy` trait. All consumers use `lower()`. | 3-5 days |
 | P0 | **Document migration**: Add deprecation notice to `apply()`, update all plugin examples | 1 day |
 | P0 | **Fix unused imports warnings**: Clean up `#[allow(unused_imports)]` in `compiler/ir/mod.rs` | 0.5 day |
@@ -31,7 +43,6 @@ Based on structured debate analysis of v0.8.0 status (see `debate_architecture.m
 | Priority | Item | Effort |
 |----------|------|--------|
 | P1 | **Optimization passes**: Implement at least 2 concrete `OptimizationPass` impls (e.g., dead node elimination, FanOut consolidation) | 3-5 days |
-| P1 | **PrimitiveGraph → ExecutionGraph bridge**: Make `primitive_to_subgraph()` handle all edge cases (nested FanOut, multi-level Barrier chaining) | 2-3 days |
 | P2 | **Artifact trait integration**: Wire `Artifact` trait into execution model — store typed artifacts per node | 2 days |
 | P2 | **FusionStrategy refinement**: Add dynamic sub-strategy selection based on model availability | 1-2 days |
 
@@ -49,4 +60,3 @@ Based on structured debate analysis of v0.8.0 status (see `debate_architecture.m
 1. **Phase 2-3 timeline**: Who owns the scheduler migration to `PrimitiveGraph`? Without a concrete plan, the SDL infrastructure remains ornamental.
 2. **Production deployments**: How many real users exist? If zero, the churn is acceptable pre-1.0.
 3. **ResourceGuard contract**: At `pipeline.rs:167-168`, the guard is created and discarded — is RAII Drop relied upon for release?
-4. **PrimitiveGraph/ExecutionGraph drift**: Optimizers could produce no observable effect if they transform `PrimitiveGraph` but the scheduler reads `ExecutionGraph`.
