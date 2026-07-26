@@ -278,7 +278,12 @@ impl ConfigSubscriber for ProviderRegistry {
                 pricing.remove(name.as_str());
             }
 
-            self.prefixes.write().clear();
+            let mut prefix_list = self.prefixes.write();
+            prefix_list.clear();
+            for (name, target) in &candidates {
+                prefix_list.push((vec![name.clone() + "/"], target.clone()));
+            }
+            drop(prefix_list);
 
             *targets = candidates;
         }
