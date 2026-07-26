@@ -443,6 +443,8 @@ The following are explicitly deferred beyond v0.11:
 ## 7. References
 
 - [FusionRouter v0.10.0 Architecture Specification](docs/fusionrouter_architecture_v0.10.0.md)
+- [Release Gate Specification](docs/release/release_gate_spec.md) — executable release criteria
+- [ADR-027 — Architecture Conformance Testing](docs/adr/ADR-027-architecture-conformance-testing.md)
 - [ADR-030 — Session Replay Semantics](docs/adr/ADR-030-session-replay-semantics.md)
 - [ADR-031 — Trigger Request Semantics](docs/adr/ADR-031-trigger-request-semantics.md)
 - [v0.10 Roadmap](docs/roadmap-v0.10.md) (predecessor, complete)
