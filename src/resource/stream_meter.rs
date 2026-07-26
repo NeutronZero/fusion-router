@@ -102,3 +102,137 @@ pub struct StreamMeterReport {
 fn estimate_tokens(s: &str) -> u64 {
     (s.len() as f64 / 4.0).ceil() as u64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Usage;
+
+    #[test]
+    fn test_initial_state() {
+        let meter = StreamMeter::new();
+        assert_eq!(meter.prompt_tokens(), 0);
+        assert_eq!(meter.completion_tokens(), 0);
+        assert!(meter.first_chunk_at.is_none());
+        assert!(meter.last_chunk_at.is_none());
+    }
+
+    #[test]
+    fn test_record_chunk_accumulates_tokens() {
+        let mut meter = StreamMeter::new();
+        let chunk = ChatStreamChunk {
+            content: Some("Hello world".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        meter.record_chunk(&chunk, None);
+        assert_eq!(meter.completion_tokens(), 3);
+        assert_eq!(meter.prompt_tokens(), 0);
+    }
+
+    #[test]
+    fn test_record_chunk_sets_first_chunk_at() {
+        let mut meter = StreamMeter::new();
+        let chunk = ChatStreamChunk {
+            content: Some("a".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        meter.record_chunk(&chunk, None);
+        let first = meter.first_chunk_at;
+        assert!(first.is_some());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        meter.record_chunk(&chunk, None);
+        assert_eq!(meter.first_chunk_at, first);
+        assert!(meter.last_chunk_at.unwrap() > first.unwrap());
+    }
+
+    #[test]
+    fn test_finalize_returns_report() {
+        let mut meter = StreamMeter::new();
+        let chunk = ChatStreamChunk {
+            content: Some("Hello beautiful world".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        meter.record_chunk(&chunk, None);
+        let report = meter.finalize(None);
+        assert_eq!(report.completion_tokens, 6);
+        assert_eq!(report.prompt_tokens, 0);
+        assert_eq!(report.total_tokens, 6);
+        assert!(report.ttfb_ms.is_some());
+        assert!(report.total_duration_ms.is_some());
+    }
+
+    #[test]
+    fn test_finalize_sets_cost() {
+        let mut meter = StreamMeter::new();
+        let chunk = ChatStreamChunk {
+            content: Some("Hello world".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        let pricing = ModelPricing {
+            input_cost_per_1k: 500.0,
+            output_cost_per_1k: 500.0,
+        };
+        meter.record_chunk(&chunk, Some(&pricing));
+        let report = meter.finalize(Some(&pricing));
+        assert!(report.cost_millicosts > 0);
+    }
+
+    #[test]
+    fn test_usage_from_final_chunk() {
+        let mut meter = StreamMeter::new();
+        let content_chunk = ChatStreamChunk {
+            content: Some("Hello".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        meter.record_chunk(&content_chunk, None);
+        let final_chunk = ChatStreamChunk {
+            content: None,
+            finish_reason: Some("stop".to_string()),
+            usage: Some(Usage {
+                prompt_tokens: 50,
+                completion_tokens: 150,
+                total_tokens: 200,
+            }),
+        };
+        meter.record_chunk(&final_chunk, None);
+        assert_eq!(meter.prompt_tokens(), 50);
+        assert_eq!(meter.completion_tokens(), 150);
+    }
+
+    #[test]
+    fn test_empty_content_zero_tokens() {
+        let mut meter = StreamMeter::new();
+        let chunk = ChatStreamChunk {
+            content: Some("".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        meter.record_chunk(&chunk, None);
+        assert_eq!(meter.completion_tokens(), 0);
+    }
+
+    #[test]
+    fn test_two_phase() {
+        let mut meter = StreamMeter::new();
+        let chunk = ChatStreamChunk {
+            content: Some("test".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        let pricing = ModelPricing {
+            input_cost_per_1k: 500.0,
+            output_cost_per_1k: 500.0,
+        };
+        meter.record_chunk(&chunk, Some(&pricing));
+        let report1 = meter.finalize(Some(&pricing));
+        let report2 = meter.finalize(Some(&pricing));
+        assert_eq!(report1.completion_tokens, report2.completion_tokens);
+        assert_eq!(report1.total_tokens, report2.total_tokens);
+        assert_eq!(report1.cost_millicosts, report2.cost_millicosts);
+    }
+}
