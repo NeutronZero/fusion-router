@@ -57,6 +57,74 @@ impl ChatProvider for FailingProvider {
     }
 }
 
+/// A provider that succeeds for N calls, fails for M calls, then recovers indefinitely.
+struct RecoveringProvider {
+    call_count: AtomicU64,
+    success_before_fail: u64,
+    fail_count: u64,
+    name: String,
+}
+
+impl RecoveringProvider {
+    fn new(name: &str, success_before_fail: u64, fail_count: u64) -> Self {
+        Self {
+            call_count: AtomicU64::new(0),
+            success_before_fail,
+            fail_count,
+            name: name.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatProvider for RecoveringProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn chat_completion(
+        &self,
+        _request: &ChatCompletionRequest,
+    ) -> anyhow::Result<ChatCompletionResponse> {
+        let count = self.call_count.fetch_add(1, Ordering::SeqCst);
+        if count < self.success_before_fail {
+            Ok(ChatCompletionResponse {
+                id: "test".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: self.name.clone(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: "ok".into(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
+                usage: None,
+            })
+        } else if count < self.success_before_fail + self.fail_count {
+            Err(anyhow::anyhow!("{} provider outage simulated", self.name))
+        } else {
+            Ok(ChatCompletionResponse {
+                id: "test".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: self.name.clone(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: "ok".into(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
+                usage: None,
+            })
+        }
+    }
+}
+
 /// A provider that always succeeds and tracks call count.
 struct AlwaysOkProvider {
     name: String,
@@ -201,5 +269,90 @@ async fn test_provider_outage_simulation() {
         fallback.call_count.load(Ordering::Relaxed),
         6,
         "fallback handled all 6 requests after primary failure"
+    );
+}
+
+#[tokio::test]
+async fn test_state_convergence_after_outage() {
+    let primary_provider = Arc::new(RecoveringProvider::new("primary", 2, 6));
+    let fallback = Arc::new(AlwaysOkProvider::new("fallback"));
+
+    let breaker = CircuitBreaker::new(3, 2, 0);
+    assert_eq!(breaker.state(), CircuitState::Closed);
+
+    let primary_target = make_target("primary", primary_provider.clone(), breaker);
+    let fallback_target = make_target(
+        "fallback",
+        fallback.clone(),
+        CircuitBreaker::new(3, 2, 0),
+    );
+    let default_target = make_target(
+        "default",
+        Arc::new(AlwaysOkProvider::new("default")),
+        CircuitBreaker::new(3, 2, 0),
+    );
+
+    let router = ProviderRouter::new(default_target)
+        .with_provider(vec!["test/".into()], primary_target)
+        .with_provider(vec!["test/".into()], fallback_target);
+
+    let req = test_request("test/model");
+
+    // Phase 1: Closed — primary handles both requests
+    for i in 0..2 {
+        let resp = router.chat_completion(&req).await.unwrap();
+        assert_eq!(resp.model, "primary", "req {}: primary handles in closed state", i + 1);
+    }
+
+    // Phase 2: Failure threshold reached — circuit opens after 3rd failure.
+    // Reqs 3-4: primary fails, fallback takes over (Closed, fail_count=1,2).
+    // Req 5: primary fails → failure_count=3 → Open. Fallback handles.
+    for i in 2..5 {
+        let resp = router.chat_completion(&req).await.unwrap();
+        assert_eq!(resp.model, "fallback", "req {}: fallback handles as circuit opens", i + 1);
+    }
+
+    // Phase 3: Circuit Open — primary skipped, fallback handles.
+    // With cooldown=0, can_execute immediately transitions Open→HalfOpen
+    // each time, but the provider is still failing so HalfOpen→Open again.
+    // Reqs 6-8: oscillating Open↔HalfOpen while failing, fallback handles.
+    for i in 5..8 {
+        let resp = router.chat_completion(&req).await.unwrap();
+        assert_eq!(resp.model, "fallback", "req {}: fallback during open/half-open oscillation", i + 1);
+    }
+
+    // Phase 4: Provider recovers — converges Closed→Open→HalfOpen→Closed.
+    // Req 9: can_execute→HalfOpen, primary succeeds → HalfOpen (success_count=1).
+    assert_eq!(
+        router.chat_completion(&req).await.unwrap().model,
+        "primary",
+        "req 9: first recovered request transitions to half-open"
+    );
+
+    // Req 10: HalfOpen, primary succeeds → Closed (success_count=2 ≥ 2).
+    assert_eq!(
+        router.chat_completion(&req).await.unwrap().model,
+        "primary",
+        "req 10: second success closes the circuit"
+    );
+
+    // Phase 5: Fully recovered — primary handles in Closed state.
+    for i in 11..14 {
+        let resp = router.chat_completion(&req).await.unwrap();
+        assert_eq!(resp.model, "primary", "req {}: primary handles after full recovery", i);
+    }
+
+    // Call count verification:
+    // Primary: 2 success + 6 failure + 2 success (half-open recovery) + 3 (closed) = 13
+    assert_eq!(
+        primary_provider.call_count.load(Ordering::Relaxed),
+        13,
+        "primary called 13 times total across all phases"
+    );
+    // Fallback: requests 3-8 = 6 calls
+    assert_eq!(
+        fallback.call_count.load(Ordering::Relaxed),
+        6,
+        "fallback handled requests during outage only"
     );
 }

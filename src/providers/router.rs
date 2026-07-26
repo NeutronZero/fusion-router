@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use tokio::sync::OnceCell;
 
-use super::circuit_breaker::CircuitBreaker;
+use super::circuit_breaker::{CircuitBreaker, CircuitState};
 use super::ChatProvider;
 use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk};
 
@@ -47,6 +47,10 @@ impl ProviderTarget {
 
     pub fn record_failure(&self) {
         self.breaker.record_failure();
+    }
+
+    pub fn breaker_state(&self) -> CircuitState {
+        self.breaker.state()
     }
 }
 
