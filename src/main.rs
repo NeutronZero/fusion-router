@@ -20,10 +20,17 @@ mod telemetry;
 mod types;
 mod config;
 mod plugin;
+mod capability;
+mod policy;
+mod session;
+mod lifecycle;
+mod trigger;
+mod connectors;
 mod workflow;
 mod tools;
 mod cache;
 mod middleware;
+mod devex;
 
 #[cfg(feature = "wasm-plugins")]
 mod wasm;

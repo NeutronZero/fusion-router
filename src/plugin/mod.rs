@@ -4,7 +4,7 @@ mod manifest;
 pub mod wasm;
 
 #[allow(unused_imports)]
-pub use manager::PluginManager;
+pub use manager::{CompatibilityChecker, PluginManager};
 #[allow(unused_imports)]
 pub use manifest::PluginManifest;
 

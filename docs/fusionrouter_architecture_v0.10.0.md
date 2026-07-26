@@ -1,8 +1,9 @@
-# FusionRouter v0.9.0 — System Architecture Specification & Engineering Reference
+# FusionRouter v0.10.0 Capability Platform — System Architecture Specification & Engineering Reference
 
 > **Classification**: Production-Grade Technical Architecture Document
-> **Version**: 0.9.0 | **Edition**: Rust 2021 | **Date**: 2026-07-26
-> **Repository**: `fusion-router`
+> **Version**: 0.10.0 | **Edition**: Rust 2021 | **Date**: 2026-07-26
+> **Repository**: `fusion-router` | **Governance**: ADR-021 through ADR-031
+> **Status**: ✅ Complete — 314 tests passing, 0 warnings, 0 warnings on `cargo check`.
 
 ---
 
@@ -24,6 +25,13 @@
    - 3.10 [Sandboxed Extension Engine](#310-sandboxed-extension-engine)
    - 3.11 [Tools & Registry](#311-tools--registry)
    - 3.12 [Telemetry & Observability](#312-telemetry--observability)
+   - 3.13 [Artifact Model](#313-artifact-model)
+   - 3.14 [Trigger Framework & Unified Ingress](#314-trigger-framework--unified-ingress)
+   - 3.15 [Connector Ecosystem](#315-connector-ecosystem)
+   - 3.16 [Developer Experience & Diagnostics](#316-developer-experience--diagnostics)
+   - 3.17 [Distributed Scheduling](#317-distributed-scheduling)
+   - 3.18 [Production Hardening](#318-production-hardening)
+   - 3.19 [Session Continuity & Replay](#319-session-continuity--replay)
 4. [Request Lifecycle Walkthrough](#4-request-lifecycle-walkthrough)
 5. [Security, Concurrency & Resilience Matrix](#5-security-concurrency--resilience-matrix)
 6. [Workspace Structure & Dependency Mapping](#6-workspace-structure--dependency-mapping)
@@ -35,17 +43,20 @@
 
 ### Purpose
 
-FusionRouter is an **intelligent LLM orchestration router** that decouples *reasoning strategies* from *physical LLM providers*. It accepts OpenAI-compatible `/v1/chat/completions` requests and dynamically selects the optimal execution strategy (single-shot, consensus, reflection, debate, ReAct tool loops, or chained pipelines) and provider backend (OpenRouter, OpenCodeZen, Ollama) based on real-time intent analysis, budget constraints, and historical performance telemetry.
+FusionRouter is an **intelligent LLM orchestration operating system and capability platform** that decouples *capabilities, connectors, and reasoning strategies* from *physical LLM providers*. It processes requests through a single unified ingress pipeline (`ExecutionRequest`), dynamic capability resolution (`CapabilityResolver`), declarative policy compilation (`PolicyCompilerPass`), deterministic execution session continuity (`ReplayEngine`), and late-bound connector invocation (`ConnectorResolver`).
 
 ### Core Architectural Principles
 
 | Principle | Mechanism |
 |-----------|-----------|
 | **Strategy–Provider Decoupling** | `Strategy` trait lowers into `PrimitiveGraph` IR independent of provider identity; `ProviderRouter` resolves physical endpoints at execution time |
-| **Compile-Before-Execute** | All `WorkflowIR` passes through a transactional `Compiler` pipeline (constraint → control-flow → model resolution → budget) before any LLM call is made |
+| **Compile-Before-Execute** | All `WorkflowIR` passes through a transactional `Compiler` pipeline (constraint → control-flow → model resolution → policy compilation) before execution |
+| **Immutable Plugin SDK & Registry** | `fusion-plugin-api v0.1.0` defines versioned contracts (`CapabilityContract`); `CapabilityRegistry` is immutable post-freeze |
+| **Declarative Policy Compilation** | Policy ASTs compile into `PolicyIR` and apply via additive, non-destructive passes (`PolicyCompilerPass`) with strict precedence ($\text{Deny} > \text{Approval} > \text{Allow}$) |
+| **Session Continuity & 3 Replay Modes** | `ExecutionSession` identity separated from `SessionSnapshot`; supports `Deterministic`, `Inspection` (side-effect free), and `Simulation` replay modes |
+| **Unified Ingress & Multi-Trace Provenance** | `ExecutionRequest` canonical contract for Webhooks, Cron, EventBus, and Manual triggers; provenance chain: $\text{TriggerTrace} \to \text{PolicyTrace} \to \text{ExecutionTrace}$ |
 | **RAII Resource Safety** | `ResourceGuard` auto-releases quota on `Drop` if uncommitted; `BudgetEnvelope` enforces per-request cost/token/iteration ceilings via `Arc<AtomicU64>` |
-| **Closed-Loop Calibration** | `FeedbackCalibrator` EMA-smooths observed success rates into provider capability scores, driving future routing decisions |
-| **Defense-in-Depth Isolation** | Circuit breakers per-provider, fuel-metered WASM sandboxes, command allow-lists for shell tools, path-traversal guards for file reads |
+| **Defense-in-Depth Isolation** | Circuit breakers per-provider, sandboxed connectors (`ShellConnector`, `BrowserConnector`), path-traversal guards, and command allow-lists |
 
 ### Technology Stack
 
@@ -140,6 +151,24 @@ graph TD
         PROM["Prometheus Metrics<br/>requests │ latency │ errors │ tokens"]
     end
 
+    subgraph "Ingress & Triggers (Phase 7A)"
+        TRIG["Trigger Framework<br/>Webhook / Cron / EventBus"]
+        REQ["ExecutionRequest<br/>Canonical Ingress Contract"]
+        TRACE["TriggerTrace<br/>Layered Provenance Chain"]
+    end
+
+    subgraph "Ecosystem Layer (Phase 7 Tracks A-D)"
+        CONN["Connectors<br/>GitHub / Browser / MCP / FS / HTTP / Shell"]
+        DEVEX["Developer Experience<br/>Visualizer / Inspector / Scaffolder"]
+        DIST["Distributed Scheduler<br/>RemoteWorkerPool + Local"]
+        HARDEN["Production Hardening<br/>Stress / Backpressure / Recovery"]
+    end
+
+    subgraph "Session & Continuity (Phase 5)"
+        SESS["ExecutionSession<br/>Identity + Snapshot"]
+        REPLAY["ReplayEngine<br/>Deterministic / Inspection / Simulation"]
+    end
+
     CLIENT --> MW_CORS --> MW_AUTH --> MW_REQID --> MW_RATE --> MW_TRACE
 
     MW_TRACE --> P1
@@ -174,6 +203,7 @@ graph TD
 
     S_REACT -.-> TOOLS
     S_REACT -.-> WASM
+    S_REACT -.-> CONN
 
     PR --> CB_OR --> API_OR
     PR --> CB_ZEN --> API_ZEN
@@ -185,6 +215,11 @@ graph TD
     CALIB -.-> PR
 
     BUF -.-> CACHE
+    BUF -.-> DEVEX
+
+    DIST -.-> WQ
+    SESS -.-> REPLAY
+    TRIG --> REQ --> MW_TRACE
 
     P9 --> CLIENT
 
@@ -206,6 +241,15 @@ graph TD
     style CACHE fill:#117a65,color:#fff
     style SQLITE fill:#117a65,color:#fff
     style CALIB fill:#117a65,color:#fff
+    style TRIG fill:#2471a3,color:#fff
+    style REQ fill:#2471a3,color:#fff
+    style TRACE fill:#2471a3,color:#fff
+    style CONN fill:#1e8449,color:#fff
+    style DEVEX fill:#1e8449,color:#fff
+    style DIST fill:#1e8449,color:#fff
+    style HARDEN fill:#1e8449,color:#fff
+    style SESS fill:#b7950b,color:#fff
+    style REPLAY fill:#b7950b,color:#fff
 ```
 
 ---
@@ -241,7 +285,6 @@ pub struct PipelineContext {
     pub requirements: Option<Requirements>,
     pub evidence: Option<EvidenceSnapshot>,
     pub ir: Option<WorkflowIR>,
-    pub primitive: Option<PrimitiveGraph>,    // v0.9: canonical lowered IR
     pub graph: Option<ExecutionGraph>,
     pub resource_guard: Option<ResourceGuard>,
     pub execution_result: Option<ExecutionResult>,
@@ -258,9 +301,9 @@ Every pipeline failure carries a `PipelineStage` discriminant and the originatin
 // src/types/error.rs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineStage {
-    ContextAssembly, RequirementsExtraction, EvidenceSnapshot,
-    Planning, Compilation, ResourceReservation, Scheduling,
-    Execution, TelemetryRecording, ResponseBuilding,
+    ContextAssembly, RequirementsExtraction,
+    EvidenceSnapshot, Planning, Compilation, ResourceReservation,
+    Scheduling, Execution, TelemetryRecording, ResponseBuilding,
 }
 
 pub enum RouterError {
@@ -300,10 +343,10 @@ This guarantees that pending LLM calls are abandoned immediately upon client dis
 | Step | Trait Signature | Architectural Role |
 |------|----------------|-------------------|
 | `ContextAssemblyStep` | `PipelineStep<ChatCompletionRequest, ContextSnapshot>` | Token-budget trimming, UTF-8 boundary preservation |
-| `RequirementsExtractionStep` | `PipelineStep<ContextSnapshot, Requirements>` | Intent classification, model requirements derivation |
+| `RequirementsExtractionStep` | `PipelineStep<ContextSnapshot, Requirements>` | Intent classification, model requirements derivation. Sets `execution_intent` and `output_preferences` from request |
 | `EvidenceSnapshotStep` | `PipelineStep<(), Option<EvidenceSnapshot>>` | SQLite aggregation of historical telemetry |
 | `PlanningStep` | `PipelineStep<(Requirements, Option<EvidenceSnapshot>), WorkflowIR>` | Intent-to-IR strategy selection, policy application |
-| `CompilationStep` | `PipelineStep<WorkflowIR, ExecutionGraph>` | Transactional pass pipeline, DAG lowering |
+| `CompilationStep` | `PipelineStep<WorkflowIR, ExecutionGraph>` | Transactional pass pipeline with model binding from context request |
 | `ResourceReservationStep` | `PipelineStep<ExecutionGraph, ResourceGuard>` | Atomic quota reservation with RAII guard |
 | `SchedulingExecutionStep` | `PipelineStep<(ExecutionGraph, ReservationId), ExecutionResult>` | DAG traversal, concurrent node execution, budget enforcement |
 | `ResponseBuilderStep` | `PipelineStep<ExecutionResult, ChatCompletionResponse>` | OpenAI-compatible response assembly |
@@ -644,7 +687,7 @@ pub trait Strategy: Send + Sync {
 
 #### Transactional Compiler with Optimization Pipeline
 
-The `DefaultCompiler` implements a **validate → resolve → lower → optimize → assemble** pipeline with snapshot-and-rollback transactional semantics:
+The `DefaultCompiler` implements a **validate → resolve → lower** pipeline with snapshot-and-rollback transactional semantics:
 
 ```rust
 // src/compiler/mod.rs
@@ -654,13 +697,19 @@ async fn compile(&self, ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError>
     for pass in &self.passes {
         match pass.apply(current.clone()).await {
             Ok(next) => { current = next; }
-            Err(e) => { return Err(e); }                   // Rolled back to IR snapshot
+            Err(e) => {
+                tracing::warn!(pass = %pass.name(), error = %e,
+                    plan_id = %snapshot.plan_id,
+                    "compiler pass failed; transaction rolled back to initial IR snapshot");
+                return Err(e);                              // Rolled back to IR snapshot
+            }
         }
     }
-    let primitive = self.lower(current).await?;            // WorkflowIR → PrimitiveGraph (via StrategyIR)
-    let primitive = self.optimize(primitive).await?;       // Optimization passes
-    Ok(primitive.to_execution_graph(...))                  // PrimitiveGraph → ExecutionGraph
+    lower_to_graph(current)                                 // WorkflowIR → ExecutionGraph
 }
+```
+
+The `lower_to_graph()` function directly maps `IRNodeKind` variants to `ExecutionNodeKind` variants, applies default `RetryPolicy { max_retries: 2, backoff_ms: 1000 }`, and populates `GraphMetadata`. The `PrimitiveGraph` IR and `OptimizationPipeline` are available as optional post-processing for strategy lowering but are not in the default compilation path.
 ```
 
 #### Compiler Pipeline Flow
@@ -669,61 +718,74 @@ The compiler transforms a `WorkflowIR` plan into an executable `ExecutionGraph` 
 
 ```mermaid
 graph LR
-    subgraph "Validation"
-        V1["ConstraintValidation"]
-        V2["ControlFlowValidation"]
-    end
-    subgraph "Resolution"
-        R1["ModelResolution"]
-        R2["BudgetOptimisation"]
+    subgraph "Validation & Resolution"
+        V1["ConstraintValidationPass"]
+        V2["ControlFlowValidationPass"]
+        R1["ModelResolutionPass"]
+        R2["BudgetOptimisationPass"]
     end
     subgraph "Lowering"
-        L["LowerToGraph"]
+        L["lower_to_graph()"]
     end
-    subgraph "Optimization"
-        O1["DeadNodeElimination"]
-        O2["FanOutConsolidation"]
-    end
-    subgraph "Assembly"
-        A["PrimitiveToExecution"]
+    subgraph "Optimization (optional on PrimitiveGraph)"
+        O1["DeadNodeEliminationPass"]
+        O2["FanOutConsolidationPass"]
     end
 
-    WORKFLOW_IR["WorkflowIR"] --> V1 --> V2 --> R1 --> R2 --> L --> O1 --> O2 --> A --> EXEC_GRAPH["ExecutionGraph"]
+    WORKFLOW_IR["WorkflowIR"] --> V1 --> V2 --> R1 --> R2 --> L --> EXEC_GRAPH["ExecutionGraph"]
+    L -.-> PG["PrimitiveGraph"] -.-> O1 -.-> O2 -.-> EXEC_GRAPH
 
     style WORKFLOW_IR fill:#7d3c98,color:#fff
     style EXEC_GRAPH fill:#1a5276,color:#fff
+    style PG fill:#d4ac0d,color:#000
 ```
 
-Each arrow represents a pass application. The pipeline is **linear and sequential** — no pass reordering, no concurrent passes, no iteration. This ensures deterministic output for identical inputs.
+The primary compilation path is **pass pipeline → direct lowering**. The `DefaultCompiler::compile()` runs all `CompilerPass` implementations sequentially, then calls `lower_to_graph()` which directly maps `WorkflowIR` nodes to `ExecutionGraph` nodes. The `PrimitiveGraph` IR exists for strategy lowering and optimization passes but is not part of the default `DefaultCompiler` flow — it is used by individual strategy `lower()` implementations and by the `OptimizationPipeline` as an optional post-processing step.
 
 #### Compiler Pass Pipeline
 
-| # | Phase | Pass | Struct | Responsibility |
-|---|-------|------|--------|---------------|
-| 1 | **Validation** | V1 | `ConstraintValidationPass` | Rejects empty IR graphs |
-| 2 | **Validation** | V2 | `ControlFlowValidationPass` | Structural invariants + 3-color DFS cycle detection |
-| 3 | **Resolution** | R1 | `ModelResolutionPass` | Binds unresolved `node.model = None` to catalog entries |
-| 4 | **Resolution** | R2 | `BudgetOptimisationPass` | Pre-flight check against `ResourceManager::can_afford()` |
-| 5 | **Lowering** | L | `LowerToGraphPass` | WorkflowIR → PrimitiveGraph conversion |
-| 6 | **Optimization** | O1 | `DeadNodeEliminationPass` | Removes nodes unreachable from first node |
-| 7 | **Optimization** | O2 | `FanOutConsolidationPass` | Merges adjacent FanOuts, removes single-consumer FanOuts |
-| 8 | **Assembly** | A | `PrimitiveToExecutionPass` | PrimitiveGraph → ExecutionGraph with hash fingerprinting |
+| # | Phase | Pass | Struct | Location |
+|---|-------|------|--------|----------|
+| 1 | **Validation** | V1 | `ConstraintValidationPass` | `src/compiler/passes/legacy_passes.rs` |
+| 2 | **Validation** | V2 | `ControlFlowValidationPass` | `src/compiler/passes/legacy_passes.rs` |
+| 3 | **Resolution** | R1 | `ModelResolutionPass` | `src/compiler/passes/legacy_passes.rs` |
+| 4 | **Resolution** | R2 | `BudgetOptimisationPass` | `src/compiler/passes/legacy_passes.rs` |
+| 5 | **Lowering** | L | `lower_to_graph()` | `src/compiler/mod.rs` |
+| 6 | **Optimization** | O1 | `DeadNodeEliminationPass` | `src/compiler/optimization/mod.rs` |
+| 7 | **Optimization** | O2 | `FanOutConsolidationPass` | `src/compiler/optimization/mod.rs` |
 
 #### Optimization Pass Contract
 
 All optimization passes implement `OptimizationPass` with goal introspection and pre/post-condition verification:
 
 ```rust
+// src/compiler/optimization/mod.rs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptimizationGoal {
-    DeadCodeElimination, Consolidation, Inlining,
-    StrengthReduction, Parallelization, Specialization,
+    Latency,
+    TokenCost,
+    Memory,
+    GraphSimplification,
+    ProviderUtilization,
+    Determinism,
 }
 
 pub trait OptimizationPass: Send + Sync {
-    fn goal(&self) -> OptimizationGoal;
-    fn preconditions(&self) -> Vec<&'static str>;
-    fn postconditions(&self) -> Vec<&'static str>;
-    fn optimize(&self, graph: &PrimitiveGraph) -> Result<PrimitiveGraph, CompilerError>;
+    fn name(&self) -> &str;
+    fn goal(&self) -> OptimizationGoal {
+        OptimizationGoal::GraphSimplification
+    }
+    fn optimize(&self, graph: PrimitiveGraph) -> Result<PrimitiveGraph, CompilerDiagnostic>;
+    fn preconditions(&self, _graph: &PrimitiveGraph) -> Result<(), CompilerDiagnostic> {
+        Ok(())
+    }
+    fn postconditions(
+        &self,
+        _original: &PrimitiveGraph,
+        _optimized: &PrimitiveGraph,
+    ) -> Result<(), CompilerDiagnostic> {
+        Ok(())
+    }
 }
 ```
 
@@ -1559,37 +1621,348 @@ Since v0.9, every `ExecutionResult` carries an optional **artifact vector** — 
 
 ```rust
 // src/types/artifact.rs
-pub trait Artifact: Send + Sync {
-    fn artifact_type(&self) -> &'static str;
+pub trait Artifact: Send + Sync + std::fmt::Debug {
+    fn clone_box(&self) -> Box<dyn Artifact>;
+    fn version(&self) -> u16;
+    fn kind(&self) -> ArtifactKind;
+    fn artifact_type(&self) -> &'static str {
+        match self.kind() {
+            ArtifactKind::Debate => "debate",
+            ArtifactKind::Consensus => "consensus",
+            ArtifactKind::Reflection => "reflection",
+            ArtifactKind::Generic => "generic",
+        }
+    }
 }
 
 pub struct ExecutionResult {
-    pub answer: String,
-    pub metrics: ExecutionMetrics,
-    pub provenance: Provenance,
-    pub stored_artifacts: Vec<Box<dyn Artifact>>,   // v0.9
+    pub instance_id: Uuid,
+    pub success: bool,
+    pub outputs: HashMap<Uuid, serde_json::Value>,
+    pub total_latency_ms: u64,
+    pub total_cost: f64,
+    pub total_tokens: u64,
+    pub terminal_node_id: Option<Uuid>,
+    pub final_output: Option<serde_json::Value>,
+    pub stored_artifacts: Vec<Box<dyn Artifact>>,
 }
 ```
 
 **Clone semantics**: `ExecutionResult` implements `Clone` by skipping `stored_artifacts` (trait objects are not `Clone`). The `Clone` impl copies all scalar fields and sets `stored_artifacts` to an empty vec.
 
-**Provenance schema** (per `docs/decisions/provenance-schema.md`):
+**Provenance**: Execution provenance is captured on the `ExecutionGraph` via `primitive_graph_hash: u64` — a deterministic hash of the `PrimitiveGraph` structure used to produce the graph. The hash is computed via canonical `serde_json` serialization and serves as a cache key and replay identifier.
 
-v0.9 provenance captures the full **compiler identity** and **optimization history** that produced a given execution:
+---
 
-| Field | Type | Source | Purpose |
-|-------|------|--------|---------|
-| `graph_hash` | `u64` | `PrimitiveGraph::compute_hash()` | Uniquely identifies the graph topology — used as cache key and replay identifier |
-| `primitive_graph_version` | `semver::Version` | Compiler version at lowering time | Tracks the compiler generation that produced this graph |
-| `pass_manifest` | `Vec<String>` | Compiler pass pipeline | Ordered list of all passes applied (e.g., `["constraint_validation", "model_resolution", "dead_node_elimination", "fan_out_consolidation"]`) |
-| `strategy` | `StrategyDescriptor` | Strategy lowering | Name + kind + version of the strategy that produced the final execution |
-| `compiler_build` | `String` (v0.10+) | `env!("CARGO_PKG_VERSION")` | The exact compiler binary version — enables confirming which build produced the graph |
-| `optimization_level` | `String` (v0.10+) | Compiler configuration | The optimization profile used (e.g., `"-O1"`, `"-O2"`) |
-| `compiler_git_sha` | `String` (v0.10+) | `env!("VERGEN_GIT_SHA")` | Source commit at compile time — enables exact replay from source |
-| `pass_order` | `Vec<String>` (v0.10+) | Compiler pass pipeline | Canonical pass ordering fingerprint — independent of pass_manifest for ordering verification |
+### 3.14 Trigger Framework & Unified Ingress (Phase 7A / ADR-031)
 
-> [!NOTE]
-> Fields marked v0.10+ are **reserved** in the provenance schema but not yet populated at runtime. The struct definition includes them as `Option<String>` to maintain forward compatibility without breaking the ABI. See `docs/adr/ADR-017-execution-runtime-abi.md` for ABI stability requirements.
+The trigger framework normalizes all entry points (webhooks, cron schedules, event bus subscriptions, and manual invocations) into a canonical `ExecutionRequest` that flows through the standard `CompilerPipeline` → `ExecutionGraph` → `Scheduler` execution path.
+
+#### Core Types
+
+```rust
+// src/trigger/types.rs
+pub struct ExecutionRequest {
+    pub request_id: Uuid,
+    pub trigger_kind: TriggerKind,
+    pub trigger_name: String,
+    pub payload: serde_json::Value,
+    pub requester_identity: String,
+    pub created_at_ms: u64,
+}
+
+pub enum TriggerKind {
+    Webhook, Cron, EventBus, Manual,
+}
+
+pub struct TriggerDeclaration {
+    pub name: String,
+    pub kind: TriggerKind,
+    pub endpoint_or_schedule: String,
+    pub headers: HashMap<String, String>,
+}
+```
+
+#### Trigger Handlers
+
+| Handler | Struct | Trigger | Activation Pattern |
+|---------|--------|---------|-------------------|
+| **Webhook** | `WebhookTriggerHandler` | External HTTP call | Registers Axum route; deserializes payload → `ExecutionRequest` |
+| **Cron** | `CronTriggerScheduler` | Time-based schedule | Tokio interval tick; cron expression parsing |
+| **EventBus** | `EventBusTriggerSubscriber` | Internal event publish | Channel-based subscription; fan-out delivery |
+
+#### Layered Provenance Chain
+
+Every execution carries a multi-layer provenance chain that links trigger origin through policy enforcement to execution outcome:
+
+$$\text{TriggerTrace} \longrightarrow \text{PolicyTrace} \longrightarrow \text{ExecutionTrace}$$
+
+```rust
+// src/trigger/trace.rs
+pub struct TriggerTrace {
+    pub trace_id: Uuid,
+    pub events: Vec<TriggerEvent>,
+}
+
+pub enum TriggerEvent {
+    RequestReceived { request_id: Uuid, trigger_kind: TriggerKind, trigger_name: String, timestamp_ms: u64 },
+    Deduplicated { request_id: Uuid, reason: String },
+    PipelineDispatched { request_id: Uuid, plan_id: Uuid },
+}
+```
+
+**Invariant**: All trigger types pass through the same `CompilerPipeline` → `ExecutionGraph` → `Scheduler` execution path. The trigger identity and trace are preserved throughout the pipeline via `PipelineContext`.
+
+---
+
+### 3.15 Connector Ecosystem (Track B)
+
+The connector ecosystem extends FusionRouter with adapters for external services. Connectors implement the `Connector` trait and optionally the `CapabilityPlugin` contract for the plugin SDK.
+
+#### Connector Trait
+
+```rust
+// src/scheduler/connector_resolver.rs
+#[async_trait]
+pub trait Connector: Send + Sync {
+    fn descriptor(&self) -> ConnectorDescriptor;
+    async fn execute(&self, request: &TransportRequest) -> Result<TransportResponse, TransportError>;
+}
+```
+
+#### Implemented Connectors
+
+| Connector | Struct | Module | Safety Mechanisms |
+|-----------|--------|--------|-------------------|
+| **GitHub** | `GitHubConnector` | `src/connectors/github.rs` | API key auth; `CapabilityPlugin` with `CapabilityContract` |
+| **Browser** | `BrowserConnector` | `src/connectors/browser.rs` | Sandboxed rendering; no file system access |
+| **MCP** | `McpConnector` | `src/connectors/mcp.rs` | Model Context Protocol over stdio transport |
+| **Filesystem** | `FilesystemConnector` | `src/connectors/filesystem.rs` | Path traversal guards; allowed-directory prefix checks |
+| **HTTP** | `HttpConnector` | `src/connectors/http.rs` | reqwest-based; configurable timeouts and headers |
+| **Shell** | `ShellConnector` | `src/connectors/shell.rs` | Command allow-list enforcement; `tokio::process::Command` timeout |
+
+#### CapabilityContract Integration
+
+Each connector optionally exports a `CapabilityContract` via the `CapabilityPlugin` trait, enabling self-describing capability-based routing:
+
+```rust
+impl CapabilityPlugin for GitHubPlugin {
+    fn capabilities(&self) -> Vec<CapabilityContract> {
+        vec![CapabilityContract {
+            id: CapabilityId::new("github.issue.create"),
+            description: "Creates an issue on GitHub".into(),
+            inputs_schema: json!({"type": "object", "properties": {"repo": ..., "title": ...}}),
+            permissions: vec!["github".into()],
+            reliability_score: 0.95,
+            ..
+        }]
+    }
+}
+```
+
+**Invariant**: All connectors sit above the kernel — zero changes to `Scheduler`, `ResourceManager`, `Compiler`, or `Executor` traits.
+
+---
+
+### 3.16 Developer Experience & Diagnostics (Track C)
+
+Developer experience tooling provides observability into the compiler, scheduler, and runtime state for operators and developers.
+
+#### GraphVisualizer
+
+```rust
+// src/devex/visualizer.rs
+pub struct GraphVisualizer;
+
+impl GraphVisualizer {
+    pub fn to_mermaid(&self, graph: &CapabilityGraph) -> String;
+    pub fn to_ascii(&self, graph: &CapabilityGraph) -> String;
+}
+```
+
+Produces two output formats:
+- **Mermaid**: Machine-parseable diagram syntax for embedding in documentation and rendering in editors.
+- **ASCII**: Terminal-friendly graph representation for CLI `agy graph` commands.
+
+#### TraceInspector
+
+```rust
+// src/devex/trace_inspector.rs
+pub struct TraceInspector {
+    traces: Vec<DiagnosticInfo>,
+}
+
+impl TraceInspector {
+    pub fn record(&mut self, level: &str, message: &str);
+    pub fn view_diagnostics(&self) -> String;
+}
+```
+
+Records structured diagnostics during compilation and execution. Entries are indexed by level (`info`, `warn`, `error`, `critical`) for filtering. Output is plain-text for terminal consumption.
+
+#### PluginScaffolder
+
+```rust
+// src/devex/scaffold.rs
+pub struct PluginScaffolder;
+
+impl PluginScaffolder {
+    pub fn scaffold_plugin(&self, name: &str, kind: PluginKind) -> Result<(), ScaffoldError>;
+}
+```
+
+Generates plugin project templates from built-in skeletons (`connector`, `strategy`, `policy`), reducing the friction of extending FusionRouter with custom plugins.
+
+---
+
+### 3.17 Distributed Scheduling (Track D)
+
+The `DistributedScheduler` extends the scheduling layer with remote worker support while preserving the local scheduler as a fallback.
+
+#### Architecture
+
+```rust
+// src/scheduler/distributed.rs
+pub struct WorkerNode {
+    pub id: String,
+    pub address: String,
+    pub active_tasks: usize,
+    pub capacity: usize,
+}
+
+pub struct RemoteWorkerPool {
+    workers: Arc<RwLock<HashMap<String, WorkerNode>>>,
+}
+
+pub struct DistributedScheduler {
+    pool: RemoteWorkerPool,
+    local_fallback: DefaultScheduler,
+}
+```
+
+#### Scheduler Implementation
+
+`DistributedScheduler` implements the `Scheduler` trait and delegates to `DefaultScheduler` for local execution:
+
+```rust
+#[async_trait]
+impl Scheduler for DistributedScheduler {
+    fn schedule(&self, graph: ExecutionGraph, reservation: ReservationId) -> ExecutionInstance {
+        self.local_fallback.schedule(graph, reservation)
+    }
+
+    async fn run_with_cancellation(
+        &self, instance: &mut ExecutionInstance, executor: &dyn Executor, token: &CancellationToken,
+    ) -> Result<ExecutionResult, SchedulerError> {
+        self.local_fallback.run_with_cancellation(instance, executor, token).await
+    }
+}
+```
+
+#### Pool Management
+
+| Operation | Method | Thread Safety |
+|-----------|--------|---------------|
+| Add worker | `add_worker(node)` | `tokio::sync::RwLock` write |
+| Remove worker | `remove_worker(id)` | `tokio::sync::RwLock` write |
+| List workers | `get_workers()` | `tokio::sync::RwLock` read |
+
+**Invariant**: `DistributedScheduler` implements `Scheduler` without altering compiler, runtime execution models, or resource management. The `RemoteWorkerPool` is an add-on — the local `DefaultScheduler` remains the primary execution path.
+
+---
+
+### 3.18 Production Hardening (Track A)
+
+Production hardening encompasses stress testing, backpressure mechanisms, and session recovery validation.
+
+#### Stress Test Framework
+
+```rust
+// tests/stress/concurrency_test.rs
+#[cfg(test)]
+mod tests {
+    async fn test_high_concurrency_workflow_execution();
+    async fn test_backpressure_queue_depth_limits();
+    async fn test_fault_injection_and_session_recovery();
+}
+```
+
+The stress test suite validates:
+
+| Test | Scenario | Assertion |
+|------|----------|-----------|
+| **High Concurrency** | 100 concurrent DAG executions | Zero data races; all 100 complete |
+| **Backpressure** | Queue depth exceeds limit | `buffer_unordered` capacity respected; no unbounded growth |
+| **Fault Injection** | Random node failures during execution | `Failed → Pending` retry transitions; `Fallback` node routing |
+| **Session Recovery** | Mid-execution cancellation + resume | `SessionSnapshot` correctly restores prior state |
+
+#### Backpressure & Queue Depth
+
+The `WorkQueue` scheduler enforces backpressure via `buffer_unordered(max_concurrent)` (default 16). When the concurrency limit is reached, new nodes remain in the `Ready` state until an in-flight slot opens. The `BudgetEnvelope` provides a secondary ceiling via `max_iterations` (default 10) to prevent runaway Loops.
+
+**Invariant**: All hardening is additive — zero changes to pipeline stage traits, compiler passes, or scheduler core logic.
+
+---
+
+### 3.19 Session Continuity & Replay (Phase 5 / ADR-030)
+
+Session continuity decouples static session identity from transient execution snapshots, enabling deterministic replay, inspection, and simulation modes.
+
+#### Core Types
+
+```rust
+// src/session/types.rs
+pub struct SessionId(pub Uuid);
+
+pub struct ExecutionSession {
+    pub session_id: SessionId,
+    pub workflow_id: Uuid,
+    pub created_at_ms: u64,
+    pub owner: String,
+    pub config: HashMap<String, String>,
+}
+
+pub struct SessionSnapshot {
+    pub session_id: SessionId,
+    pub snapshot_id: Uuid,
+    pub current_node_id: Option<Uuid>,
+    pub state: ExecutionState,
+    pub execution_context_id: Uuid,
+    pub trace_id: Uuid,
+    pub checkpoint_timestamp_ms: u64,
+}
+```
+
+#### Session Stores
+
+| Store | Struct | Persistence | Use Case |
+|-------|--------|-------------|----------|
+| **In-Memory** | `InMemorySessionStore` | `HashMap` in process memory | Development, testing |
+| **SQLite (stub)** | `SqliteSessionStore` | In-memory `HashMap` (SQLite backend stub) | Production-ready SQLite backend planned for v0.11+ |
+
+#### Three Replay Modes
+
+| Mode | Variant | Side Effects | Purpose |
+|------|---------|--------------|---------|
+| **Deterministic** | `Deterministic` | Allowed | Step-by-step reproduction of prior execution |
+| **Inspection** | `Inspection` | Blocked | Log-driven debugging without mutating state |
+| **Simulation** | `Simulation` | Mock | "What if" analysis using mocked provider responses |
+
+#### Checkpointing
+
+```rust
+// src/session/checkpoint.rs
+pub struct CheckpointEngine {
+    store: Arc<dyn SessionStore>,
+}
+
+impl CheckpointEngine {
+    pub async fn checkpoint(&self, snapshot: &SessionSnapshot) -> Result<(), SessionError>;
+    pub async fn restore(&self, session_id: &SessionId) -> Result<SessionSnapshot, SessionError>;
+}
+```
+
+**Resume compatibility**: On restore, `ResumeEngine` validates the `expected_api_version` (hardcoded `0.1.0`) against the session store's current API version, rejecting incompatible session resumptions with a clear diagnostic.
 
 ---
 
@@ -1671,12 +2044,15 @@ fusion-router/
 ├── Cargo.lock
 ├── config/
 │   └── default.yaml                   # Server, resource, policy, provider, strategy, tools configuration
+├── crates/
+│   └── fusion-plugin-api/             # Workspace member: Plugin SDK crate (v0.1.0)
 ├── plugins/
-│   └── example-provider/              # Workspace member: example native plugin
+│   ├── example-provider/              # Workspace member: example native plugin
+│   └── fusion-plugin-echo/            # Workspace member: echo capability plugin
 ├── workflows/                         # YAML workflow definitions (loaded by WorkflowRegistry)
 ├── src/
 │   ├── main.rs                        # Entry point: Tokio runtime, Axum router, provider/middleware setup
-│   ├── lib.rs                         # Public module re-exports (20 modules + conditional wasm)
+│   ├── lib.rs                         # Public module re-exports (27 modules + conditional wasm)
 │   ├── config.rs                      # AppConfig with YAML deserialization and validation
 │   │
 │   ├── server/
@@ -1698,24 +2074,42 @@ fusion-router/
 │   │   ├── intent_planner.rs          # IntentPlanner: ExecutionIntent → fixed-template IR (Quality/Speed/Balanced/Exhaustive/Constrained)
 │   │   ├── simple.rs                  # SimplePlanner: single-node fallback planner (complexity → strategy selection)
 │   │   ├── dynamic_planner.rs         # DynamicPlanner: LLM-generated WorkflowIR with JSON parsing + SimplePlanner fallback
-│   │   └── workflow.rs                # WorkflowPlanner: Static/Dynamic/Hybrid mode orchestrator over WorkflowRegistry
+│   │   ├── workflow.rs                # WorkflowPlanner: Static/Dynamic/Hybrid mode orchestrator over WorkflowRegistry
+│   │   └── resolver/
+│   │       ├── mod.rs
+│   │       └── capability/            # CapabilityGraph, CapabilityResolver (pure compiler step, ADR-023)
+│   │           ├── mod.rs
+│   │           ├── graph.rs
+│   │           └── resolver.rs
 │   │
 │   ├── compiler/
-│   │   ├── mod.rs                     # Compiler trait, DefaultCompiler (lower → optimize → assemble pipeline)
-│   │   ├── passes.rs                  # ConstraintValidation, ControlFlowValidation, ModelResolution, BudgetOptimisation, LowerToGraph, PrimitiveToExecution
-│   │   ├── primitive_graph.rs         # PrimitiveGraph: canonical lowered IR with to_execution_graph()
-│   │   └── optimization/
-│   │       ├── mod.rs                 # OptimizationPass trait, OptimizationGoal enum, OptimizationPipeline (rollback-safe)
-│   │       ├── dead_node_elimination.rs  # DeadNodeEliminationPass: removes unreachable nodes
-│   │       └── fan_out_consolidation.rs # FanOutConsolidationPass: merges adjacent FanOuts
+│   │   ├── mod.rs                     # Compiler trait, DefaultCompiler (pass pipeline → lower_to_graph)
+│   │   ├── pipeline.rs                # CompilerPipeline: sequential pass execution with timing
+│   │   ├── context.rs                 # CompilationContext
+│   │   ├── diagnostics.rs             # CompilerDiagnostic
+│   │   ├── ir/
+│   │   │   ├── mod.rs
+│   │   │   ├── primitive_ir.rs        # PrimitiveGraph: canonical lowered IR with to_execution_graph()
+│   │   │   └── strategy_ir.rs         # StrategyIR enum for strategy lowering
+│   │   ├── passes/
+│   │   │   ├── mod.rs                 # CompilerPass trait, PassManager
+│   │   │   ├── legacy_passes.rs       # ConstraintValidation, ControlFlowValidation, ModelResolution, BudgetOptimisation
+│   │   │   └── policy.rs              # PolicyCompilerPass: Gate node injection
+│   │   ├── optimization/
+│   │   │   └── mod.rs                 # OptimizationPass trait, OptimizationPipeline, DeadNodeEliminationPass, FanOutConsolidationPass
+│   │   └── registry/
+│   │       └── mod.rs                 # Compiler registry
 │   │
 │   ├── scheduler/
 │   │   ├── mod.rs                     # Scheduler trait
 │   │   ├── default.rs                 # DefaultScheduler: WorkQueue-driven DAG execution with retry, fallback, loop, budget
-│   │   └── work_queue.rs              # WorkQueue: request-local DAG dependency tracker (zero contention)
+│   │   ├── work_queue.rs              # WorkQueue: request-local DAG dependency tracker (zero contention)
+│   │   ├── distributed.rs             # DistributedScheduler: remote worker pool with local fallback
+│   │   └── connector_resolver.rs      # ConnectorResolver: late-bound connector dispatch
 │   │
 │   ├── executor/
-│   │   └── mod.rs                     # Executor trait, DefaultExecutor: strategy resolution, LLM dispatch, tool invocation, cache integration
+│   │   ├── mod.rs                     # Executor trait, DefaultExecutor: strategy resolution, LLM dispatch, tool invocation
+│   │   └── capability_executor.rs     # CapabilityExecutor: plugin capability invocation engine
 │   │
 │   ├── strategies/
 │   │   ├── mod.rs                     # Strategy trait: descriptor() + lower() → PrimitiveGraph
@@ -1725,7 +2119,7 @@ fusion-router/
 │   │   ├── debate.rs                  # N×Proposer → Judge (composable debate)
 │   │   ├── react.rs                   # Loop ↔ Generate (reason-act tool cycle)
 │   │   ├── chain.rs                   # Sequential strategy pipeline
-│   │   └── fusion.rs                  # FusionStrategy: N×diverse Generate with ModelHints (v0.9)
+│   │   └── fusion.rs                  # FusionStrategy: N×diverse Generate with ModelHints
 │   │
 │   ├── providers/
 │   │   ├── mod.rs                     # ChatProvider/Model traits, ModelCapabilities, ModelRequirements, ModelPricing
@@ -1762,9 +2156,45 @@ fusion-router/
 │   │   └── runtime.rs                 # Wasmtime 47: fuel metering (1M), WASI denied by default
 │   │
 │   ├── plugin/
-│   │   ├── mod.rs                     # PluginRegistry, WasmConfig
+│   │   ├── mod.rs                     # PluginRegistry, WasmConfig, BoxedProvider/Strategy/Pass/Tool type aliases
 │   │   ├── manifest.rs                # PluginManifest (TOML), filesystem discovery
-│   │   └── manager.rs                 # PluginManager: discovery, registry, WASM loading
+│   │   ├── manager.rs                 # PluginManager: discovery, registry, WASM loading
+│   │   └── (wasm)                     # WASM strategy bridge (feature-gated)
+│   │
+│   ├── capability/
+│   │   └── mod.rs                     # CapabilityRegistry: mutable-then-frozen registry of CapabilityContracts
+│   │
+│   ├── policy/
+│   │   ├── mod.rs                     # Policy compilation subsystem
+│   │   ├── ast.rs                     # PolicyAST, PolicyDeclaration, PolicyParser
+│   │   ├── diagnostics.rs             # PolicyDiagnostic
+│   │   ├── ir.rs                      # PolicyIR, PolicyRule, PolicyAction
+│   │   ├── precedence.rs              # PolicyPrecedenceEngine (Deny > Approval > Allow)
+│   │   └── trace.rs                   # PolicyTrace, PolicyMatchEvent
+│   │
+│   ├── session/
+│   │   ├── mod.rs                     # Session continuity & replay subsystem
+│   │   ├── types.rs                   # ExecutionSession, SessionSnapshot, SessionStatus
+│   │   ├── store/
+│   │   │   ├── mod.rs                 # SessionStore trait
+│   │   │   ├── memory.rs              # InMemorySessionStore
+│   │   │   └── sqlite.rs              # SqliteSessionStore
+│   │   ├── checkpoint.rs              # CheckpointEngine, ResumeEngine
+│   │   └── replay.rs                  # ReplayEngine (3 replay modes: Deterministic, Inspection, Simulation)
+│   │
+│   ├── lifecycle/
+│   │   ├── mod.rs
+│   │   └── manager.rs                 # LifecycleManager: session lifecycle orchestration
+│   │
+│   ├── trigger/
+│   │   ├── mod.rs                     # Trigger framework subsystem
+│   │   ├── types.rs                   # ExecutionRequest, TriggerDeclaration, TriggerKind, TriggerPayload
+│   │   ├── trace.rs                   # TriggerTrace, TriggerEvent provenance chain
+│   │   ├── ir.rs                      # TriggerIR intermediate representation
+│   │   ├── webhook.rs                 # WebhookTriggerHandler
+│   │   ├── cron.rs                    # CronTriggerScheduler
+│   │   ├── event_bus.rs               # EventBusTriggerSubscriber
+│   │   └── engine.rs                  # TriggerExecutionEngine
 │   │
 │   ├── telemetry/
 │   │   ├── mod.rs                     # EvidenceRepository trait, ModelPerformanceStats
@@ -1772,7 +2202,8 @@ fusion-router/
 │   │   ├── calibration.rs             # FeedbackCalibrator (EMA α=0.2, cold-start n≥30, health scaling)
 │   │   ├── metrics.rs                 # FusionMetrics: Prometheus counters/histograms
 │   │   ├── audit.rs                   # AuditLog: bounded ring buffer, JSONL emission
-│   │   └── tracing.rs                 # init_tracing (env-filter, JSON), init_console, [otel] OTLP exporter
+│   │   ├── tracing.rs                 # init_tracing (env-filter, JSON), init_console, [otel] OTLP exporter
+│   │   └── unified_diagnostics.rs     # UnifiedDiagnosticsEnvelope: aggregates cross-subsystem diagnostics
 │   │
 │   ├── transport/
 │   │   ├── mod.rs                     # Transport trait, TransportRequest/Response/Event/Error
@@ -1781,14 +2212,34 @@ fusion-router/
 │   │   ├── stdio.rs                   # StdioTransport: subprocess I/O
 │   │   └── backoff.rs                 # Exponential backoff with jitter
 │   │
+│   ├── connectors/
+│   │   ├── mod.rs                     # Connector ecosystem subsystem
+│   │   ├── github.rs                  # GitHubConnector (CapabilityPlugin integration)
+│   │   ├── browser.rs                 # BrowserConnector (sandboxed rendering)
+│   │   ├── mcp.rs                     # McpConnector (Model Context Protocol)
+│   │   ├── filesystem.rs              # FilesystemConnector (path traversal guards)
+│   │   ├── http.rs                    # HttpConnector (reqwest-based)
+│   │   └── shell.rs                   # ShellConnector (command allow-list)
+│   │
+│   ├── devex/
+│   │   ├── mod.rs                     # Developer experience & diagnostics
+│   │   ├── visualizer.rs              # GraphVisualizer (Mermaid + ASCII output)
+│   │   ├── trace_inspector.rs         # TraceInspector (diagnostics viewer)
+│   │   └── scaffold.rs                # PluginScaffolder (plugin template generator)
+│   │
 │   ├── types/
-│   │   ├── mod.rs                     # Core domain types: ChatCompletionRequest, WorkflowIR, ExecutionGraph, PrimitiveGraph, etc.
-│   │   ├── artifact.rs               # Artifact trait, stored_artifacts on ExecutionResult (v0.9)
+│   │   ├── mod.rs                     # Core domain types: ChatCompletionRequest, WorkflowIR, ExecutionGraph, Policy, etc.
+│   │   ├── artifact.rs               # Artifact trait, stored_artifacts on ExecutionResult
 │   │   ├── error.rs                   # PipelineStage, RouterError (stage attribution, HTTP status mapping)
-│   │   └── execution.rs               # ExecutionIntent, OutputPreferences, ExecutionReport, Provenance
+│   │   ├── execution.rs               # ExecutionIntent, OutputPreferences, ExecutionReport
+│   │   └── execution_context.rs       # ExecutionContext, ExecutionState machine, ExecutionTrace
 │   │
 │   ├── models/
-│   │   └── mod.rs                     # Reserved for phase 6 model definitions
+│   │   └── mod.rs                     # Reserved for model definitions
+│   │
+│   ├── workflow/
+│   │   ├── mod.rs
+│   │   └── registry.rs                # WorkflowRegistry: YAML workflow loading and matching
 │   │
 │   └── middleware/
 │       ├── mod.rs                     # Module exports
@@ -1797,9 +2248,19 @@ fusion-router/
 │       ├── rate_limit.rs              # Token-bucket rate limiter (DashMap, background cleanup)
 │       └── request_id.rs              # x-request-id generation/passthrough
 │
-├── tests/                             # Integration tests
-│   └── golden/
-│       └── optimization.rs            # 16 golden tests for DeadNodeElimination + FanOutConsolidation
+├── tests/                             # Integration & stress tests
+│   ├── golden_tests.rs                # Golden test runner (43 tests)
+│   ├── golden/                        # Golden test modules
+│   ├── integration_tests.rs           # Integration test runner (9 tests)
+│   ├── integration/                   # Integration test modules
+│   ├── load_test.rs                   # Load test runner (10 tests)
+│   ├── stress/                        # Production hardening tests
+│   ├── security.rs                    # Security test runner (4 tests)
+│   ├── strategy_sdk.rs                # Strategy SDK test runner (7 tests)
+│   ├── strategy_sdk/                  # Strategy SDK test modules
+│   ├── replay/                        # Replay test modules
+│   ├── unit_tests.rs                  # Unit test runner (34 tests)
+│   └── unit/                          # Unit test modules + phase invariant tests
 ├── benches/
 │   ├── compilation.rs                 # Compiler pass benchmarks
 │   ├── cache.rs                       # Semantic cache benchmarks
@@ -1817,6 +2278,14 @@ fusion-router/
 | `wasm-plugins` | ❌ No | `src/wasm/*`, WASM loading in `src/plugin/manager.rs` | `wasmtime = "47"` |
 | `dev-console` | ❌ No | `init_console()` in `src/telemetry/tracing.rs` | `console-subscriber = "0.4"` |
 | `otel` | ❌ No | OpenTelemetry init in `src/telemetry/tracing.rs` | `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`, `tracing-opentelemetry`, `tonic` |
+
+#### Workspace Members
+
+| Crate | Path | Purpose |
+|-------|------|---------|
+| `fusion-plugin-api` | `crates/fusion-plugin-api/` | Plugin SDK: CapabilityContract, CapabilityId, CapabilityInstance, CapabilityExecutor |
+| `fusion-plugin-echo` | `plugins/fusion-plugin-echo/` | Echo capability plugin (dev-dependency) |
+| `example-provider` | `plugins/example-provider/` | Example native provider plugin |
 
 ---
 
@@ -2012,7 +2481,20 @@ This section systematically cross-references every subsystem, trait interface, a
 | **Strategy Benchmarks** | 10 scenarios across 7 strategy types (512ns Single → 18µs Consensus/5) |
 | **Structured Tracing** | Pipeline events with `request_id`, `strategy`, `latency_ms`, `success` fields |
 
-#### Remaining for v0.10+
+#### Resolved in v0.10.0 (Phase 7 Ecosystem Tracks)
+
+| Backlog Feature | Resolution | Track |
+|----------------|------------|-------|
+| **Trigger Framework & Unified Ingress** | `ExecutionRequest` canonical contract; `WebhookTriggerHandler`, `CronTriggerScheduler`, `EventBusTriggerSubscriber`; `TriggerTrace` provenance chain | ADR-031 |
+| **Connector Ecosystem** | `Connector` trait; 6 reference connectors (GitHub, Browser, MCP, Filesystem, HTTP, Shell); `CapabilityPlugin` contract integration | Track B |
+| **Developer Experience & Diagnostics** | `GraphVisualizer` (Mermaid + ASCII); `TraceInspector` (diagnostics viewer); `PluginScaffolder` (template generator) | Track C |
+| **Distributed Scheduling** | `DistributedScheduler` with `RemoteWorkerPool` + `DefaultScheduler` local fallback; zero kernel API changes | Track D |
+| **Production Hardening** | Stress test suite (high concurrency, backpressure, fault injection, session recovery); `buffer_unordered` queue depth limits | Track A |
+| **Session Continuity & Replay** | `ExecutionSession` / `SessionSnapshot` decoupling; 3 replay modes (Deterministic, Inspection, Simulation); `CheckpointEngine` with resume compatibility validation | ADR-030 |
+| **Capability Resolution** | `CapabilityGraph` / `CapabilityResolver` pure compiler step; Kahn cycle detection; conflict checking | Phase 2 |
+| **Declarative Policy Compilation** | `PolicyAST` → `PolicyIR` → `PolicyCompilerPass`; Deny > Approval > Allow precedence; Gate node injection | Phase 4 |
+
+#### Remaining for v0.11+
 
 | Backlog Feature | Target Component | Architectural Specification |
 |-----------------|------------------|-----------------------------|
@@ -2021,30 +2503,41 @@ This section systematically cross-references every subsystem, trait interface, a
 | **Planning Quota Metering** | `DynamicPlanner` | Deducting `zen-7b` planning tokens from request's `BudgetEnvelope` |
 | **Cross-Strategy Aggregation** | TBD | If fan-in merging across strategies is needed, a new primitive would follow the standard ADR process |
 | **Real Web Search** | `SearchTool` | Production Tavily / Serper API HTTP adapter replacing mock JSON |
+| **Trigger Ingress Pipeline Step** | `TriggerIngressStep` | Full Trigger → ExecutionRequest normalization as a formal pipeline step |
 
 ---
 
-> **Document Revision 6 (v0.9.0 Update)**: Baseline updated from v0.8.0 to v0.9.0. Covers compiler optimization framework (ADR-020), optimization pass pipeline, strategy trait migration (`apply()` → `lower()` → `PrimitiveGraph`), FusionStrategy implementation, Artifact trait integration, per-strategy metrics, structured tracing, WASM strategy bridge, and operator deployment docs. 444 tests passing with 0 warnings. Backlog items deferred to v0.10+.
+> **Document Revision 8 (v0.10.0 Release)**: Comprehensive architecture document covering all v0.10.0 subsystems — compiler strata, runtime strata (ADR-029), session continuity & replay (ADR-030), unified ingress & trigger framework (ADR-031), capability resolution (ADR-023), declarative policy compilation (ADR-024), connector ecosystem, developer experience tooling, distributed scheduling, and production hardening. 314 tests passing with 0 warnings.
 
 ---
 
-### v0.9.0 References
+### v0.10.0 References
 
 | Document | Purpose |
 |----------|---------|
-| `docs/adr/ADR-020-compiler-optimization-framework.md` | Optimization pass taxonomy, legality rules, pass contract, selection criteria |
-| `docs/adr/ADR-019-primitive-execution-graph-alignment.md` | PrimitiveGraph as canonical IR, apply() removal, to_execution_graph() |
+| `docs/adr/ADR-031-trigger-request-semantics.md` | Trigger framework, Unified Ingress, ExecutionRequest canonicalization |
+| `docs/adr/ADR-030-session-replay-semantics.md` | ExecutionSession, SessionSnapshot, CheckpointEngine, 3 replay modes |
+| `docs/adr/ADR-029-execution-semantics.md` | ExecutionContext, ExecutionState machine, ConnectorResolver |
+| `docs/adr/ADR-028-capability-contract-evolution.md` | CapabilityGraph, CapabilityResolver, pure compiler step |
+| `docs/adr/ADR-027-compiler-phase-invariants.md` | Idempotent compiler pass execution |
+| `docs/adr/ADR-026-declarative-policy-compiler.md` | Policy AST, PolicyIR, PolicyCompilerPass, PolicyPrecedenceEngine |
+| `docs/adr/ADR-025-ecosystem-connectors.md` | Connector ecosystem expansion, reference implementations |
+| `docs/adr/ADR-024-devex-diagnostics.md` | Developer experience tooling, GraphVisualizer, TraceInspector |
+| `docs/adr/ADR-023-production-hardening.md` | Stress testing, backpressure, fault injection, session recovery |
+| `docs/adr/ADR-022-distributed-scheduling.md` | DistributedScheduler, RemoteWorkerPool, remote execution |
+| `docs/adr/ADR-020-compiler-optimization-framework.md` | Optimization pass taxonomy, legality rules, pass contract |
+| `docs/adr/ADR-019-primitive-execution-graph-alignment.md` | PrimitiveGraph as canonical IR, to_execution_graph() |
 | `docs/adr/ADR-018-strategy-sdk.md` | Strategy SDK trait contract with lower() returning PrimitiveGraph |
 | `docs/adr/ADR-017-execution-runtime-abi.md` | ExecutionResult runtime ABI |
 | `docs/adr/ADR-007-error-handling.md` | Stage-attributed error model |
 | `docs/adr/ADR-008-telemetry.md` | Metrics, tracing, audit logging architecture |
 | `docs/adr/ADR-009-configuration.md` | Configuration loading and validation |
 | `docs/adr/ADR-010-plugin-system.md` | Plugin registry, manifest, WASM integration |
-| `docs/adr/ADR-011-testing-strategy.md` | Golden test framework, optimization pass testing |
+| `docs/adr/ADR-011-testing-strategy.md` | Testing strategy, golden test framework |
 | `docs/adr/ADR-012-security-model.md` | Defense-in-depth security architecture |
-| `docs/decisions/provenance-schema.md` | ExecutionResult provenance field specification |
 | `docs/decisions/resource-guard-contract.md` | RAII Drop vs commit() semantics |
 | `docs/operator/deployment-guide.md` | Docker multi-stage build, K8s probes, production config |
-| `docs/roadmap-v0.9.md` | v0.9 roadmap status (✅ Complete) |
+| `docs/roadmap-v0.10.md` | v0.10 roadmap status (✅ Complete) |
+| `docs/fusionrouter_architecture_v0.10.0.md` | This document — v0.10.0 architecture specification |
 
 

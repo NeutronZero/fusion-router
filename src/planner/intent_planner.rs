@@ -203,6 +203,16 @@ impl IntentPlanner {
             Intent::General => self.model_catalog.general.clone(),
         }
     }
+
+    /// Resolves required capability contracts via the `CapabilityResolver`.
+    pub fn resolve_capabilities(
+        &self,
+        resolver: &super::resolver::capability::CapabilityResolver,
+        required: Vec<fusion_plugin_api::CapabilityId>,
+    ) -> Result<super::resolver::capability::ResolvedCapabilitySet, String> {
+        let reqs = super::resolver::capability::RequirementSet::new(required);
+        resolver.resolve(&reqs)
+    }
 }
 
 #[async_trait]

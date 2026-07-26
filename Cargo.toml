@@ -1,11 +1,15 @@
 [package]
 name = "fusion-router"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [workspace]
-members = ["plugins/example-provider"]
+members = [
+    "crates/fusion-plugin-api",
+    "plugins/example-provider",
+    "plugins/fusion-plugin-echo",
+]
 
 [features]
 default = ["semantic-cache"]
@@ -15,6 +19,7 @@ dev-console = ["console-subscriber"]
 otel = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "tracing-opentelemetry", "tonic"]
 
 [dependencies]
+fusion-plugin-api = { path = "crates/fusion-plugin-api" }
 libloading = "0.8"
 toml = "0.8"
 axum = "0.7"
@@ -48,11 +53,14 @@ rand = "0.8"
 futures = "0.3"
 rusqlite = { version = "0.29", features = ["bundled"] }
 dotenv = "0.15"
+semver = "1.0"
 usearch = { version = "2", optional = true }
 wasmtime = { version = "47", optional = true, default-features = false, features = ["cranelift", "wat", "runtime", "std", "anyhow"] }
+petgraph = "0.8.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+fusion-plugin-echo = { path = "plugins/fusion-plugin-echo" }
 
 [[bench]]
 name = "compilation"

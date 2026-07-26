@@ -24,4 +24,5 @@ pub mod metrics;
 pub mod audit;
 pub mod tracing;
 pub mod calibration;
+pub mod unified_diagnostics;
 

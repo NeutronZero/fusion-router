@@ -5,6 +5,7 @@ use uuid::Uuid;
 pub mod error;
 pub mod execution;
 pub mod artifact;
+pub mod execution_context;
 
 pub use error::{PipelineStage, RouterError};
 pub use artifact::{Artifact, ArtifactKind};

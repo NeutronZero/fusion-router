@@ -1,17 +1,21 @@
 # FusionRouter v0.10 Roadmap — Capability Platform
 
 > **Theme:** Make FusionRouter extensible. Everything outside the compiler becomes a capability.
-> **Status:** Architectural Specification & Engineering Reference
+> **Status:** Architecture Frozen & Implementation Phase
 > **Predecessor:** v0.9.0 (Compiler Pipeline & Deterministic Lowering)
 
 ---
 
-## 1. Executive Vision & Structural Architecture
+## 1. Executive Vision & The Three Interfaces of FusionRouter
 
 In **v0.8.0**, FusionRouter established the *Intent-Oriented Execution Model*.
 In **v0.9.0**, FusionRouter solidified the compiler pipeline (`PrimitiveGraph` → `ExecutionGraph`, deterministic lowering, optimization passes, provenance, governance).
 
-**v0.10.0** transforms FusionRouter from an orchestration engine into an open, extensible **Capability Platform** governed by compiler principles.
+**v0.10.0** transforms FusionRouter into a compiler-oriented **Capability Platform**, cleanly separating three primary interfaces:
+
+1. **Compiler API (Internal)**: `Intent` → `Planner` → `PrimitiveGraph` → `ExecutionGraph`. Engine implementation detail.
+2. **Capability ABI (`fusion-plugin-api v0.1.0`)**: `CapabilityContract` → `CapabilityInstance` → `CapabilityExecutor`. Independent, lightweight SDK crate.
+3. **Runtime API (Application Surface)**: OpenAI-compatible `/v1/chat/completions`, REST endpoints, and streaming channels.
 
 ```text
                                 STARTUP PHASE
@@ -68,103 +72,95 @@ In **v0.9.0**, FusionRouter solidified the compiler pipeline (`PrimitiveGraph` �
 
 ---
 
-## 2. Core Architectural Refinements
+## 2. Minimal `fusion-plugin-api v0.1.0` SDK Surface
 
-1. **Immutable Runtime Registry**: `PluginManager` discovers and validates plugins during startup, builds the `CapabilityRegistry`, and **freezes** it (`Arc<CapabilityRegistry>`). The planner never mutates the registry at runtime.
-2. **CapabilityContract as Semantic ABI**: `CapabilityContract` is the explicit semantic ABI between the Planner and Scheduler.
-3. **CapabilityInstance Abstraction**: `CapabilityInstance` represents the bound runtime realization of a `CapabilityContract` (analogous to a compiled function pointer / bound execution handle).
-4. **Capability Resolver Subsystem**: Capability resolution is separated into its own module (`src/planner/resolver/capability/`), treating resolution as symbol resolution.
-5. **CapabilityGraph (Dependency DAG)**: Tracks capability dependencies, conflicts, and version constraints (e.g. Browser → Filesystem → Shell).
-6. **Plugin API & Compiler Version Negotiation**: Plugins declare `PluginMetadata` (`api_version`, `min_compiler_version`) validated by a `CompatibilityChecker` at load time.
-7. **Separation of Metadata vs. Execution**: `CapabilityContract` (metadata for Planner) is strictly decoupled from `CapabilityExecutor` (runtime for Scheduler).
-8. **Planner Agnosticism & Late Binding Connectors**: Planner operates on abstract capabilities (`send_email`). The `Connector Resolver` performs late binding to concrete implementations (`gmail`, `outlook`) at execution time in the Scheduler.
-9. **Declarative Policy Compilation**: Declarative policies are compiled into `PolicyIR` and processed by a compiler pass (`PolicyCompilerPass`) that automatically inserts `ApprovalNode` and `PolicyGuardNode` elements into `PrimitiveGraph`.
-10. **Runtime Policies as Node Metadata Annotations**: Retry, timeout, approval, budget, and concurrency rules are attached as `NodeMetadata` annotations on graph nodes.
-11. **Storage Engine Decoupling**: `ExecutionSession` runtime state management is decoupled from `SessionStore` (SQLite, Postgres, Memory, Redis).
-12. **Capability Planner Cache**: LRU caching of `RequirementSet` → `ResolvedCapabilitySet` mappings accelerates planning throughput.
-13. **Scoped Isolation Roadmap**:
-    - **v0.10**: Rust C-ABI trait plugins (`libloading`), WASM plugins (`wasmtime`), static plugins.
-    - **v0.11**: Out-of-process gRPC / IPC / Remote plugins.
-    - **v1.0**: Distributed capability marketplace & production hardening.
+To prevent SDK bloat, `fusion-plugin-api` is an independent workspace crate (`fusion-plugin-api v0.1.0`) exposing strictly minimal surface area:
 
----
+```rust
+pub struct CapabilityId(pub String);
 
-## 3. Epics & Technical Specifications
+pub struct PluginMetadata {
+    pub name: String,
+    pub version: semver::Version,
+    pub api_version: semver::Version,
+    pub min_compiler_version: semver::Version,
+    pub capabilities: Vec<CapabilityId>,
+}
 
-### Epic A — Capability Registry & Immutable Resolver
-- `CapabilityId`: Strongly-typed unique identifier (e.g., `github.issue.create`, `slack.send`, `browser.navigate`).
-- `CapabilityContract`: Standard semantic ABI contract detailing input/output JSON schemas, required permissions, side effects, estimated cost, latency, reliability, determinism, and streaming support.
-- `CapabilityRegistry`: Frozen, read-only thread-safe registry.
-- `CapabilityResolver`: Dedicated symbol resolver module in `src/planner/resolver/capability/`.
+pub struct CapabilityContract {
+    pub id: CapabilityId,
+    pub version: semver::Version,
+    pub inputs_schema: serde_json::Value,
+    pub outputs_schema: serde_json::Value,
+    pub permissions: Vec<String>,
+    pub estimated_cost_usd: f64,
+    pub estimated_latency_ms: u64,
+    pub reliability_score: f32,
+    pub supports_streaming: bool,
+}
 
----
+pub struct CapabilityInstance {
+    pub contract: CapabilityContract,
+    pub runtime_params: serde_json::Value,
+}
 
-### Epic B — Plugin SDK & Version Negotiation
-- `fusion-plugin-api`: Public SDK crate.
-- `PluginMetadata`: API versioning, compiler versioning, capability declarations.
-- Lifecycle: `Discover` → `Validate` → `Load` → `Register` → `Activate`.
-- Plugin types: `ProviderPlugin`, `CapabilityPlugin`, `StrategyPlugin`, `PolicyPlugin`, `OptimizerPlugin`.
+pub trait Plugin: Send + Sync {
+    fn metadata(&self) -> PluginMetadata;
+}
 
----
+pub trait CapabilityPlugin: Plugin {
+    fn capabilities(&self) -> Vec<CapabilityContract>;
+}
 
-### Epic C — Connector Framework & Late Binding Resolver
-- `Connector`: Core trait for system integrations.
-- `ConnectorResolver`: Binds abstract capability invocations to concrete connectors at execution time in the Scheduler.
-- Reference connectors: GitHub, Slack, Discord, Jira, Notion, Filesystem, Browser, Shell, Email, Calendar.
-
----
-
-### Epic D — Declarative Policy Compiler Engine
-- `PolicyCompiler`: Compiles YAML/JSON policy rules into `PolicyIR`.
-- `PolicyCompilerPass`: Compiler pass that auto-inserts `ApprovalNode` and `PolicyGuardNode` elements into `PrimitiveGraph`.
+pub trait CapabilityExecutor: Send + Sync {
+    async fn execute(&self, instance: &CapabilityInstance, input: serde_json::Value) -> Result<serde_json::Value, String>;
+}
+```
 
 ---
 
-### Epic E — Trigger Framework
-- `Trigger`: Emits standard `ExecutionRequest` structs into the Planner.
-- Supported triggers: `ManualTrigger`, `CronTrigger`, `WebhookTrigger`, `EventTrigger`, `MessageTrigger`.
+## 3. Phase 1 Acceptance Criteria & Minimal Reference Plugin
+
+### Acceptance Criteria:
+- `fusion-plugin-api` builds as an isolated workspace crate.
+- Minimal reference plugin `plugins/fusion-plugin-echo` compiles relying **only** on `fusion-plugin-api`.
+- `PluginManager` discovers `fusion-plugin-echo`.
+- `CompatibilityChecker` validates API version (`v0.1.0`) and compiler version compatibility.
+- `CapabilityRegistry` registers contracts (`echo.text`, `echo.uppercase`) and freezes successfully (`Arc<CapabilityRegistry>`).
+- Planner can query frozen capabilities from the registry.
 
 ---
 
-### Epic F — Session Runtime & Storage Decoupling
-- `ExecutionSession`: Tracks session state, checkpoints, pause/resume, and cancellation.
-- `SessionStore`: Decoupled trait with `MemorySessionStore`, `SqliteSessionStore`, `PostgresSessionStore`, and `RedisSessionStore` backends.
+## 4. Compiler Phase Invariants (ADR-027)
+
+As specified in [ADR-027](file:///c:/Projects/fusion-router/docs/adr/ADR-027-compiler-phase-invariants.md) and [docs/architecture/invariants.md](file:///c:/Projects/fusion-router/docs/architecture/invariants.md):
+
+| Phase | May Do | Must Not Do |
+|---|---|---|
+| **Plugin Manager** | Discover plugins, validate manifests, run compatibility checks, freeze registry | Mutate registry after startup, execute workflow graphs |
+| **Capability Resolver** | Resolve contracts, build `CapabilityGraph`, instantiate `CapabilityInstance` handles, query cache | Execute capability logic, rewrite workflow intent |
+| **Planner** | Analyze user intent, extract requirements, construct abstract `PrimitiveGraph` IR | Bind concrete connectors, execute tools, evaluate security approvals |
+| **Policy Compiler** | Parse policy declarations, compile `PolicyIR`, rewrite `PrimitiveGraph` (inserting `ApprovalNode` / `PolicyGuardNode`) | Schedule graph execution, perform LLM calls, bypass security rules |
+| **Optimization Passes** | Apply graph transformations (dead node elimination, fan-out consolidation), annotate `NodeMetadata` | Alter execution semantics, introduce unvetted user intent |
+| **Scheduler** | Lower `PrimitiveGraph` to `ExecutionGraph`, resolve readiness dependencies, dispatch work items | Rewrite graph topology, mutate capability contracts |
+| **Connector Resolver** | Perform late binding of abstract `CapabilityInstance` handles to concrete `Connector` implementations | Modify graph node ordering, alter user security policies |
+| **Plugin Executor** | Execute physical node logic (Rust native / WASM / dynamic libraries), emit telemetry | Mutate workflow graph structure, bypass node metadata bounds |
 
 ---
 
-### Epic G — Capability Graph, Instance & Planner Cache
-- `CapabilityGraph`: Dependency DAG for capabilities.
-- `CapabilityInstance`: Bound runtime execution handle pairing `CapabilityContract` with runtime execution contexts.
-- `CapabilityPlannerCache`: LRU cache mapping requirement hashes to resolved capability sets.
+## 5. Bottom-Up Implementation Roadmap
+
+1. **Phase 1 — Foundations**: `fusion-plugin-api v0.1.0`, `CapabilityContract`, `CapabilityRegistry`, `PluginManager`, Registry freeze, Compatibility checker, `fusion-plugin-echo`.
+2. **Phase 2 — Resolution**: `CapabilityGraph`, `CapabilityResolver`, `CapabilityInstance`, Planner integration.
+3. **Phase 3 — Runtime**: `ConnectorResolver`, `CapabilityExecutor`, Reference plugins (GitHub, MCP, Shell, Browser, Slack), Scheduler integration.
+4. **Phase 4 — Compiler**: `PolicyIR`, `PolicyCompilerPass`, Node metadata annotations.
+5. **Phase 5 — Sessions**: `ExecutionSession`, `SessionStore`, Checkpointing, Resume, Cancellation.
+6. **Phase 6 — Triggers**: Manual, Cron, Webhook, Event, Message triggers.
+7. **Phase 7 — Tooling & Verification**: Plugin CLI (`cargo fusion plugins`), Verification tools, Marketplace manifests, Conformance tests.
 
 ---
 
-### Epic H — Node Metadata Annotations
-- `NodeMetadata`: Graph node annotations for `retry`, `timeout`, `approval`, `budget`, `concurrency`, and `security_guards`.
-
----
-
-### Epic I — Public SDK Crates Workspace Architecture
-- Public workspace crates: `fusion-plugin-api`, `fusion-capability`, `fusion-connector`, `fusion-policy`.
-
----
-
-### Epic J — Reference Plugins Ecosystem
-- Reference implementations: `fusion-plugin-github`, `fusion-plugin-filesystem`, `fusion-plugin-shell`, `fusion-plugin-browser`, `fusion-plugin-http`, `fusion-plugin-mcp`, `fusion-plugin-slack`.
-
----
-
-### Epic K — Capability Discovery CLI
-- CLI commands (`cargo fusion plugins`): `list`, `inspect`, `verify`, `install`.
-
----
-
-### Epic L — Capability Marketplace & Manifest Specification
-- `PluginManifest`: Formal specification including publisher identity, cryptographic signature, license, and capability dependencies.
-
----
-
-## 4. Architectural Decision Records (ADR) Matrix
+## 6. Architectural Decision Records (ADR) Matrix
 
 | ADR | Title | Key Architectural Decision |
 |---|---|---|
@@ -174,13 +170,5 @@ In **v0.9.0**, FusionRouter solidified the compiler pipeline (`PrimitiveGraph` �
 | [ADR-024](file:///c:/Projects/fusion-router/docs/adr/ADR-024-policy-compilation.md) | Policy Compilation | Declarative policies compiled into `PolicyIR`, `PolicyCompilerPass` auto-inserting approval nodes, `NodeMetadata` annotations |
 | [ADR-025](file:///c:/Projects/fusion-router/docs/adr/ADR-025-connector-abstraction.md) | Connector Abstraction | Planner plans abstract capabilities; `ConnectorResolver` performs late binding at execution time |
 | [ADR-026](file:///c:/Projects/fusion-router/docs/adr/ADR-026-execution-session.md) | Execution Session Runtime | `ExecutionSession` decoupled from `SessionStore` backends (SQLite, Postgres, Memory, Redis) |
-
----
-
-## 5. Vision for v1.0.0 (Production Platform Hardening)
-
-With v0.10.0 establishing the extensible Capability Platform architecture, **v1.0.0** will focus exclusively on production readiness and ecosystem guarantees rather than introducing structural redesigns:
-- **SDK Stability Guarantees**: Freeze `fusion-plugin-api` v1.0.0.
-- **Conformance & Certification Test Suites**: Conformance test suites for plugins, policies, and connectors.
-- **Execution Replay & Provenance Tooling**: Offline replay of execution sessions using compiler provenance hashes.
-- **Security Hardening**: Cryptographic plugin signing, WASM sandboxing audit, and permission isolation models.
+| [ADR-027](file:///c:/Projects/fusion-router/docs/adr/ADR-027-compiler-phase-invariants.md) | Compiler Phase Invariants | Constitution defining May Do vs Must Not Do per phase |
+| [ADR-028](file:///c:/Projects/fusion-router/docs/adr/ADR-028-capability-contract-evolution.md) | Capability Contract Evolution | Semver rules, aliasing, deprecation grace periods, and feature fallbacks |

@@ -88,6 +88,15 @@ impl WorkQueue {
                 result.push(node);
             }
         }
+        
+        // Backpressure guardrail: limit ready nodes to prevent memory and concurrent execution overload
+        // In a production system, this could be driven by the graph's metadata or configuration.
+        let max_concurrent_nodes: usize = 16;
+        let available = max_concurrent_nodes.saturating_sub(self.in_progress.len());
+        if result.len() > available {
+            result.truncate(available);
+        }
+        
         result
     }
 

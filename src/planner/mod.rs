@@ -4,6 +4,7 @@ mod dynamic_planner;
 mod intent_planner;
 mod simple;
 mod workflow;
+pub mod resolver;
 
 pub use intent_planner::IntentPlanner;
 

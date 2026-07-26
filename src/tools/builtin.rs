@@ -128,7 +128,7 @@ impl Tool for FileReadTool {
                 return Err("Path traversal detected".to_string());
             }
 
-            let content = std::fs::read_to_string(full_path)
+            let content = std::fs::read_to_string(&canonical)
                 .map_err(|e| format!("File read error: {}", e))?;
 
             Ok(serde_json::json!({ "content": content }))
@@ -179,12 +179,13 @@ mod tests {
     #[tokio::test]
     async fn test_file_read_tool_reads_file_content() {
         let tmp = std::env::temp_dir();
-        let test_path = tmp.join("_fusion_test_readable.txt");
+        let unique_name = format!("_fusion_test_readable_{}.txt", uuid::Uuid::new_v4());
+        let test_path = tmp.join(&unique_name);
         let test_content = "hello from fusion test";
         std::fs::write(&test_path, test_content).unwrap();
 
         let tool = FileReadTool::new(tmp.to_string_lossy().to_string());
-        let result = tool.execute(serde_json::json!({"path": "_fusion_test_readable.txt"})).await;
+        let result = tool.execute(serde_json::json!({"path": unique_name})).await;
 
         let _ = std::fs::remove_file(&test_path);
 
@@ -196,7 +197,8 @@ mod tests {
     #[tokio::test]
     async fn test_file_read_tool_does_not_block_runtime_under_load() {
         let tmp = std::env::temp_dir();
-        let test_path = tmp.join("_fusion_test_concurrent.txt");
+        let unique_name = format!("_fusion_test_concurrent_{}.txt", uuid::Uuid::new_v4());
+        let test_path = tmp.join(&unique_name);
         let test_content = "concurrent test data";
         std::fs::write(&test_path, test_content).unwrap();
 
@@ -205,7 +207,7 @@ mod tests {
 
         for i in 0..20 {
             let tool = tool.clone();
-            let path = "_fusion_test_concurrent.txt".to_string();
+            let path = unique_name.clone();
             handles.push(tokio::spawn(async move {
                 let result = tool.execute(serde_json::json!({"path": path})).await;
                 (i, result)

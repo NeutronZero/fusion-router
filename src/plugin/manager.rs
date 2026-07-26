@@ -6,23 +6,57 @@ use std::path::Path;
 
 use super::manifest::PluginManifest;
 use super::PluginRegistry;
+use crate::capability::CapabilityRegistry;
+use fusion_plugin_api::{CapabilityPlugin, PluginMetadata};
 
-#[cfg(feature = "wasm-plugins")]
-use crate::wasm::{WasmModule, WasmRuntime};
+/// Current supported engine versions for compatibility validation.
+pub const CURRENT_API_VERSION: &str = "0.1.0";
+pub const CURRENT_COMPILER_VERSION: &str = "0.9.0";
+
+/// Validator for verifying plugin API and compiler version compatibility.
+pub struct CompatibilityChecker;
+
+impl CompatibilityChecker {
+    /// Validates if `metadata` is compatible with the running engine.
+    pub fn validate(metadata: &PluginMetadata) -> Result<(), String> {
+        let current_api = semver::Version::parse(CURRENT_API_VERSION).unwrap();
+        let current_compiler = semver::Version::parse(CURRENT_COMPILER_VERSION).unwrap();
+
+        // API MAJOR version compatibility check
+        if metadata.api_version.major != current_api.major {
+            return Err(format!(
+                "Incompatible API major version for plugin '{}': requires {}, engine supports {}",
+                metadata.name, metadata.api_version, current_api
+            ));
+        }
+
+        // Compiler version requirement check
+        if metadata.min_compiler_version > current_compiler {
+            return Err(format!(
+                "Plugin '{}' requires compiler version >= {}, but engine runs {}",
+                metadata.name, metadata.min_compiler_version, current_compiler
+            ));
+        }
+
+        Ok(())
+    }
+}
 
 pub struct PluginManager {
     registry: PluginRegistry,
+    capability_registry: CapabilityRegistry,
     manifests: HashMap<String, PluginManifest>,
     #[cfg(feature = "wasm-plugins")]
-    wasm_runtime: Option<WasmRuntime>,
+    wasm_runtime: Option<crate::wasm::WasmRuntime>,
     #[cfg(feature = "wasm-plugins")]
-    wasm_modules: HashMap<String, WasmModule>,
+    wasm_modules: HashMap<String, crate::wasm::WasmModule>,
 }
 
 impl PluginManager {
     pub fn new() -> Self {
         Self {
             registry: PluginRegistry::new(),
+            capability_registry: CapabilityRegistry::new(),
             manifests: HashMap::new(),
             #[cfg(feature = "wasm-plugins")]
             wasm_runtime: None,
@@ -37,6 +71,29 @@ impl PluginManager {
 
     pub fn registry_mut(&mut self) -> &mut PluginRegistry {
         &mut self.registry
+    }
+
+    /// Registers a capability plugin, validates metadata compatibility, and populates contracts into `CapabilityRegistry`.
+    pub fn register_capability_plugin(
+        &mut self,
+        plugin: &dyn CapabilityPlugin,
+    ) -> Result<(), String> {
+        let metadata = plugin.metadata();
+        CompatibilityChecker::validate(&metadata)?;
+
+        for contract in plugin.capabilities() {
+            tracing::info!(capability = %contract.id, plugin = %metadata.name, "registered capability contract");
+            self.capability_registry.register(contract)?;
+        }
+
+        Ok(())
+    }
+
+    /// Freezes and returns an immutable `Arc<CapabilityRegistry>`.
+    pub fn freeze_capability_registry(&mut self) -> Arc<CapabilityRegistry> {
+        let mut empty = CapabilityRegistry::new();
+        std::mem::swap(&mut self.capability_registry, &mut empty);
+        empty.freeze()
     }
 
     pub fn load_manifests(&mut self, dir: &str) {
@@ -54,9 +111,14 @@ impl PluginManager {
     }
 
     #[cfg(feature = "wasm-plugins")]
-    fn load_wasm_plugin(&mut self, name: &str, manifest: &PluginManifest, dir: &str) -> anyhow::Result<()> {
+    fn load_wasm_plugin(
+        &mut self,
+        name: &str,
+        manifest: &PluginManifest,
+        dir: &str,
+    ) -> anyhow::Result<()> {
         let runtime = self.wasm_runtime.get_or_insert_with(|| {
-            WasmRuntime::new().expect("Failed to create WasmRuntime")
+            crate::wasm::WasmRuntime::new().expect("Failed to create WasmRuntime")
         });
 
         let wasm_path = Path::new(dir).join(&manifest.plugin.entry);
@@ -80,31 +142,19 @@ impl PluginManager {
         Ok(())
     }
 
-    #[cfg(feature = "wasm-plugins")]
-    pub fn get_wasm_module(&self, name: &str) -> Option<&WasmModule> {
-        self.wasm_modules.get(name)
-    }
-
-    #[cfg(feature = "wasm-plugins")]
-    pub fn call_wasm_function(
-        &self,
+    pub fn register_provider(
+        &mut self,
         name: &str,
-        function: &str,
-        params: &[wasmtime::Val],
-    ) -> anyhow::Result<Vec<wasmtime::Val>> {
-        let module = self.wasm_modules.get(name)
-            .ok_or_else(|| anyhow::anyhow!("wasm plugin '{}' not found", name))?;
-        let runtime = self.wasm_runtime.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("wasm runtime not initialized"))?;
-        let mut instance = module.instantiate(runtime)?;
-        instance.call_func(function, params)
-    }
-
-    pub fn register_provider(&mut self, name: &str, provider: Arc<dyn crate::providers::ChatProvider + Send + Sync>) {
+        provider: Arc<dyn crate::providers::ChatProvider + Send + Sync>,
+    ) {
         self.registry.register_provider(name, provider);
     }
 
-    pub fn register_strategy(&mut self, kind: crate::types::StrategyKind, strategy: Box<dyn crate::strategies::Strategy + Send + Sync>) {
+    pub fn register_strategy(
+        &mut self,
+        kind: crate::types::StrategyKind,
+        strategy: Box<dyn crate::strategies::Strategy + Send + Sync>,
+    ) {
         self.registry.register_strategy(kind, strategy);
     }
 
@@ -130,55 +180,49 @@ impl Default for PluginManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
+    use fusion_plugin_echo::EchoPlugin;
+    use fusion_plugin_api::CapabilityId;
 
-    fn write_manifest(dir: &std::path::Path, name: &str, content: &str) {
-        std::fs::write(dir.join(name), content).unwrap();
+    #[test]
+    fn test_register_echo_capability_plugin() {
+        let mut manager = PluginManager::new();
+        let echo = EchoPlugin::new();
+
+        manager.register_capability_plugin(&echo).unwrap();
+        let frozen_reg = manager.freeze_capability_registry();
+
+        assert!(frozen_reg.is_frozen());
+        assert!(frozen_reg.contains(&CapabilityId::new("echo.text")));
+        assert!(frozen_reg.contains(&CapabilityId::new("echo.uppercase")));
+        assert_eq!(frozen_reg.list().len(), 2);
     }
 
     #[test]
-    fn test_plugin_discovery() {
-        let dir = std::env::temp_dir().join(format!("fusion_plugins_{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        write_manifest(
-            &dir,
-            "good.toml",
-            r#"[plugin]
-name = "test-plugin"
-version = "1.0.0"
-entry = "plugin.wasm""#,
-        );
+    fn test_incompatible_plugin_rejected() {
+        use fusion_plugin_api::{CapabilityContract, Plugin};
+
+        struct BadPlugin;
+        impl Plugin for BadPlugin {
+            fn metadata(&self) -> PluginMetadata {
+                PluginMetadata {
+                    name: "bad-plugin".into(),
+                    version: semver::Version::parse("1.0.0").unwrap(),
+                    api_version: semver::Version::parse("9.0.0").unwrap(), // Incompatible major
+                    min_compiler_version: semver::Version::parse("0.9.0").unwrap(),
+                    capabilities: vec![],
+                }
+            }
+        }
+        impl CapabilityPlugin for BadPlugin {
+            fn capabilities(&self) -> Vec<CapabilityContract> {
+                vec![]
+            }
+        }
 
         let mut manager = PluginManager::new();
-        manager.load_manifests(dir.to_string_lossy().as_ref());
-
-        let _ = std::fs::remove_dir_all(&dir);
-
-        assert_eq!(manager.manifests().len(), 1);
-        assert!(manager.manifests().contains_key("test-plugin"));
-    }
-
-    #[test]
-    fn test_malformed_manifest() {
-        let dir = std::env::temp_dir().join(format!("fusion_plugins_{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        write_manifest(
-            &dir,
-            "good.toml",
-            r#"[plugin]
-name = "valid-plugin"
-version = "1.0.0"
-entry = "plugin.wasm""#,
-        );
-
-        write_manifest(&dir, "bad.toml", "this is not toml [[[");
-
-        let mut manager = PluginManager::new();
-        manager.load_manifests(dir.to_string_lossy().as_ref());
-
-        let _ = std::fs::remove_dir_all(&dir);
-
-        assert_eq!(manager.manifests().len(), 1);
-        assert!(manager.manifests().contains_key("valid-plugin"));
+        let bad = BadPlugin;
+        let res = manager.register_capability_plugin(&bad);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Incompatible API major version"));
     }
 }

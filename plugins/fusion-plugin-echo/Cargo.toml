@@ -1,0 +1,15 @@
+[package]
+name = "fusion-plugin-echo"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Reference Echo Capability Plugin for FusionRouter"
+
+[dependencies]
+fusion-plugin-api = { path = "../../crates/fusion-plugin-api" }
+serde_json = "1"
+semver = "1.0"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "macros"] }

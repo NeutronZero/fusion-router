@@ -4,6 +4,7 @@ pub mod ir;
 pub mod passes;
 pub mod registry;
 pub mod optimization;
+pub mod pipeline;
 
 use async_trait::async_trait;
 use crate::types::{CompilerError, ExecutionGraph, WorkflowIR};

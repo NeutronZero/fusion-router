@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tracing::info;
 
+pub mod capability_executor;
+
 #[cfg(feature = "semantic-cache")]
 use crate::cache::SemanticCache;
 use crate::compiler::context::CompilationContext;

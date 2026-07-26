@@ -2,7 +2,11 @@ use async_trait::async_trait;
 use crate::types::{CompilerError, WorkflowIR};
 
 pub mod legacy_passes;
+#[allow(unused_imports)]
+pub mod policy;
 pub use legacy_passes::*;
+#[allow(unused_imports)]
+pub use policy::*;
 
 #[derive(Default)]
 pub struct PassManager {

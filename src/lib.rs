@@ -14,6 +14,12 @@ pub mod telemetry;
 pub mod types;
 pub mod config;
 pub mod plugin;
+pub mod capability;
+pub mod policy;
+pub mod session;
+pub mod lifecycle;
+pub mod trigger;
+pub mod connectors;
 pub mod workflow;
 pub mod tools;
 pub mod cache;
@@ -21,3 +27,5 @@ pub mod middleware;
 
 #[cfg(feature = "wasm-plugins")]
 pub mod wasm;
+
+pub mod devex;
