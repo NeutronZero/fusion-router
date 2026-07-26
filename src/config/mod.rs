@@ -1,3 +1,6 @@
+pub mod error;
+pub mod manager;
+
 use std::collections::HashMap;
 use serde::Deserialize;
 

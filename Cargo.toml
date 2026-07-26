@@ -42,6 +42,7 @@ tonic = { version = "0.12", optional = true }
 anyhow = "1"
 meval = "0.2"
 parking_lot = "0.12"
+arc-swap = "1"
 prometheus = { version = "0.13", features = ["process"] }
 tokio-tungstenite = "0.21"
 thiserror = "1"
