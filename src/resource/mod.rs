@@ -3,6 +3,7 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::types::{ExecutionGraph, Quota};
 
+pub mod cancelling_stream;
 pub mod guard;
 pub mod budget;
 pub mod stream_meter;
