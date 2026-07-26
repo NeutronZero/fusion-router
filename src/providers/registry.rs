@@ -219,6 +219,18 @@ impl ConfigSubscriber for ProviderRegistry {
                 "ProviderRegistry commit"
             );
 
+            let mut caps = self.capabilities.write();
+            for name in &removed {
+                caps.remove(name.as_str());
+            }
+
+            let mut pricing = self.pricing.write();
+            for name in &removed {
+                pricing.remove(name.as_str());
+            }
+
+            self.prefixes.write().clear();
+
             *targets = candidates;
         }
     }
