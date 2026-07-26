@@ -68,3 +68,54 @@ impl ConnectorHealthChecker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
+    use std::sync::Arc;
+
+    struct MockConnector;
+
+    impl Connector for MockConnector {
+        fn descriptor(&self) -> ConnectorDescriptor {
+            ConnectorDescriptor {
+                name: "mock".into(),
+                version: semver::Version::new(1, 0, 0),
+                supported_capabilities: vec![],
+            }
+        }
+
+        fn executor(&self) -> Arc<dyn fusion_plugin_api::CapabilityExecutor> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_initial_health_empty() {
+        let checker = ConnectorHealthChecker::new(60);
+        let map_arc = checker.health_map();
+        assert!(map_arc.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_check_connector_health_returns_healthy() {
+        let checker = ConnectorHealthChecker::new(60);
+        let connector = MockConnector;
+        let health = checker.check_connector_health("mock_connector", &connector).await;
+        assert_eq!(health.status, HealthStatus::Healthy);
+    }
+
+    #[tokio::test]
+    async fn test_health_map_updates_after_check() {
+        let checker = ConnectorHealthChecker::new(60);
+        let connector = MockConnector;
+        let name = "mock_connector";
+        let health = checker.check_connector_health(name, &connector).await;
+        let map_arc = checker.health_map();
+        map_arc.write().await.insert(name.to_string(), health);
+        let map = map_arc.read().await;
+        assert!(map.contains_key(name));
+        assert_eq!(map[name].status, HealthStatus::Healthy);
+    }
+}
