@@ -8,11 +8,11 @@
 
 ## 1. Executive Vision
 
-In **v0.8.0**, FusionRouter established the Intent-Oriented Execution Model.  
-In **v0.9.0**, FusionRouter solidified the compiler pipeline (`PrimitiveGraph` → `ExecutionGraph`, deterministic lowering, optimization passes, provenance).  
+In **v0.8.0**, FusionRouter established the Intent-Oriented Execution Model.
+In **v0.9.0**, FusionRouter solidified the compiler pipeline (`PrimitiveGraph` → `ExecutionGraph`, deterministic lowering, optimization passes, provenance).
 In **v0.10.0**, FusionRouter delivered the Capability Platform — triggers, sessions, connectors, policy compilation, developer tooling, distributed scheduling, and production hardening.
 
-The compiler, runtime, sessions, triggers, connectors, and SDK are now comprehensive.  
+The compiler, runtime, sessions, triggers, connectors, and SDK are now comprehensive.
 **v0.11.0 does not introduce another foundational architectural layer.** Instead, it consumes every existing API to build a production-grade, cloud-native, operationally intelligent platform.
 
 ### What v0.11 Is Not
@@ -26,39 +26,118 @@ The compiler, runtime, sessions, triggers, connectors, and SDK are now comprehen
 
 The kernel is mature. v0.11 validates it through implementations rather than redesigning it.
 
+### Long-Term Release Model
+
+This roadmap naturally suggests a progression toward a stable public platform:
+
+| Version | Focus |
+|---------|-------|
+| v0.8 | Execution model |
+| v0.9 | Compiler |
+| v0.10 | Capability platform |
+| **v0.11** | **Platform maturity** |
+| v0.12 | Cloud-native operations |
+| v1.0 | Stable public platform |
+
+The transition from v0.8–v0.10 built the architectural foundation. v0.11 begins the shift from architecture-building to operational excellence, culminating in a v1.0 that can be depended on for production workloads.
+
 ---
 
-## 2. Epic A — Cloud-Native Distributed Runtime ⭐⭐⭐⭐⭐
+## 2. Platform Invariants — v1.0 Release Gates
 
-The `DistributedScheduler` exists but delegates to the local scheduler. v0.11 makes distributed execution genuinely operational.
+As v0.11 operationalizes the kernel, a small set of **platform invariants** must be tracked across every release. These are the contracts that turn v0.x into v1.0 — they must hold before a stable release is warranted.
+
+| Invariant | Description |
+|-----------|-------------|
+| Public SDK compatibility | Public API changes require explicit, versioned migration paths. No silent breakage. |
+| Replay compatibility | Snapshots written by version N must replay correctly on version N+1 (at minimum the two most recent minor versions). |
+| Session migration | Session state must migrate safely across version upgrades without data loss. |
+| Deterministic compilation | Identical input → identical `ExecutionGraph` output. The compiler is a pure function of its inputs. |
+| Stable execution semantics | Execution of identical graphs with identical inputs produces identical results (modulo non-deterministic provider responses, which are captured in provenance). |
+| Connector conformance | All certified connectors pass the conformance suite on every supported runtime version. |
+| Policy determinism | Policy evaluation produces identical results for identical requests and identical policy sets. |
+| Upgrade safety | Upgrade from the prior minor version must succeed with zero data loss. Rollback must be possible within one minor version. |
+
+These invariants are release gates, not features. They must be verified as part of every release pipeline. Violations are release-blocking.
+
+---
+
+## 3. Implementation Stages
+
+The epics are sequenced by dependency rather than priority. Each stage must be substantially complete before the next begins.
 
 ```
-ExecutionGraph
-        │
-        ▼
-DistributedScheduler
-        │
-        ├──── Worker A
-        ├──── Worker B
-        ├──── Worker C
-        └──── Local Fallback
+Stage 1 ─── Stage 2 ─── Stage 3 ─── Stage 4 ─── Stage 5
+Foundation   Dist.       Intel.       UX          Enterprise
+             Runtime
+  G            A           C            J           F
+  B                       E                        H
+  D                                                I
+  K
+  M
 ```
+
+### Stage 1 — Platform Foundation
+
+These epics build the operational infrastructure everything else depends on:
+
+| Epic | Rationale |
+|------|-----------|
+| **G** Live Configuration | No system should require restarts during development or production |
+| **B** Streaming Runtime & Metering | Streaming is the most-used execution path; it must be metered and observable |
+| **D** Connector Runtime Platform | Connector health and discovery are prerequisites for distributed execution |
+| **K** Reliability Engineering | Chaos testing validates that all foundation epics work under failure |
+| **M** Compatibility & Release Engineering | Versioned releases require upgrade/replay/downgrade guarantees |
+
+### Stage 2 — Distributed Runtime
+
+| Epic | Rationale |
+|------|-----------|
+| **A** Cloud-Native Distributed Runtime | Only after config reload, connector health, and reliability testing are stable. Distributed execution is much easier to debug when the operational infrastructure already exists. |
+
+### Stage 3 — Intelligence
+
+| Epic | Rationale |
+|------|-----------|
+| **C** Planning Intelligence | Learning depends on high-quality telemetry from Stages 1–2 |
+| **E** Operational Intelligence | Analytics and recommendations require a stable runtime to observe |
+
+### Stage 4 — Platform UX
+
+| Epic | Rationale |
+|------|-----------|
+| **J** Operator Control Plane | Dashboards built before mature telemetry typically need major redesign later. Stage 3 ensures the data is ready. |
+
+### Stage 5 — Enterprise
+
+| Epic | Rationale |
+|------|-----------|
+| **F** Production Search | Product-facing capability, not a platform foundation |
+| **H** Trigger Runtime | Product-facing capability, not a platform foundation |
+| **I** Enterprise Policy Engine | Product-facing capability, not a platform foundation |
+
+---
+
+## 3. Implementation Stages Detail
+
+### Stage 1 — Platform Foundation
+
+#### Epic G — Live Configuration ⭐⭐⭐⭐
+
+Carried forward from the v0.10 deferred backlog. Configuration currently requires process restart.
 
 | Feature | Description |
 |---------|-------------|
-| Worker registration protocol | Workers announce themselves to the scheduler on startup |
-| Heartbeats | Periodic liveness signals from workers; stale workers are evicted |
-| Lease management | Workers lease node execution with TTL; leases expire and are reassigned on failure |
-| Node capability advertisement | Workers advertise model availability, concurrency capacity, connector support |
-| Work stealing | Idle workers pull ready nodes from overloaded workers |
-| Execution migration | Stalled or failed worker executions are migrated to healthy workers |
-| Worker draining | Graceful shutdown: stop accepting new work, finish in-flight, deregister |
-| Scheduler failover | Standby schedulers takeover if primary fails |
-| Leader election | Optional consensus-based primary election |
+| `ArcSwap<AppConfig>` | Lock-free live config swapping |
+| SIGHUP reload | Unix signal triggers config re-parse and swap |
+| Configuration validation | Validate new config before applying; roll back on failure |
+| Live provider updates | Add, remove, or reconfigure providers without restart |
+| Live routing policy updates | Update model routing rules, circuit breaker thresholds at runtime |
+| Connector reload | Hot-swap connector implementations |
 
 ---
 
-## 3. Epic B — Streaming Runtime & Metering ⭐⭐⭐⭐⭐
+#### Epic B — Streaming Runtime & Metering ⭐⭐⭐⭐⭐
 
 Carried forward from the v0.10 deferred backlog. Streaming currently bypasses the pipeline — it must become a first-class metered path.
 
@@ -74,28 +153,7 @@ Carried forward from the v0.10 deferred backlog. Streaming currently bypasses th
 
 ---
 
-## 4. Epic C — Planning Intelligence ⭐⭐⭐⭐
-
-Planning is currently template-driven. v0.11 evolves planning into a measurable, adaptive subsystem.
-
-```
-Planner
-    │
-    ▼
-Evidence → Planner Optimizer → Better WorkflowIR
-```
-
-| Feature | Description |
-|---------|-------------|
-| Planner ranking | Rank planner templates by historical success rate per intent |
-| Strategy ranking | Rank strategies (Single, Consensus, Reflection, etc.) by cost/latency/success per workload |
-| Planner confidence | Planner emits confidence scores with generated IRs |
-| Adaptive strategy selection | Strategy is selected based on historical performance, not static mapping |
-| Planner telemetry | Record planner decisions as structured events for offline analysis |
-
----
-
-## 5. Epic D — Connector Runtime Platform ⭐⭐⭐⭐
+#### Epic D — Connector Runtime Platform ⭐⭐⭐⭐
 
 The connector SDK exists (`Connector` trait, 6 reference connectors). v0.11 builds the operational layer around it.
 
@@ -110,15 +168,145 @@ The connector SDK exists (`Connector` trait, 6 reference connectors). v0.11 buil
 
 ---
 
-## 6. Epic E — Operational Intelligence ⭐⭐⭐⭐
+#### Epic K — Reliability Engineering ⭐⭐⭐⭐⭐
 
-The telemetry system already emits rich data. v0.11 makes it actionable.
+Beyond functional correctness — validate system behavior under failure, and establish measurable recovery properties.
+
+| Feature | Description |
+|---------|-------------|
+| Provider outage simulation | Kill upstream provider; verify circuit breaker + fallback routing |
+| Worker crash simulation | Hard-kill a worker mid-execution; verify lease expiry + migration |
+| Scheduler crash simulation | Kill primary scheduler; verify failover + state recovery |
+| SQLite corruption simulation | Corrupt WAL; verify recovery or graceful degradation |
+| Connector failure simulation | Return errors from connectors; verify retry + dead-letter |
+| Replay corruption simulation | Corrupt snapshot data; verify validation rejection |
+| Automatic retry verification | Assert retry policy is honored across failure scenarios |
+| Replay validation | Verify deterministic replay produces identical output |
+| Checkpoint verification | Assert checkpoint/restore round-trips produce identical state |
+| Recovery Time Objective (RTO) | Measure and enforce time-to-recovery targets per failure mode |
+| Mean time to recover (MTTR) | Track recovery duration across failure scenarios |
+| Automatic rollback | Revert to last known-good state on failed upgrade or config apply |
+| State convergence | Assert that after any failure+recovery, system state converges to expected steady state |
+| SLO verification | Convert chaos tests into measurable SLOs rather than pass/fail assertions |
+
+---
+
+#### Epic M — Compatibility & Release Engineering ⭐⭐⭐⭐⭐
+
+Once you begin shipping versions, compatibility becomes one of the most valuable engineering investments.
+
+```
+v0.10         v0.11
+   │            │
+   ▼            ▼
+ Upgrade ──→ Replay ──→ Resume ──→ Success
+```
+
+Ensuring that every version upgrade is safe, reversible, and verifiable.
+
+| Feature | Description |
+|---------|-------------|
+| API compatibility tests | Automated assertion that public API signatures remain backward-compatible |
+| Plugin compatibility matrix | Document which plugin versions are compatible with which runtime versions |
+| Connector compatibility matrix | Document which connector versions work with which runtime versions |
+| Replay compatibility tests | Verify that v0.10 snapshots replay correctly on v0.11 runtime |
+| Session format migration | Automated migration of session state across version boundaries |
+| Upgrade tests | Green/blue upgrade validation: install new version, verify all paths, roll back on failure |
+| Downgrade behavior | Assert that downgrading to a prior version recovers correctly without data loss |
+| SemVer validation | Automated enforcement of semver rules on public API changes |
+| Feature-flag gating | Gate new features behind flags so operators can incrementally roll out |
+
+---
+
+#### SDK Validation Suite
+
+Beyond the PluginScaffolder introduced in v0.10, add certification tooling for the ecosystem.
+
+| Feature | Description |
+|---------|-------------|
+| Connector certification | `cargo fusion certify-connector` — verify ABI compatibility, metadata, capabilities, version constraints, documentation completeness, benchmark results |
+| Strategy certification | `cargo fusion certify-strategy` — verify strategy contract compliance, determinism, and performance |
+| Plugin certification | `cargo fusion certify-plugin` — verify plugin ABI, metadata, and runtime compatibility |
+| Conformance suite | Reusable test harness that plugin/connector/strategy authors run before publishing |
+
+---
+
+### Stage 2 — Distributed Runtime
+
+#### Epic A — Cloud-Native Distributed Runtime ⭐⭐⭐⭐⭐
+
+The `DistributedScheduler` exists but delegates to the local scheduler. v0.11 makes distributed execution genuinely operational.
+
+```
+Scheduler
+    │
+    ▼
+DistributionStrategy
+    │
+    ├──── Worker A
+    ├──── Worker B
+    ├──── Worker C
+    └──── Local Fallback
+```
+
+| Feature | Description |
+|---------|-------------|
+| Worker registration protocol | Workers announce themselves to the scheduler on startup |
+| Heartbeats | Periodic liveness signals from workers; stale workers are evicted |
+| Lease management | Workers lease node execution with TTL; leases expire and are reassigned on failure |
+| Node capability advertisement | Workers advertise model availability, concurrency capacity, connector support |
+| Work stealing | Idle workers pull ready nodes from overloaded workers |
+| Execution migration | Stalled or failed worker executions are migrated to healthy workers |
+| Worker draining | Graceful shutdown: stop accepting new work, finish in-flight, deregister |
+| Scheduler failover | Standby schedulers takeover if primary fails |
+| Leader election | Optional consensus-based primary election |
+| **Execution affinity** | Co-locate related nodes (e.g. Generate → Review → Judge) on the same worker to avoid large artifact transfers dominating runtime. Workers advertise locality preferences; scheduler respects them within balancing constraints. |
+
+---
+
+### Stage 3 — Intelligence
+
+#### Epic C — Planning Intelligence ⭐⭐⭐⭐
+
+Planning is currently template-driven. v0.11 evolves planning into a measurable, adaptive subsystem.
+
+**Architectural invariant:** The planner must learn without changing compiler behavior. The boundary is:
+
+```
+Planner
+    │
+    ▼
+WorkflowIR
+    │
+    ▼
+Compiler  (deterministic, never modified by planner feedback)
+```
+
+Learning belongs before compilation. The compiler remains deterministic — planner feedback may change *which* template is selected or *which* strategy is chosen, but never how the compiler lowers a given WorkflowIR.
+
+| Feature | Description |
+|---------|-------------|
+| Planner ranking | Rank planner templates by historical success rate per intent |
+| Strategy ranking | Rank strategies (Single, Consensus, Reflection, etc.) by cost/latency/success per workload |
+| Planner confidence | Planner emits confidence scores with generated IRs |
+| Adaptive strategy selection | Strategy is selected based on historical performance, not static mapping |
+| Planner telemetry | Record planner decisions as structured events for offline analysis |
+| **Recommendation ingestion** | Consume recommendations from Operational Intelligence (see Epic E) — e.g. "Consensus is 40% slower for Debug requests with no accuracy improvement" → adjust strategy selection |
+
+---
+
+#### Epic E — Operational Intelligence ⭐⭐⭐⭐
+
+The telemetry system already emits rich data. v0.11 makes it actionable — and turns it into a competitive differentiator through recommendations that feed back into Planning.
 
 ```
 Telemetry
     │
     ▼
-Analytics → Recommendations → Operator Dashboard
+Analytics → Recommendations
+                │
+                ├──→ Operator Dashboard (visibility)
+                └──→ Planning Intelligence (automated optimization)
 ```
 
 | Feature | Description |
@@ -129,69 +317,14 @@ Analytics → Recommendations → Operator Dashboard
 | Failing connector tracking | Aggregate connector failure rates and root causes |
 | Provider cost analysis | Per-provider, per-model cost breakdowns over time windows |
 | Execution bottleneck identification | Pinpoint scheduler, provider, or connector bottlenecks in the pipeline |
+| **Actionable recommendations** | Emit concrete suggestions: "Consensus strategy is 40% slower for Debug requests with no accuracy improvement" or "Reflection performs better than Debate for Architecture prompts" |
+| **Feedback channel** | Recommendations are consumable by Planning Intelligence (Epic C) as structured evidence for adaptive strategy and template selection |
 
 ---
 
-## 7. Epic F — Production Search ⭐⭐⭐
+### Stage 4 — Platform UX
 
-Carried forward from the v0.10 deferred backlog. Replace the mock `SearchTool` with production adapters.
-
-| Feature | Description |
-|---------|-------------|
-| Tavily adapter | HTTP connector wrapping `https://api.tavily.com/search` |
-| Serper adapter | HTTP connector wrapping `https://google.serper.dev/search` |
-| Brave Search adapter | HTTP connector wrapping Brave Search API |
-| Unified `SearchTool` trait | Common interface over all search backends |
-
----
-
-## 8. Epic G — Live Configuration ⭐⭐⭐⭐
-
-Carried forward from the v0.10 deferred backlog. Configuration currently requires process restart.
-
-| Feature | Description |
-|---------|-------------|
-| `ArcSwap<AppConfig>` | Lock-free live config swapping |
-| SIGHUP reload | Unix signal triggers config re-parse and swap |
-| Configuration validation | Validate new config before applying; roll back on failure |
-| Live provider updates | Add, remove, or reconfigure providers without restart |
-| Live routing policy updates | Update model routing rules, circuit breaker thresholds at runtime |
-| Connector reload | Hot-swap connector implementations |
-
----
-
-## 9. Epic H — Trigger Runtime ⭐⭐⭐
-
-ADR-031 defines triggers. v0.11 completes the production trigger runtime.
-
-| Feature | Description |
-|---------|-------------|
-| Trigger persistence | Persist trigger declarations and execution history |
-| Trigger history | Audit trail of all trigger activations and outcomes |
-| Trigger retries | Configurable retry policy for failed trigger executions |
-| Dead-letter queue | Capture permanently failed trigger invocations for manual inspection |
-| Webhook signatures | HMAC signature verification for incoming webhooks |
-| Cron monitoring | Track scheduled trigger drift, missed ticks, overruns |
-| Trigger metrics | Per-trigger-type counters, latency histograms, error rates |
-
----
-
-## 10. Epic I — Enterprise Policy Engine ⭐⭐⭐
-
-Current policies compile correctly (`PolicyAST` → `PolicyIR` → `PolicyCompilerPass`). v0.11 makes them enterprise-ready.
-
-| Feature | Description |
-|---------|-------------|
-| RBAC | Role-based access control for execution requests |
-| ABAC | Attribute-based access control policies |
-| Organization policies | Multi-tenant policy isolation at organization scope |
-| Tenant policies | Per-tenant policy overrides |
-| Policy bundles | Grouped, versioned, signed policy collections |
-| Policy audit history | Immutable log of all policy changes and evaluations |
-
----
-
-## 11. Epic J — Operator Control Plane ⭐⭐⭐⭐
+#### Epic J — Operator Control Plane ⭐⭐⭐⭐
 
 Where FusionRouter begins to feel like Kubernetes — a control plane for managing the platform.
 
@@ -209,27 +342,57 @@ Where FusionRouter begins to feel like Kubernetes — a control plane for managi
 
 ---
 
-## 12. Epic K — Reliability Engineering ⭐⭐⭐⭐⭐
+### Stage 5 — Enterprise
 
-Beyond functional correctness — validate system behavior under failure.
+#### Epic F — Production Search ⭐⭐⭐
+
+Carried forward from the v0.10 deferred backlog. Replace the mock `SearchTool` with production adapters.
 
 | Feature | Description |
 |---------|-------------|
-| Provider outage simulation | Kill upstream provider; verify circuit breaker + fallback routing |
-| Worker crash simulation | Hard-kill a worker mid-execution; verify lease expiry + migration |
-| Scheduler crash simulation | Kill primary scheduler; verify failover + state recovery |
-| SQLite corruption simulation | Corrupt WAL; verify recovery or graceful degradation |
-| Connector failure simulation | Return errors from connectors; verify retry + dead-letter |
-| Replay corruption simulation | Corrupt snapshot data; verify validation rejection |
-| Automatic retry verification | Assert retry policy is honored across failure scenarios |
-| Replay validation | Verify deterministic replay produces identical output |
-| Checkpoint verification | Assert checkpoint/restore round-trips produce identical state |
+| Tavily adapter | HTTP connector wrapping `https://api.tavily.com/search` |
+| Serper adapter | HTTP connector wrapping `https://google.serper.dev/search` |
+| Brave Search adapter | HTTP connector wrapping Brave Search API |
+| Unified `SearchTool` trait | Common interface over all search backends |
 
 ---
 
-## 13. Epic L — Performance Engineering ⭐⭐⭐⭐⭐
+#### Epic H — Trigger Runtime ⭐⭐⭐
 
-Instead of adding features, optimize the existing stack.
+ADR-031 defines triggers. v0.11 completes the production trigger runtime.
+
+| Feature | Description |
+|---------|-------------|
+| Trigger persistence | Persist trigger declarations and execution history |
+| Trigger history | Audit trail of all trigger activations and outcomes |
+| Trigger retries | Configurable retry policy for failed trigger executions |
+| Dead-letter queue | Capture permanently failed trigger invocations for manual inspection |
+| Webhook signatures | HMAC signature verification for incoming webhooks |
+| Cron monitoring | Track scheduled trigger drift, missed ticks, overruns |
+| Trigger metrics | Per-trigger-type counters, latency histograms, error rates |
+
+---
+
+#### Epic I — Enterprise Policy Engine ⭐⭐⭐
+
+Current policies compile correctly (`PolicyAST` → `PolicyIR` → `PolicyCompilerPass`). v0.11 makes them enterprise-ready.
+
+| Feature | Description |
+|---------|-------------|
+| RBAC | Role-based access control for execution requests |
+| ABAC | Attribute-based access control policies |
+| Organization policies | Multi-tenant policy isolation at organization scope |
+| Tenant policies | Per-tenant policy overrides |
+| Policy bundles | Grouped, versioned, signed policy collections |
+| Policy audit history | Immutable log of all policy changes and evaluations |
+
+---
+
+## 4. Cross-Cutting: Performance Engineering
+
+#### Epic L — Performance Engineering ⭐⭐⭐⭐⭐
+
+Optimize the existing stack. This epic runs across all stages — each stage includes performance validation, and dedicated optimization sprints address systemic issues discovered during earlier stages.
 
 | Focus Area | Target |
 |------------|--------|
@@ -239,29 +402,34 @@ Instead of adding features, optimize the existing stack.
 | Connector pooling | Reuse HTTP/TCP connections across connector invocations |
 | Async batching | Batch telemetry writes; batch budget envelope updates |
 | Scheduler profiling | Identify `buffer_unordered` overhead with very large graphs (1000+ nodes) |
+| **Memory profiling** | Track allocation patterns, identify hot allocations and fragmentation |
+| **Allocation heatmaps** | Per-component memory pressure visualization to guide targeted optimization |
+| **Cache effectiveness** | Measure hit rates for compilation cache, connector pools, and session caches |
+| **Connector latency histograms** | Per-connector, per-operation latency distributions under load |
 
 ---
 
-## 14. Epic Priority Matrix
+## 5. Epic Summary
 
-| Epic | Area | Priority | Dependencies |
-|------|------|----------|-------------|
-| **A** | Cloud-Native Distributed Runtime | ⭐⭐⭐⭐⭐ | v0.10 DistributedScheduler |
-| **B** | Streaming Runtime & Metering | ⭐⭐⭐⭐⭐ | v0.10 streaming path |
-| **C** | Planning Intelligence | ⭐⭐⭐⭐ | v0.10 EvidenceRepository, FeedbackCalibrator |
-| **D** | Connector Runtime Platform | ⭐⭐⭐⭐ | v0.10 Connector trait, CapabilityPlugin |
-| **E** | Operational Intelligence | ⭐⭐⭐⭐ | v0.10 FusionMetrics, SqliteEvidenceRepository |
-| **F** | Production Search | ⭐⭐⭐ | v0.10 connectors, HTTPRequestTool |
-| **G** | Live Configuration | ⭐⭐⭐⭐ | v0.10 AppConfig, config/default.yaml |
-| **H** | Trigger Runtime | ⭐⭐⭐ | v0.10 Trigger Framework (ADR-031) |
-| **I** | Enterprise Policy Engine | ⭐⭐⭐ | v0.10 Policy Compilation (ADR-024) |
-| **J** | Operator Control Plane | ⭐⭐⭐⭐ | Epics E (telemetry), A (workers), D (connectors) |
-| **K** | Reliability Engineering | ⭐⭐⭐⭐⭐ | All existing subsystems |
-| **L** | Performance Engineering | ⭐⭐⭐⭐⭐ | All existing subsystems |
+| Epic | Area | Stage | Dependencies |
+|------|------|-------|-------------|
+| **G** | Live Configuration | 1 — Foundation | v0.10 AppConfig, config/default.yaml |
+| **B** | Streaming Runtime & Metering | 1 — Foundation | v0.10 streaming path |
+| **D** | Connector Runtime Platform | 1 — Foundation | v0.10 Connector trait, CapabilityPlugin |
+| **K** | Reliability Engineering | 1 — Foundation | All existing subsystems |
+| **M** | Compatibility & Release Engineering | 1 — Foundation | All existing subsystems |
+| **A** | Cloud-Native Distributed Runtime | 2 — Distributed | Epics G, D, K |
+| **C** | Planning Intelligence | 3 — Intelligence | v0.10 EvidenceRepository, FeedbackCalibrator; Epic E |
+| **E** | Operational Intelligence | 3 — Intelligence | v0.10 FusionMetrics, SqliteEvidenceRepository |
+| **J** | Operator Control Plane | 4 — UX | Epics E (telemetry), A (workers), D (connectors) |
+| **F** | Production Search | 5 — Enterprise | v0.10 connectors, HTTPRequestTool |
+| **H** | Trigger Runtime | 5 — Enterprise | v0.10 Trigger Framework (ADR-031) |
+| **I** | Enterprise Policy Engine | 5 — Enterprise | v0.10 Policy Compilation (ADR-024) |
+| **L** | Performance Engineering | Cross-cutting | All existing subsystems |
 
 ---
 
-## 15. What Is Not in v0.11
+## 6. What Is Not in v0.11
 
 The following are explicitly deferred beyond v0.11:
 
@@ -272,7 +440,7 @@ The following are explicitly deferred beyond v0.11:
 
 ---
 
-## 16. References
+## 7. References
 
 - [FusionRouter v0.10.0 Architecture Specification](docs/fusionrouter_architecture_v0.10.0.md)
 - [ADR-030 — Session Replay Semantics](docs/adr/ADR-030-session-replay-semantics.md)
