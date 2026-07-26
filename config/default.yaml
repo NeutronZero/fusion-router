@@ -56,6 +56,16 @@ providers:
     failure_threshold: 5
     cooldown_secs: 30
 
+connectors:
+  my-github:
+    connector_type: github
+    config:
+      token_env: GITHUB_TOKEN
+  my-filesystem:
+    connector_type: filesystem
+    config:
+      allowed_paths: ["./data"]
+
 # Authentication
 auth:
   enabled: false
