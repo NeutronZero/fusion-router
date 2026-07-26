@@ -77,6 +77,12 @@ logging:
   level: "info"      # tracing level directive
   directory: ~       # optional log directory
 
+# Streaming (experimental, checkpoint-based)
+streaming:
+  enabled: false
+  checkpoint_interval_chunks: 100
+  default_chunk_timeout_secs: 30
+
 tools:
   allowed_shell_commands:
     - ls
