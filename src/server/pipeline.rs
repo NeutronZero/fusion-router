@@ -129,7 +129,9 @@ impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
         })?;
 
         for node in &mut graph.nodes {
-            node.model = ctx.request.model.clone();
+            if node.model.is_empty() {
+                node.model = ctx.request.model.clone();
+            }
             if matches!(node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
                 if let Some(ctx_snapshot) = &ctx.assembled_context {
                     node.config.insert("messages".to_string(), serde_json::to_value(&ctx_snapshot.messages).unwrap_or_default());
@@ -206,9 +208,18 @@ impl PipelineStep<ExecutionResult, ChatCompletionResponse> for ResponseBuilderSt
             });
         }
 
-        let content = result.outputs.values()
-            .last()
+        let content = result
+            .final_output
+            .as_ref()
             .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .or_else(|| {
+                result.terminal_node_id.and_then(|id| {
+                    result.outputs.get(&id).and_then(|v| v.as_str().map(|s| s.to_string()))
+                })
+            })
+            .or_else(|| {
+                result.outputs.values().last().and_then(|v| v.as_str().map(|s| s.to_string()))
+            })
             .unwrap_or_else(|| "Request processed successfully.".to_string());
 
         let response = ChatCompletionResponse {

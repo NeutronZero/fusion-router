@@ -1,11 +1,13 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use super::Strategy;
+use super::{Parallelism, StreamingMode, Strategy, StrategyDescriptor};
+use crate::compiler::context::CompilationContext;
+use crate::compiler::diagnostics::CompilerDiagnostic;
+use crate::compiler::ir::{PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind, StrategyIR};
 use crate::tools::ToolRegistry;
 use crate::types::{
-    ExecutionEdge, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph, RetryPolicy, StrategyKind,
+    ArtifactKind, ExecutionEdge, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph, RetryPolicy, StrategyKind,
 };
 
 pub struct ReActStrategy {
@@ -26,6 +28,36 @@ impl ReActStrategy {
 }
 
 impl Strategy for ReActStrategy {
+    fn descriptor(&self) -> StrategyDescriptor {
+        StrategyDescriptor {
+            name: "ReAct",
+            parallelism: Parallelism::Sequential,
+            requires_barrier: false,
+            supports_streaming: StreamingMode::None,
+            retry_policy: RetryPolicy {
+                max_retries: 2,
+                backoff_ms: 1000,
+            },
+            expected_outputs: vec![ArtifactKind::Generic],
+        }
+    }
+
+    fn lower(&self, ir: &StrategyIR, _ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
+        let max_iterations = match ir {
+            StrategyIR::ReAct { max_iterations } => *max_iterations,
+            _ => self.max_iterations,
+        };
+
+        let mut graph = PrimitiveGraph::new("react_graph");
+        graph.add_node(PrimitiveNode {
+            id: "react_loop".into(),
+            kind: PrimitiveNodeKind::FeedbackLoop { max_iterations },
+            artifact_kind: Some("Generic".into()),
+        });
+
+        Ok(graph)
+    }
+
     fn apply(&self, node: &ExecutionNode) -> ExecutionSubgraph {
         let loop_id = Uuid::new_v4();
         let gen_id = Uuid::new_v4();
@@ -47,11 +79,7 @@ impl Strategy for ReActStrategy {
                 backoff_ms: 0,
             },
             fallback: None,
-            config: {
-                let mut m = HashMap::new();
-                m.insert("max_iterations".into(), serde_json::json!(self.max_iterations));
-                m
-            },
+            config: config.clone(),
         };
 
         let gen_node = ExecutionNode {
@@ -64,12 +92,22 @@ impl Strategy for ReActStrategy {
             config,
         };
 
+        let edges = vec![
+            ExecutionEdge {
+                from: loop_id,
+                to: gen_id,
+                condition: None,
+            },
+            ExecutionEdge {
+                from: gen_id,
+                to: loop_id,
+                condition: Some("loop".into()),
+            },
+        ];
+
         ExecutionSubgraph {
             nodes: vec![loop_node, gen_node],
-            edges: vec![
-                ExecutionEdge { from: loop_id, to: gen_id, condition: None },
-                ExecutionEdge { from: gen_id, to: loop_id, condition: Some("loop".into()) },
-            ],
+            edges,
             entry_node_id: loop_id,
             exit_node_id: gen_id,
         }

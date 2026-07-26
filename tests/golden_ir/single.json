@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "graph_id": "single_graph",
+  "nodes": [
+    {
+      "id": "node_1",
+      "kind": {
+        "LLMGenerate": {
+          "model": "default",
+          "role": null
+        }
+      },
+      "artifact_kind": "Generic"
+    }
+  ],
+  "edges": []
+}

@@ -1,7 +1,13 @@
+pub mod context;
+pub mod diagnostics;
+pub mod ir;
 pub mod passes;
+pub mod registry;
+pub mod optimization;
 
 use async_trait::async_trait;
 use crate::types::{CompilerError, ExecutionGraph, WorkflowIR};
+pub use passes::CompilerPass;
 
 #[async_trait]
 pub trait Compiler: Send + Sync {
@@ -10,12 +16,6 @@ pub trait Compiler: Send + Sync {
 
 pub struct DefaultCompiler {
     pub passes: Vec<Box<dyn CompilerPass + Send + Sync>>,
-}
-
-#[async_trait]
-pub trait CompilerPass: Send + Sync {
-    fn name(&self) -> &str;
-    async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError>;
 }
 
 #[async_trait]
@@ -158,55 +158,5 @@ mod tests {
             }
             _ => panic!("expected PassError"),
         }
-    }
-
-    #[tokio::test]
-    async fn test_lowering_to_execution_graph() {
-        let id1 = Uuid::new_v4();
-        let id2 = Uuid::new_v4();
-        let ir = WorkflowIR {
-            plan_id: Uuid::new_v4(),
-            nodes: vec![
-                IRNode {
-                    id: id1,
-                    kind: IRNodeKind::Generate,
-                    strategy: StrategyKind::Single,
-                    model: Some("gpt-4".into()),
-                    config: HashMap::new(),
-                },
-                IRNode {
-                    id: id2,
-                    kind: IRNodeKind::Review,
-                    strategy: StrategyKind::Single,
-                    model: None,
-                    config: HashMap::new(),
-                },
-            ],
-            edges: vec![IREdge {
-                from: id1,
-                to: id2,
-                condition: None,
-            }],
-            metadata: IRMetadata {
-                policy_applied: vec![],
-                estimated_cost: 0.5,
-                estimated_tokens: 2000,
-            },
-        };
-
-        let graph = lower_to_graph(ir).unwrap();
-        assert_eq!(graph.nodes.len(), 2);
-        assert_eq!(graph.edges.len(), 1);
-        assert_eq!(graph.nodes[0].kind, ExecutionNodeKind::LLMGenerate);
-        assert_eq!(graph.nodes[1].kind, ExecutionNodeKind::LLMReview);
-        assert_eq!(graph.nodes[0].model, "gpt-4");
-        assert_eq!(graph.nodes[1].model, "");
-        assert_eq!(graph.nodes[0].retry_policy.max_retries, 2);
-        assert_eq!(graph.nodes[0].retry_policy.backoff_ms, 1000);
-        assert_eq!(graph.edges[0].from, id1);
-        assert_eq!(graph.edges[0].to, id2);
-        assert_eq!(graph.total_tokens, 2000);
-        assert_eq!(graph.total_cost, 500);
-        assert_eq!(graph.metadata.node_count, 2);
     }
 }

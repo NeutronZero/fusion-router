@@ -56,6 +56,34 @@ fn test_plugin_manifest_load_valid() {
 struct TestStrategy;
 
 impl Strategy for TestStrategy {
+    fn descriptor(&self) -> fusion_router::strategies::StrategyDescriptor {
+        fusion_router::strategies::StrategyDescriptor {
+            name: "TestStrategy",
+            parallelism: fusion_router::strategies::Parallelism::Sequential,
+            requires_barrier: false,
+            supports_streaming: fusion_router::strategies::StreamingMode::None,
+            retry_policy: fusion_router::types::RetryPolicy { max_retries: 1, backoff_ms: 100 },
+            expected_outputs: vec![fusion_router::types::ArtifactKind::Generic],
+        }
+    }
+
+    fn lower(
+        &self,
+        _ir: &fusion_router::compiler::ir::StrategyIR,
+        _ctx: &fusion_router::compiler::context::CompilationContext,
+    ) -> Result<fusion_router::compiler::ir::PrimitiveGraph, fusion_router::compiler::diagnostics::CompilerDiagnostic> {
+        let mut graph = fusion_router::compiler::ir::PrimitiveGraph::new("test_graph");
+        graph.add_node(fusion_router::compiler::ir::PrimitiveNode {
+            id: "test_node".into(),
+            kind: fusion_router::compiler::ir::PrimitiveNodeKind::LLMGenerate {
+                model: "test_model".into(),
+                role: None,
+            },
+            artifact_kind: Some("Generic".into()),
+        });
+        Ok(graph)
+    }
+
     fn apply(&self, node: &fusion_router::types::ExecutionNode) -> fusion_router::types::ExecutionSubgraph {
         fusion_router::types::ExecutionSubgraph {
             nodes: vec![node.clone()],

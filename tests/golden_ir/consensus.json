@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "graph_id": "consensus_graph",
+  "nodes": [
+    {
+      "id": "fanout_1",
+      "kind": {
+        "FanOut": {
+          "count": 3
+        }
+      },
+      "artifact_kind": null
+    },
+    {
+      "id": "gen_1",
+      "kind": {
+        "LLMGenerate": {
+          "model": "default",
+          "role": "consensus_member_1"
+        }
+      },
+      "artifact_kind": "Consensus"
+    },
+    {
+      "id": "gen_2",
+      "kind": {
+        "LLMGenerate": {
+          "model": "default",
+          "role": "consensus_member_2"
+        }
+      },
+      "artifact_kind": "Consensus"
+    },
+    {
+      "id": "gen_3",
+      "kind": {
+        "LLMGenerate": {
+          "model": "default",
+          "role": "consensus_member_3"
+        }
+      },
+      "artifact_kind": "Consensus"
+    },
+    {
+      "id": "barrier_1",
+      "kind": {
+        "Barrier": {
+          "min_completion": 1.0,
+          "timeout": {
+            "secs": 60,
+            "nanos": 0
+          },
+          "on_failure": "Continue"
+        }
+      },
+      "artifact_kind": null
+    },
+    {
+      "id": "reducer_1",
+      "kind": {
+        "Reducer": {
+          "mode": "Consensus",
+          "model": "default"
+        }
+      },
+      "artifact_kind": "Consensus"
+    }
+  ],
+  "edges": [
+    {
+      "from": "fanout_1",
+      "to": "gen_1",
+      "condition": null
+    },
+    {
+      "from": "gen_1",
+      "to": "barrier_1",
+      "condition": null
+    },
+    {
+      "from": "fanout_1",
+      "to": "gen_2",
+      "condition": null
+    },
+    {
+      "from": "gen_2",
+      "to": "barrier_1",
+      "condition": null
+    },
+    {
+      "from": "fanout_1",
+      "to": "gen_3",
+      "condition": null
+    },
+    {
+      "from": "gen_3",
+      "to": "barrier_1",
+      "condition": null
+    },
+    {
+      "from": "barrier_1",
+      "to": "reducer_1",
+      "condition": null
+    }
+  ]
+}

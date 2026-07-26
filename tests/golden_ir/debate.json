@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "graph_id": "debate_graph",
+  "nodes": [
+    {
+      "id": "fanout_debate",
+      "kind": {
+        "FanOut": {
+          "count": 2
+        }
+      },
+      "artifact_kind": null
+    },
+    {
+      "id": "debater_1",
+      "kind": {
+        "LLMGenerate": {
+          "model": "claude-opus-4",
+          "role": "Defender"
+        }
+      },
+      "artifact_kind": "Debate"
+    },
+    {
+      "id": "debater_2",
+      "kind": {
+        "LLMGenerate": {
+          "model": "gpt-4o",
+          "role": "Critic"
+        }
+      },
+      "artifact_kind": "Debate"
+    },
+    {
+      "id": "barrier_debate",
+      "kind": {
+        "Barrier": {
+          "min_completion": 1.0,
+          "timeout": {
+            "secs": 60,
+            "nanos": 0
+          },
+          "on_failure": "Continue"
+        }
+      },
+      "artifact_kind": null
+    },
+    {
+      "id": "reducer_debate",
+      "kind": {
+        "Reducer": {
+          "mode": "Debate",
+          "model": "claude-opus-4"
+        }
+      },
+      "artifact_kind": "Debate"
+    }
+  ],
+  "edges": [
+    {
+      "from": "fanout_debate",
+      "to": "debater_1",
+      "condition": null
+    },
+    {
+      "from": "debater_1",
+      "to": "barrier_debate",
+      "condition": null
+    },
+    {
+      "from": "fanout_debate",
+      "to": "debater_2",
+      "condition": null
+    },
+    {
+      "from": "debater_2",
+      "to": "barrier_debate",
+      "condition": null
+    },
+    {
+      "from": "barrier_debate",
+      "to": "reducer_debate",
+      "condition": null
+    }
+  ]
+}

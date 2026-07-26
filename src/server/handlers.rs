@@ -30,6 +30,7 @@ use crate::scheduler::default::DefaultScheduler;
 use crate::strategies::chain::ChainStrategy;
 use crate::strategies::consensus::ConsensusStrategy;
 use crate::strategies::debate::DebateStrategy;
+use crate::strategies::fusion::FusionStrategy;
 use crate::strategies::react::ReActStrategy;
 use crate::strategies::reflection::ReflectionStrategy;
 use crate::strategies::single::SingleStrategy;
@@ -133,6 +134,12 @@ impl AppState {
                 Box::new(SingleStrategy),
             ],
             judge: Box::new(SingleStrategy),
+        }));
+        strategies.insert(StrategyKind::Fusion, Box::new(FusionStrategy {
+            sub_strategies: vec![
+                Box::new(SingleStrategy),
+                Box::new(ConsensusStrategy::default()),
+            ],
         }));
 
         let executor = Arc::new(DefaultExecutor::new(

@@ -4,8 +4,10 @@ use uuid::Uuid;
 
 pub mod error;
 pub mod execution;
+pub mod artifact;
 
 pub use error::{PipelineStage, RouterError};
+pub use artifact::{Artifact, ArtifactKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -176,7 +178,6 @@ pub enum ExecutionNodeKind {
     LLMJudge,
     Transform,
     Gate,
-    Aggregate,
     Conditional,
     Loop,
     Split,
@@ -220,6 +221,8 @@ pub struct ExecutionInstance {
     pub outputs: HashMap<Uuid, serde_json::Value>,
     pub reservation_id: Uuid,
     pub created_at: i64,
+    pub terminal_node_id: Option<Uuid>,
+    pub final_output: Option<serde_json::Value>,
     #[serde(skip)]
     pub budget_envelope: Option<crate::resource::BudgetEnvelope>,
 }
@@ -233,6 +236,8 @@ pub enum NodeState {
     Skipped,
 }
 
+/// Runtime ABI contract between Scheduler and Pipeline.
+/// Changes to this structure impact response building, telemetry, and execution reporting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionResult {
     pub instance_id: Uuid,
@@ -241,6 +246,8 @@ pub struct ExecutionResult {
     pub total_latency_ms: u64,
     pub total_cost: f64,
     pub total_tokens: u64,
+    pub terminal_node_id: Option<Uuid>,
+    pub final_output: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

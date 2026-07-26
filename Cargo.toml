@@ -62,6 +62,10 @@ harness = false
 name = "cache"
 harness = false
 
+[[example]]
+name = "run_debate_pipeline"
+path = "examples/run_debate_pipeline.rs"
+
 [profile.dev]
 incremental = false
 opt-level = 0

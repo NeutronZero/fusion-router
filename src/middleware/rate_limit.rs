@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -7,7 +8,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use serde_json::json;
 use tokio::time::sleep;
 
@@ -17,7 +18,7 @@ use crate::config::RateLimitingConfig;
 pub struct RateLimiter {
     buckets: Arc<DashMap<String, Bucket>>,
     config: RateLimitingConfig,
-    cleanup_started: Arc<DashSet<bool>>,
+    cleanup_started: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -32,15 +33,14 @@ impl RateLimiter {
         Self {
             buckets: Arc::new(DashMap::new()),
             config,
-            cleanup_started: Arc::new(DashSet::new()),
+            cleanup_started: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn start_cleanup(&self) {
-        if self.cleanup_started.contains(&true) {
+        if self.cleanup_started.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_err() {
             return;
         }
-        self.cleanup_started.insert(true);
 
         let buckets = self.buckets.clone();
         let interval = Duration::from_secs(self.config.cleanup_interval_secs);

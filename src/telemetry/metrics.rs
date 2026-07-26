@@ -1,6 +1,5 @@
 use std::sync::OnceLock;
 use prometheus::{
-    register_int_counter, register_histogram_vec,
     HistogramVec, IntCounter, TextEncoder, Encoder,
 };
 
@@ -14,6 +13,20 @@ pub struct FusionMetrics {
     pub provider_latency_seconds: HistogramVec,
 }
 
+fn safe_int_counter(name: &str, help: &str) -> IntCounter {
+    let opts = prometheus::Opts::new(name, help);
+    let counter = IntCounter::with_opts(opts).unwrap();
+    let _ = prometheus::default_registry().register(Box::new(counter.clone()));
+    counter
+}
+
+fn safe_histogram_vec(name: &str, help: &str, labels: &[&str]) -> HistogramVec {
+    let opts = prometheus::HistogramOpts::new(name, help);
+    let hist = HistogramVec::new(opts, labels).unwrap();
+    let _ = prometheus::default_registry().register(Box::new(hist.clone()));
+    hist
+}
+
 impl FusionMetrics {
     pub fn instance() -> &'static Self {
         METRICS.get_or_init(Self::new)
@@ -21,33 +34,28 @@ impl FusionMetrics {
 
     fn new() -> Self {
         Self {
-            requests_total: register_int_counter!(
+            requests_total: safe_int_counter(
                 "fusionrouter_requests_total",
                 "Total number of requests"
-            )
-            .unwrap(),
-            request_duration_seconds: register_histogram_vec!(
+            ),
+            request_duration_seconds: safe_histogram_vec(
                 "fusionrouter_request_duration_seconds",
                 "Request duration in seconds",
                 &["route"]
-            )
-            .unwrap(),
-            errors_total: register_int_counter!(
+            ),
+            errors_total: safe_int_counter(
                 "fusionrouter_errors_total",
                 "Total number of errors"
-            )
-            .unwrap(),
-            tokens_total: register_int_counter!(
+            ),
+            tokens_total: safe_int_counter(
                 "fusionrouter_tokens_total",
                 "Total tokens consumed"
-            )
-            .unwrap(),
-            provider_latency_seconds: register_histogram_vec!(
+            ),
+            provider_latency_seconds: safe_histogram_vec(
                 "fusionrouter_provider_latency_seconds",
                 "Provider latency in seconds",
                 &["provider"]
-            )
-            .unwrap(),
+            ),
         }
     }
 }

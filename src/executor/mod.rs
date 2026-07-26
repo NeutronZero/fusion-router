@@ -3,14 +3,17 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 use tracing::info;
+use uuid::Uuid;
 
 #[cfg(feature = "semantic-cache")]
 use crate::cache::SemanticCache;
+use crate::compiler::context::CompilationContext;
+use crate::compiler::ir::{PrimitiveGraph, PrimitiveNodeKind, StrategyIR};
 use crate::providers::ChatProvider;
 use crate::strategies::Strategy;
 use crate::tools::ToolRegistry;
 use crate::types::{
-    ChatCompletionRequest, ChatMessage, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph,
+    ChatCompletionRequest, ChatMessage, ExecutionEdge, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph,
     NodeExecutionResult, NodeState, StrategyKind, Usage,
 };
 
@@ -130,17 +133,22 @@ impl Executor for DefaultExecutor {
 
                     #[cfg(feature = "semantic-cache")]
                     if let Some(ref cache) = self.cache {
-                        if cache.get(&cache_key).await.is_some() {
+                        if let Some(cached) = cache.get(&cache_key).await {
                             info!(
                                 node_id = %sub_node.id,
                                 "Cache hit for LLM node"
                             );
                             let latency = start.elapsed().as_millis() as u64;
+                            let cached_output = cached
+                                .get("content")
+                                .and_then(|v| v.as_str())
+                                .map(|s| serde_json::Value::String(s.to_string()))
+                                .unwrap_or(cached);
                             return NodeExecutionResult {
                                 state: NodeState::Succeeded,
                                 usage: None,
                                 latency_ms: latency,
-                                output: None,
+                                output: Some(cached_output),
                             };
                         }
                     }
@@ -179,7 +187,10 @@ impl Executor for DefaultExecutor {
                                                     Ok(result) => {
                                                         info!(tool = %tool_name, "Tool executed successfully");
                                                         // Store result in response for downstream nodes
-                                                        let _ = result;
+                                                        output_value = Some(serde_json::json!({
+                                                            "tool": tool_name,
+                                                            "result": result,
+                                                        }));
                                                     }
                                                     Err(e) => {
                                                         info!(tool = %tool_name, error = %e, "Tool execution failed");
@@ -222,7 +233,6 @@ impl Executor for DefaultExecutor {
                 }
                 ExecutionNodeKind::Transform
                 | ExecutionNodeKind::Gate
-                | ExecutionNodeKind::Aggregate
                 | ExecutionNodeKind::Conditional
                 | ExecutionNodeKind::Loop
                 | ExecutionNodeKind::Split
@@ -242,22 +252,163 @@ impl Executor for DefaultExecutor {
 
     #[tracing::instrument(skip(self, node), fields(node_id = %node.id, strategy = ?node.strategy))]
     async fn resolve_strategy(&self, node: &ExecutionNode) -> ExecutionSubgraph {
-        self.strategies
-            .get(&node.strategy)
-            .map(|s| s.apply(node))
-            .unwrap_or_else(|| {
-                info!(
-                    node_id = %node.id,
-                    strategy = ?node.strategy,
-                    "No strategy registered, using passthrough"
-                );
-                ExecutionSubgraph {
-                    nodes: vec![node.clone()],
-                    edges: vec![],
-                    entry_node_id: node.id,
-                    exit_node_id: node.id,
+        let strategy = self.strategies.get(&node.strategy);
+        if let Some(s) = strategy {
+            // Phase 2 (ADR-018): prefer lower() path over apply()
+            let ctx = CompilationContext::new();
+            let ir = strategy_ir_from_node(node);
+            if let Ok(pg) = s.lower(&ir, &ctx) {
+                let sub = primitive_to_subgraph(&pg, node);
+                if !sub.nodes.is_empty() {
+                    return sub;
                 }
-            })
+            }
+            // Fallback to apply() when lower() is not available or produces empty graph
+            s.apply(node)
+        } else {
+            info!(
+                node_id = %node.id,
+                strategy = ?node.strategy,
+                "No strategy registered, using passthrough"
+            );
+            ExecutionSubgraph {
+                nodes: vec![node.clone()],
+                edges: vec![],
+                entry_node_id: node.id,
+                exit_node_id: node.id,
+            }
+        }
+    }
+}
+
+fn strategy_ir_from_node(node: &ExecutionNode) -> StrategyIR {
+    match node.strategy {
+        StrategyKind::Single => StrategyIR::Single,
+        StrategyKind::Consensus => StrategyIR::Consensus {
+            count: node.config.get("count").and_then(|v| v.as_u64()).unwrap_or(3) as u32,
+        },
+        StrategyKind::Debate => StrategyIR::Debate {
+            roles: node.config.get("roles")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
+        },
+        StrategyKind::Reflection => StrategyIR::Reflection {
+            max_cycles: node.config.get("max_reflection_cycles")
+                .and_then(|v| v.as_u64()).unwrap_or(3) as u32,
+        },
+        StrategyKind::ReAct => StrategyIR::ReAct {
+            max_iterations: node.config.get("max_iterations")
+                .and_then(|v| v.as_u64()).unwrap_or(10) as u32,
+        },
+        StrategyKind::Chain => StrategyIR::Chain {
+            stages: node.config.get("stages")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
+        },
+        StrategyKind::Fusion => StrategyIR::Custom {
+            name: "fusion".into(),
+            config: serde_json::json!({}),
+        },
+    }
+}
+
+fn primitive_to_subgraph(pg: &PrimitiveGraph, template: &ExecutionNode) -> ExecutionSubgraph {
+    let skippable: std::collections::HashSet<String> = pg.nodes.iter()
+        .filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. } | PrimitiveNodeKind::Barrier { .. }))
+        .map(|n| n.id.clone())
+        .collect();
+
+    let mut id_to_uuid: HashMap<String, Uuid> = HashMap::new();
+    let mut exec_nodes: Vec<ExecutionNode> = Vec::new();
+    let mut incoming_edges: HashMap<String, Vec<String>> = HashMap::new();
+
+    for pn in &pg.nodes {
+        if skippable.contains(&pn.id) {
+            continue;
+        }
+        if id_to_uuid.contains_key(&pn.id) {
+            continue;
+        }
+        let uid = Uuid::new_v4();
+        id_to_uuid.insert(pn.id.clone(), uid);
+
+        let (kind, model) = match &pn.kind {
+            PrimitiveNodeKind::LLMGenerate { model, role: _ } => {
+                (ExecutionNodeKind::LLMGenerate, model.clone())
+            }
+            PrimitiveNodeKind::LLMReview { model } => {
+                (ExecutionNodeKind::LLMReview, model.clone())
+            }
+            PrimitiveNodeKind::Reducer { .. } => {
+                (ExecutionNodeKind::LLMJudge, template.model.clone())
+            }
+            PrimitiveNodeKind::FeedbackLoop { .. } => {
+                (ExecutionNodeKind::Loop, String::new())
+            }
+            PrimitiveNodeKind::ConditionalBranch { .. } => {
+                (ExecutionNodeKind::Conditional, String::new())
+            }
+            _ => continue,
+        };
+
+        let mut config = template.config.clone();
+        if let PrimitiveNodeKind::FeedbackLoop { max_iterations } = &pn.kind {
+            config.insert("max_iterations".into(), serde_json::json!(max_iterations));
+        }
+
+        exec_nodes.push(ExecutionNode {
+            id: uid,
+            kind,
+            strategy: template.strategy.clone(),
+            model,
+            retry_policy: template.retry_policy.clone(),
+            fallback: template.fallback.clone(),
+            config,
+        });
+    }
+
+    for pe in &pg.edges {
+        incoming_edges.entry(pe.to.clone()).or_default().push(pe.from.clone());
+    }
+
+    let mut exec_edges: Vec<ExecutionEdge> = Vec::new();
+
+    for pe in &pg.edges {
+        let from_skip = skippable.contains(&pe.from);
+        let to_skip = skippable.contains(&pe.to);
+
+        match (from_skip, to_skip) {
+            (false, false) => {
+                if let (Some(&f), Some(&t)) = (id_to_uuid.get(&pe.from), id_to_uuid.get(&pe.to)) {
+                    exec_edges.push(ExecutionEdge { from: f, to: t, condition: pe.condition.clone() });
+                }
+            }
+            (false, true) => {
+                // Edge to a skippable node (Barrier) — reroute to all nodes that come after
+                if let Some(&from_id) = id_to_uuid.get(&pe.from) {
+                    let after_barrier: Vec<&String> = pg.edges.iter()
+                        .filter(|e| e.from == pe.to && !skippable.contains(&e.to))
+                        .map(|e| &e.to)
+                        .collect();
+                    for target in after_barrier {
+                        if let Some(&to_id) = id_to_uuid.get(target) {
+                            exec_edges.push(ExecutionEdge { from: from_id, to: to_id, condition: None });
+                        }
+                    }
+                }
+            }
+            _ => {} // Skip edges from FanOut
+        }
+    }
+
+    let entry_id = exec_nodes.first().map(|n| n.id).unwrap_or(template.id);
+    let exit_id = exec_nodes.last().map(|n| n.id).unwrap_or(template.id);
+
+    ExecutionSubgraph {
+        nodes: exec_nodes,
+        edges: exec_edges,
+        entry_node_id: entry_id,
+        exit_node_id: exit_id,
     }
 }
 
