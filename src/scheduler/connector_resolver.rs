@@ -7,6 +7,9 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use fusion_plugin_api::{CapabilityId, CapabilityInstance, CapabilityExecutor};
 
+/// The minimum connector version accepted during registration.
+const MIN_SUPPORTED_RUNTIME_VERSION: semver::Version = semver::Version::new(0, 10, 0);
+
 /// Metadata descriptor exposing connector capabilities and configuration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConnectorDescriptor {
@@ -32,7 +35,7 @@ pub struct BoundConnector {
 /// Thread-safe registry providing late-binding resolution of capabilities to connectors.
 #[derive(Clone)]
 pub struct ConnectorResolver {
-    connectors: Arc<RwLock<HashMap<String, Arc<dyn Connector>>>>,
+    pub(crate) connectors: Arc<RwLock<HashMap<String, Arc<dyn Connector>>>>,
     capability_map: Arc<RwLock<HashMap<CapabilityId, String>>>,
 }
 
@@ -45,8 +48,17 @@ impl ConnectorResolver {
     }
 
     /// Registers a concrete connector and maps its supported capabilities.
-    pub fn register_connector(&self, connector: Arc<dyn Connector>) {
+    /// Returns an error if the connector version is below `MIN_SUPPORTED_RUNTIME_VERSION`.
+    pub fn register_connector(&self, connector: Arc<dyn Connector>) -> Result<(), String> {
         let desc = connector.descriptor();
+
+        if desc.version < MIN_SUPPORTED_RUNTIME_VERSION {
+            return Err(format!(
+                "connector version {} is below minimum supported {}",
+                desc.version, MIN_SUPPORTED_RUNTIME_VERSION
+            ));
+        }
+
         let mut connectors_guard = self.connectors.write();
         let mut map_guard = self.capability_map.write();
 
@@ -54,6 +66,7 @@ impl ConnectorResolver {
             map_guard.insert(cap_id.clone(), desc.name.clone());
         }
         connectors_guard.insert(desc.name.clone(), connector);
+        Ok(())
     }
 
     /// Late-binds an abstract `CapabilityInstance` to a concrete `BoundConnector`.
@@ -96,6 +109,24 @@ impl ConnectorResolver {
         self.connectors.write().clear();
         self.capability_map.write().clear();
     }
+
+    /// Find connectors that support the given capability.
+    pub fn search_by_capability(&self, capability: &CapabilityId) -> Vec<Arc<dyn Connector>> {
+        self.connectors.read()
+            .values()
+            .filter(|c| c.descriptor().supported_capabilities.contains(capability))
+            .cloned()
+            .collect()
+    }
+
+    /// Find connectors by name prefix match.
+    pub fn search_by_name(&self, name_prefix: &str) -> Vec<Arc<dyn Connector>> {
+        self.connectors.read()
+            .values()
+            .filter(|c| c.descriptor().name.starts_with(name_prefix))
+            .cloned()
+            .collect()
+    }
 }
 
 impl Default for ConnectorResolver {
@@ -118,7 +149,7 @@ mod tests {
         fn descriptor(&self) -> ConnectorDescriptor {
             ConnectorDescriptor {
                 name: "echo".into(),
-                version: semver::Version::parse("0.1.0").unwrap(),
+                version: semver::Version::new(0, 10, 0),
                 supported_capabilities: vec![
                     CapabilityId::new("echo.text"),
                     CapabilityId::new("echo.uppercase"),
@@ -156,11 +187,41 @@ mod tests {
             plugin: Arc::new(EchoPlugin::new()),
         });
 
-        resolver.register_connector(connector);
+        resolver.register_connector(connector).unwrap();
 
         let instance = make_instance("echo.text");
         let bound = resolver.bind(&instance).unwrap();
         assert_eq!(bound.connector_descriptor.name, "echo");
+    }
+
+    #[test]
+    fn test_register_connector_rejects_old_version() {
+        let resolver = ConnectorResolver::new();
+
+        struct OldConnector;
+
+        impl Connector for OldConnector {
+            fn descriptor(&self) -> ConnectorDescriptor {
+                ConnectorDescriptor {
+                    name: "old".into(),
+                    version: semver::Version::new(0, 9, 0),
+                    supported_capabilities: vec![CapabilityId::new("old.test")],
+                }
+            }
+
+            fn executor(&self) -> Arc<dyn CapabilityExecutor> {
+                Arc::new(EchoPlugin::new())
+            }
+        }
+
+        let err = resolver
+            .register_connector(Arc::new(OldConnector))
+            .unwrap_err();
+        assert!(err.contains("0.9.0"), "error should mention version 0.9.0: {err}");
+        assert!(
+            err.contains("0.10.0"),
+            "error should mention min version 0.10.0: {err}"
+        );
     }
 
     #[test]
@@ -169,7 +230,7 @@ mod tests {
         let connector = Arc::new(EchoConnector {
             plugin: Arc::new(EchoPlugin::new()),
         });
-        resolver.register_connector(connector);
+        resolver.register_connector(connector).unwrap();
 
         assert!(resolver.unregister_connector("echo"));
 
@@ -189,7 +250,7 @@ mod tests {
         let connector = Arc::new(EchoConnector {
             plugin: Arc::new(EchoPlugin::new()),
         });
-        resolver.register_connector(connector);
+        resolver.register_connector(connector).unwrap();
 
         resolver.unregister_connector("echo");
 
@@ -198,12 +259,44 @@ mod tests {
     }
 
     #[test]
+    fn test_search_by_capability_finds_matching_connectors() {
+        let resolver = ConnectorResolver::new();
+        let connector = Arc::new(EchoConnector {
+            plugin: Arc::new(EchoPlugin::new()),
+        });
+        resolver.register_connector(connector).unwrap();
+
+        let results = resolver.search_by_capability(&CapabilityId::new("echo.text"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].descriptor().name, "echo");
+
+        let no_results = resolver.search_by_capability(&CapabilityId::new("nonexistent"));
+        assert!(no_results.is_empty());
+    }
+
+    #[test]
+    fn test_search_by_name_finds_connectors_by_prefix() {
+        let resolver = ConnectorResolver::new();
+        let connector = Arc::new(EchoConnector {
+            plugin: Arc::new(EchoPlugin::new()),
+        });
+        resolver.register_connector(connector).unwrap();
+
+        let results = resolver.search_by_name("ec");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].descriptor().name, "echo");
+
+        let no_results = resolver.search_by_name("shell");
+        assert!(no_results.is_empty());
+    }
+
+    #[test]
     fn test_clear_removes_all_connectors() {
         let resolver = ConnectorResolver::new();
         let connector = Arc::new(EchoConnector {
             plugin: Arc::new(EchoPlugin::new()),
         });
-        resolver.register_connector(connector);
+        resolver.register_connector(connector).unwrap();
 
         resolver.clear();
 
