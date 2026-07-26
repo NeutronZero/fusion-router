@@ -90,7 +90,7 @@ impl Connector for ShellConnector {
     fn descriptor(&self) -> ConnectorDescriptor {
         ConnectorDescriptor {
             name: "shell".into(),
-            version: semver::Version::parse("0.1.0").unwrap(),
+            version: semver::Version::new(0, 10, 0),
             supported_capabilities: vec![CapabilityId::new("shell.exec")],
         }
     }

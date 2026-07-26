@@ -67,7 +67,9 @@ impl ConfigSubscriber for ConnectorSubscriber {
 
             self.resolver.clear();
             for (_, connector) in candidates {
-                self.resolver.register_connector(connector);
+                if let Err(e) = self.resolver.register_connector(connector) {
+                    tracing::warn!("Skipping connector registration: {e}");
+                }
             }
         }
     }

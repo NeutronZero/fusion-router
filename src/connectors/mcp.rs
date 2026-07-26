@@ -88,7 +88,7 @@ impl Connector for McpConnector {
     fn descriptor(&self) -> ConnectorDescriptor {
         ConnectorDescriptor {
             name: "mcp".into(),
-            version: semver::Version::parse("0.1.0").unwrap(),
+            version: semver::Version::new(0, 10, 0),
             supported_capabilities: vec![CapabilityId::new("mcp.tool.invoke")],
         }
     }

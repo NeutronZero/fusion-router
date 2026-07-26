@@ -86,7 +86,7 @@ mod tests {
         fn descriptor(&self) -> ConnectorDescriptor {
             ConnectorDescriptor {
                 name: "echo".into(),
-                version: semver::Version::parse("0.1.0").unwrap(),
+                version: semver::Version::new(0, 10, 0),
                 supported_capabilities: vec![
                     CapabilityId::new("echo.text"),
                     CapabilityId::new("echo.uppercase"),
@@ -105,7 +105,7 @@ mod tests {
         let echo_conn = Arc::new(EchoConnector {
             plugin: Arc::new(EchoPlugin::new()),
         });
-        resolver.register_connector(echo_conn);
+        resolver.register_connector(echo_conn).unwrap();
 
         let engine = CapabilityExecutorEngine::new(resolver);
 

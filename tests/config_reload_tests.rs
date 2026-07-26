@@ -346,7 +346,7 @@ async fn test_connector_remove_via_reload() {
 
     // Pre-register a connector so it exists before reload
     let http = Arc::new(fusion_router::connectors::http::HttpConnector::new());
-    resolver.register_connector(http);
+    let _ = resolver.register_connector(http);
 
     let registry = Arc::new(ProviderRegistry::new(dummy_target("default")));
     // Empty connectors in the new config
