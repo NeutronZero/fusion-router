@@ -4,6 +4,7 @@ use crate::types::{ExecutionGraph, ExecutionInstance, ExecutionResult, Reservati
 pub mod default;
 pub mod work_queue;
 pub mod connector_resolver;
+pub mod connector_subscriber;
 pub mod distributed;
 
 #[async_trait]

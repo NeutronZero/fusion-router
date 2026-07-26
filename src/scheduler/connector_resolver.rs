@@ -74,6 +74,28 @@ impl ConnectorResolver {
             executor: connector.executor(),
         })
     }
+
+    /// Returns the names of all registered connectors.
+    pub fn connector_names(&self) -> Vec<String> {
+        self.connectors.read().keys().cloned().collect()
+    }
+
+    /// Remove a connector by name. Returns true if the connector existed.
+    pub fn unregister_connector(&self, name: &str) -> bool {
+        let mut connectors = self.connectors.write();
+        let removed = connectors.remove(name).is_some();
+        if removed {
+            let mut cap_map = self.capability_map.write();
+            cap_map.retain(|_, v| v != name);
+        }
+        removed
+    }
+
+    /// Remove all connectors.
+    pub fn clear(&self) {
+        self.connectors.write().clear();
+        self.capability_map.write().clear();
+    }
 }
 
 impl Default for ConnectorResolver {
@@ -109,20 +131,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_connector_resolver_bind_success() {
-        let resolver = ConnectorResolver::new();
-        let connector = Arc::new(EchoConnector {
-            plugin: Arc::new(EchoPlugin::new()),
-        });
-
-        resolver.register_connector(connector);
-
-        let instance = fusion_plugin_api::CapabilityInstance {
-            contract: fusion_plugin_api::CapabilityContract {
-                id: fusion_plugin_api::CapabilityId::new("echo.text"),
+    fn make_instance(cap_id: &str) -> CapabilityInstance {
+        CapabilityInstance {
+            contract: CapabilityContract {
+                id: CapabilityId::new(cap_id),
                 version: semver::Version::parse("0.1.0").unwrap(),
-                description: "Echo".into(),
+                description: "test".into(),
                 inputs_schema: serde_json::json!({}),
                 outputs_schema: serde_json::json!({}),
                 permissions: vec![],
@@ -132,9 +146,68 @@ mod tests {
                 supports_streaming: false,
             },
             runtime_params: serde_json::json!({}),
-        };
+        }
+    }
 
+    #[test]
+    fn test_connector_resolver_bind_success() {
+        let resolver = ConnectorResolver::new();
+        let connector = Arc::new(EchoConnector {
+            plugin: Arc::new(EchoPlugin::new()),
+        });
+
+        resolver.register_connector(connector);
+
+        let instance = make_instance("echo.text");
         let bound = resolver.bind(&instance).unwrap();
         assert_eq!(bound.connector_descriptor.name, "echo");
+    }
+
+    #[test]
+    fn test_unregister_connector_removes_and_returns_true() {
+        let resolver = ConnectorResolver::new();
+        let connector = Arc::new(EchoConnector {
+            plugin: Arc::new(EchoPlugin::new()),
+        });
+        resolver.register_connector(connector);
+
+        assert!(resolver.unregister_connector("echo"));
+
+        let instance = make_instance("echo.text");
+        assert!(resolver.bind(&instance).is_err());
+    }
+
+    #[test]
+    fn test_unregister_connector_nonexistent_returns_false() {
+        let resolver = ConnectorResolver::new();
+        assert!(!resolver.unregister_connector("nonexistent"));
+    }
+
+    #[test]
+    fn test_unregister_connector_cleans_capability_map() {
+        let resolver = ConnectorResolver::new();
+        let connector = Arc::new(EchoConnector {
+            plugin: Arc::new(EchoPlugin::new()),
+        });
+        resolver.register_connector(connector);
+
+        resolver.unregister_connector("echo");
+
+        let map = resolver.capability_map.read();
+        assert!(map.values().all(|v| v != "echo"));
+    }
+
+    #[test]
+    fn test_clear_removes_all_connectors() {
+        let resolver = ConnectorResolver::new();
+        let connector = Arc::new(EchoConnector {
+            plugin: Arc::new(EchoPlugin::new()),
+        });
+        resolver.register_connector(connector);
+
+        resolver.clear();
+
+        let instance = make_instance("echo.text");
+        assert!(resolver.bind(&instance).is_err());
     }
 }
