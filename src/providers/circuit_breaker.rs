@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 
@@ -10,9 +10,9 @@ pub enum CircuitState {
 }
 
 pub struct CircuitBreaker {
-    failure_threshold: u32,
+    failure_threshold: AtomicU32,
     success_threshold: u32,
-    cooldown_duration: Duration,
+    cooldown_secs: AtomicU64,
     state: RwLock<CircuitState>,
     failure_count: AtomicU32,
     success_count: AtomicU32,
@@ -22,9 +22,9 @@ pub struct CircuitBreaker {
 impl CircuitBreaker {
     pub fn new(failure_threshold: u32, success_threshold: u32, cooldown_secs: u64) -> Self {
         Self {
-            failure_threshold,
+            failure_threshold: AtomicU32::new(failure_threshold),
             success_threshold,
-            cooldown_duration: Duration::from_secs(cooldown_secs),
+            cooldown_secs: AtomicU64::new(cooldown_secs),
             state: RwLock::new(CircuitState::Closed),
             failure_count: AtomicU32::new(0),
             success_count: AtomicU32::new(0),
@@ -38,7 +38,8 @@ impl CircuitBreaker {
             CircuitState::Closed => true,
             CircuitState::Open => {
                 if let Some(last_failure) = *self.last_failure_time.read() {
-                    if last_failure.elapsed() >= self.cooldown_duration {
+                    let cooldown = Duration::from_secs(self.cooldown_secs.load(Ordering::Relaxed));
+                    if last_failure.elapsed() >= cooldown {
                         *self.state.write() = CircuitState::HalfOpen;
                         self.success_count.store(0, Ordering::Relaxed);
                         true
@@ -79,13 +80,18 @@ impl CircuitBreaker {
             }
             CircuitState::Closed => {
                 let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
-                if count >= self.failure_threshold {
+                if count >= self.failure_threshold.load(Ordering::Relaxed) {
                     *self.state.write() = CircuitState::Open;
                     *self.last_failure_time.write() = Some(Instant::now());
                 }
             }
             _ => {}
         }
+    }
+
+    pub fn update_thresholds(&self, failure_threshold: u32, cooldown_secs: u64) {
+        self.failure_threshold.store(failure_threshold, Ordering::Relaxed);
+        self.cooldown_secs.store(cooldown_secs, Ordering::Relaxed);
     }
 
     pub fn state(&self) -> CircuitState {
