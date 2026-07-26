@@ -434,6 +434,17 @@ impl ChatStreamChunk {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamCheckpoint {
+    pub generation: u64,
+    pub request_id: String,
+    pub model: String,
+    pub chunks_received: u64,
+    pub content_so_far: String,
+    pub completion_tokens_accumulated: u64,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum CompilerError {
     #[error("Validation error in pass '{pass}': {message}")]
