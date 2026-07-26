@@ -5,6 +5,7 @@ use crate::types::{ExecutionGraph, Quota};
 
 pub mod guard;
 pub mod budget;
+pub mod stream_meter;
 
 pub use guard::ResourceGuard;
 pub use budget::BudgetEnvelope;
