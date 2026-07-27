@@ -184,17 +184,13 @@ impl ReleaseGate for SemVerGate {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
+#[allow(dead_code)]
+pub struct MockBackend {
+    pub should_pass: bool,
+}
 
-    pub(crate) struct MockBackend {
-        pub should_pass: bool,
-    }
-
-    #[async_trait]
-    impl SemVerBackend for MockBackend {
+#[async_trait]
+impl SemVerBackend for MockBackend {
         fn name(&self) -> &str {
             "mock"
         }
@@ -219,6 +215,11 @@ mod tests {
             }
         }
     }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_semver_gate_metadata() {
