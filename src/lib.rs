@@ -29,4 +29,5 @@ pub mod middleware;
 pub mod wasm;
 
 pub mod devex;
+pub mod release;
 pub mod feature_gate;
