@@ -58,6 +58,7 @@ semver = "1.0"
 usearch = { version = "2", optional = true }
 wasmtime = { version = "47", optional = true, default-features = false, features = ["cranelift", "wat", "runtime", "std", "anyhow"] }
 petgraph = "0.8.3"
+clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
