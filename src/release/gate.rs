@@ -10,6 +10,10 @@ pub enum GateId {
     Replay1,
     Upgrade1,
     Determinism1,
+    Plugin1,
+    Strategy1,
+    Provider1,
+    Connector1,
 }
 
 impl GateId {
@@ -19,6 +23,10 @@ impl GateId {
             GateId::Replay1 => "RPL-1",
             GateId::Upgrade1 => "UPG-1",
             GateId::Determinism1 => "DET-1",
+            GateId::Plugin1 => "PLG-1",
+            GateId::Strategy1 => "STR-1",
+            GateId::Provider1 => "PRV-1",
+            GateId::Connector1 => "CON-1",
         }
     }
 
@@ -28,6 +36,10 @@ impl GateId {
             "RPL-1" => Some(GateId::Replay1),
             "UPG-1" => Some(GateId::Upgrade1),
             "DET-1" => Some(GateId::Determinism1),
+            "PLG-1" => Some(GateId::Plugin1),
+            "STR-1" => Some(GateId::Strategy1),
+            "PRV-1" => Some(GateId::Provider1),
+            "CON-1" => Some(GateId::Connector1),
             _ => None,
         }
     }
@@ -56,6 +68,7 @@ impl<'de> Deserialize<'de> for GateId {
 #[serde(rename_all = "kebab-case")]
 pub enum GateCategory {
     Compatibility,
+    Replay,
     Determinism,
     Upgrade,
     Certification,

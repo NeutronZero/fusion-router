@@ -31,3 +31,4 @@ pub mod wasm;
 pub mod devex;
 pub mod release;
 pub mod feature_gate;
+pub mod events;

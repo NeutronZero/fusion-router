@@ -1,0 +1,25 @@
+name: test-fixture-policy
+environments:
+  production:
+    require:
+      - SDK-1
+      - RPL-1
+      - UPG-1
+      - DET-1
+      - PLG-1
+    advisory:
+      - STR-1
+      - PRV-1
+      - CON-1
+
+  staging:
+    require:
+      - SDK-1
+      - UPG-1
+      - PLG-1
+    advisory:
+      - RPL-1
+      - DET-1
+      - STR-1
+      - PRV-1
+      - CON-1

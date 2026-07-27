@@ -1,0 +1,44 @@
+configs:
+  - id: v0.9
+    version: "0.9.0"
+    path: configs/v0.9
+    expected:
+      outcome: pass
+  - id: v0.10
+    version: "0.10.0"
+    path: configs/v0.10
+    expected:
+      outcome: pass
+
+snapshots:
+  - id: v0.10
+    version: "0.10.0"
+    path: snapshots/v0.10
+
+plugins:
+  - id: echo
+    version: "0.10.0"
+    path: plugins/echo
+    expected:
+      outcome: pass
+
+strategies:
+  - id: single
+    version: "0.10.0"
+    path: strategies/single
+    expected:
+      outcome: pass
+
+providers:
+  - id: openai
+    version: "0.10.0"
+    path: providers/openai
+    expected:
+      outcome: pass
+
+connectors:
+  - id: http
+    version: "0.10.0"
+    path: connectors/http
+    expected:
+      outcome: pass

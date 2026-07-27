@@ -2,8 +2,69 @@
 
 ## [Unreleased]
 
-### Added
-- Trigger Ingress Pipeline Step (`TriggerIngressStep`) – full Trigger → ExecutionRequest normalization as a formal pipeline step
+## [0.11.0] – 2026-07-27
+
+- **Runtime Intelligence & Event-Driven Core (v0.11)** (`src/events/`)
+  - **ADR-017 (Runtime Event Stream ABI):** Formalized immutable event stream contract, monotonic sequence numbers, correlation ID propagation, and projection panic isolation guarantees.
+  - **Canonical Event Model (`src/events/mod.rs` & `payload.rs`):** `ExecutionEventEnvelope` carrying `schema_version: "fusion.router.event.v1"`, `event_id`, `workflow_id`, `execution_id`, `correlation_id`, `sequence_number`, `timestamp`, `parent_event_id`, and typed `ExecutionEvent` taxonomy.
+  - **Abstract EventBus Trait (`src/events/bus.rs`):** `EventBus` trait with `BroadcastEventBus` (backed by `tokio::sync::broadcast`).
+  - **Decoupled Projection Framework (`src/events/projection.rs`):** `EventProjection` trait & `ProjectionDispatcher` background fan-out dispatcher with panic isolation.
+  - **OpenTelemetry Projection (`src/events/consumers/otel.rs`):** Span & trace rendering projection.
+  - **Timeline Visualizer (`src/events/consumers/timeline.rs`):** `TimelineProjection` & `TimelineModel` with millisecond-accurate ASCII and JSON renderers.
+  - **Policy-Driven Checkpointing (`src/events/consumers/checkpoint.rs`):** `CheckpointEngine` with `CheckpointPolicy` (`EveryNode`, `EveryNthNode`, `Timed`, `Manual`) and idempotent snapshotting.
+  - **Persistent Event Store (`src/events/consumers/storage.rs`):** Append-only JSONL event log store with ordered retrieval.
+  - **CLI Tracing Tooling (`src/bin/fusion.rs`):** `fusion trace timeline <EXEC_ID> [--format text|json]` and `fusion trace events <EXEC_ID> [--format text|json]`.
+- **Feature Flag Infrastructure** (`src/feature_gate/`)
+  - `FeatureFlag` enum (Streaming, Replay, ConnectorHealth, SemanticCache, WasmPlugins) with serde kebab-case
+  - `FeatureRegistry` with derived lookup map (no manual match statements), two-phase hot-reload via `ConfigSubscriber`
+  - `FeatureGateSubscriber` for live config reload of feature flag overrides
+  - `FeatureDefinition`, `FeatureState`, `FeatureConfig`, `Stability` types
+- **Release Gate Framework & SemVer Enforcement (Sprint M1)** (`src/release/`)
+  - `GateId` strongly-typed enum (`SDK-1`, `RPL-1`, `UPG-1`, `DET-1`, `PLG-1`, `STR-1`, `PRV-1`, `CON-1`) with custom serde and Display
+  - `GateCategory`, `GateContext`, `GateResult`, `GateCheck`, `GateMetadata`, `GateError` types
+  - `GateExecution` enum distinguishing success from execution errors
+  - `ReleaseGate` trait with `Send + Sync` for composable gates
+  - `GateRunner` with FIFO execution ordering, `run_all()`/`run_one()` methods
+  - `GateReport` with JSON and text output formats
+  - `SemVerGate` (`SDK-1`) implementing `ReleaseGate` via `cargo semver-checks`
+- **Compatibility & Upgrade Assurance (Sprint M2)** (`src/release/`)
+  - Unified `FixtureLoader` & `FixtureManifest` infrastructure preserving entry order
+  - `ReplayGate` (`RPL-1`) — historical snapshot replay compatibility
+  - `UpgradeGate` (`UPG-1`) — historical configuration parser compatibility
+  - `DeterminismGate` (`DET-1`) — planner execution graph determinism validation
+- **Ecosystem Certification Gates (Sprint M3)** (`src/release/certification.rs` & `src/release/gates/`)
+  - Shared `CertificationArtifact` trait and `CertificationContext`
+  - `FixtureKind` extended for `Plugins`, `Strategies`, `Providers`, `Connectors` with stable entry `id` fields
+  - `PluginGate` (`PLG-1`) — plugin manifest, SDK semver compatibility, symbol exports, and capabilities
+  - `StrategyGate` (`STR-1`) — routing strategy registration, compiler `ExecutionGraph` generation, and policy
+  - `ProviderGate` (`PRV-1`) — provider catalog declarations, pricing metadata schema, and auth schema
+  - `ConnectorGate` (`CON-1`) — connector protocol schema (`v1`), serialization, and health endpoint declarations
+- **Release Policy Engine (Sprint M4)** (`src/release/policy.rs`, `src/release/waiver.rs`, `src/release/evaluator.rs`)
+  - Typed `ReleaseEnvironment` enum (`Production`, `Staging`, `Development`, `Custom`)
+  - Data-driven `PolicyDefinition` (`policy.yaml`) for environment `require` vs `advisory` gate mapping
+  - Scoped, auditable `WaiverSet` (`waivers.yaml`) with mandatory stable IDs (`id: waiver-2026-0042`) and RFC3339 expiration checking
+  - Two-phase `PolicyEvaluator` (`EvidenceClassifier` → `WaiverMatcher` → `PolicySummary` → `ReleaseDecision`)
+  - Subcommand `fusion gates evaluate --env production` with human-readable summary renderer
+- **Evidence Preservation & Release Attestation (Sprint M5)** (`src/release/assessment.rs`, `src/release/attestation.rs`, `src/release/signing.rs`, `src/release/envelope.rs`, `src/release/archive.rs`, `src/release/verifier.rs`)
+  - Immutable `ReleaseAssessment` handoff bundle with content-derived `assessment_id` (`asm-<hex>`)
+  - `AttestationBuilder` as sole authority for canonical UTF-8 JSON byte serialization
+  - `SignatureBlock` (version `1`) and abstract `Signer` trait (`MockSigner`, `Ed25519Signer`)
+  - Transport `AttestationEnvelope` wrapping signed attestations
+  - Append-only `FilesystemArchiveBackend` storing attestations under `.fusion/attestations/*.json` (rejects overwrites)
+  - 4-Phase `AttestationVerifier` pipeline (Schema Validation → Canonical Serialization → Cryptographic Verification → Semantic Consistency)
+- **Bootstrap & Wiring** (`src/release/bootstrap.rs`)
+  - Single composition point `build_default_runner()` registering all 8 release gates in canonical order
+- **CLI Governance Tooling** (`src/bin/fusion.rs`)
+  - `fusion gates list` — list registered release gates
+  - `fusion gates check [--gate <ID>] [--format json|text]` — run release gates
+  - `fusion gates explain <ID>` — show gate metadata
+  - `fusion gates evaluate [--env <ENV>] [--policy <PATH>] [--waivers <PATH>]` — evaluate release policy
+  - `fusion gates attest [--env <ENV>] [--output-dir <DIR>]` — create & sign release attestation
+  - `fusion gates verify-attestation <PATH_OR_ID>` — verify attestation envelope with 4-phase verification report
+  - `fusion features list [--format json|text]` — list feature flags with state
+  - Clap derive argument parsing with `--help` support
+- `AppConfig.features` field + `config/default.yaml` features section for YAML-driven feature configuration
+- 5 integration tests covering mock semver (pass/fail), JSON round-trip, FIFO ordering, feature registry
 
 ### Changed
 - SqliteSessionStore – placeholder stub remains; production SQLite backend deferred to v0.11+

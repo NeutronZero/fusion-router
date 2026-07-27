@@ -177,7 +177,7 @@ mod tests {
     }
 
     fn temp_yaml(name: &str, content: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("fusion_config_test");
+        let dir = std::env::temp_dir().join(format!("fusion_config_test_{}", uuid::Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(name);
         std::fs::write(&path, content).unwrap();

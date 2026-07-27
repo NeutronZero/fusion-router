@@ -199,3 +199,19 @@ fn test_feature_registry_integration() {
     assert!(!registry.is_enabled(FeatureFlag::Streaming));
     assert!(!registry.is_effectively_enabled(FeatureFlag::Streaming));
 }
+
+#[test]
+fn test_bootstrap_registers_all_gates() {
+    use fusion_router::release::bootstrap::build_default_runner;
+    let runner = build_default_runner(PathBuf::from("."), "HEAD");
+    let gate_ids: Vec<GateId> = runner.gates().iter().map(|g| g.id()).collect();
+    assert_eq!(gate_ids.len(), 8, "expected exactly 8 gates registered");
+    assert_eq!(gate_ids[0], GateId::Sdk1);
+    assert_eq!(gate_ids[1], GateId::Replay1);
+    assert_eq!(gate_ids[2], GateId::Upgrade1);
+    assert_eq!(gate_ids[3], GateId::Determinism1);
+    assert_eq!(gate_ids[4], GateId::Plugin1);
+    assert_eq!(gate_ids[5], GateId::Strategy1);
+    assert_eq!(gate_ids[6], GateId::Provider1);
+    assert_eq!(gate_ids[7], GateId::Connector1);
+}

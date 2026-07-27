@@ -1,0 +1,7 @@
+waivers:
+  - id: waiver-2026-0042
+    gate: PRV-1
+    artifact: openai
+    reason: "Pricing metadata sync pending upstream API update"
+    expires: "2030-01-01T00:00:00Z"
+    approved_by: "architecture-team"
