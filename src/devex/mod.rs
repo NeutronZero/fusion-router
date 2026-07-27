@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod visualizer;
 pub mod trace_inspector;
 pub mod scaffold;
