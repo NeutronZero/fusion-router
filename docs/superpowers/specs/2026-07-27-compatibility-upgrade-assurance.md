@@ -93,6 +93,14 @@ Each produces a named `GateCheck`:
 | `required-sections` | All required structural sections are present |
 | `unknown-critical-fields` | No unknown critical fields are rejected |
 
+### Configuration
+
+```rust
+pub struct ReplayGateConfig {
+    pub fixture_root: std::path::PathBuf,
+}
+```
+
 ### Backend
 
 ```rust
@@ -170,6 +178,14 @@ The gate compares **actual vs expected**:
 - A `fail` fixture that produces no errors → failure
 - A `warning` fixture that produces errors → pass (but listed separately)
 
+### Configuration
+
+```rust
+pub struct UpgradeGateConfig {
+    pub fixture_root: std::path::PathBuf,
+}
+```
+
 ### Backend
 
 ```rust
@@ -238,6 +254,14 @@ compare hashes → single GateCheck
 - Comparison uses the canonical `ExecutionGraph` hash (via `compute_hash()` or stable serde serialization), not object identity.
 - The hash must be deterministic across compiler versions — if the hash function itself changes, that's a documented breaking change.
 
+### Configuration
+
+```rust
+pub struct DeterminismGateConfig {
+    pub fixture_root: std::path::PathBuf,
+}
+```
+
 ### Backend
 
 ```rust
@@ -279,7 +303,24 @@ The CLI calls `build_default_runner()` — it never references individual gates 
 
 ---
 
-## 7. Fixture Manifest
+## 7. Execution Failure Policy
+
+**Execution failures are reported separately from compatibility failures.** The `GateExecution` enum from M1 already distinguishes these:
+
+- `GateExecution::Success(GateResult)` — gate ran and produced a result (even if `passed=false`)
+- `GateExecution::ExecutionError(GateError)` — gate could not execute at all
+
+A gate that cannot execute is considered **failed for reporting purposes**, but `GateError` remains semantically distinct from a compatibility `GateResult` with `passed=false`. This ensures:
+
+- A missing fixture directory → `GateError` → reported as execution failure
+- A present but incompatible snapshot → `GateResult { passed: false }` → reported as compatibility failure
+- Both appear in the report, but consumers (CLI, CI) can distinguish infrastructure problems from compatibility problems
+
+`GateReport.overall` is `false` if *either* any `GateResult.passed` is `false` *or* any `GateExecution::ExecutionError` exists.
+
+---
+
+## 8. Fixture Manifest
 
 ```yaml
 # tests/fixtures/manifest.yaml
@@ -302,7 +343,7 @@ snapshots:
 
 ---
 
-## 8. Shared Test Utilities (`tests/common/`)
+## 9. Shared Test Utilities (`tests/common/`)
 
 ```rust
 /// Load and parse fixture manifest from path.
@@ -320,7 +361,7 @@ pub fn discover_fixtures(
 
 ---
 
-## 9. Testing Strategy
+## 10. Testing Strategy
 
 | Layer | Scope | Tests |
 |---|---|---|
@@ -332,7 +373,7 @@ pub fn discover_fixtures(
 
 ---
 
-## 10. File Changes Summary
+## 11. File Changes Summary
 
 | File | Action |
 |---|---|
@@ -351,7 +392,7 @@ pub fn discover_fixtures(
 
 ---
 
-## 11. Deferred (Post-M2 Integration)
+## 12. Deferred (Post-M2 Integration)
 
 - CI integration (`fusion gates check` in GitHub Actions) — small operational task, not a sprint
 - Behavioral replay / output comparison
@@ -361,7 +402,7 @@ pub fn discover_fixtures(
 
 ---
 
-## 12. Roadmap
+## 13. Roadmap
 
 | Sprint | Theme |
 |---|---|
