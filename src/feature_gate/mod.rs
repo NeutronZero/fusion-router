@@ -89,7 +89,18 @@ impl FeatureRegistry {
     }
 
     pub fn is_effectively_enabled(&self, flag: FeatureFlag) -> bool {
+        if !self.compile_time_enabled(flag) {
+            return false;
+        }
         self.is_enabled(flag)
+    }
+
+    fn compile_time_enabled(&self, flag: FeatureFlag) -> bool {
+        match flag {
+            FeatureFlag::SemanticCache => cfg!(feature = "semantic-cache"),
+            FeatureFlag::WasmPlugins => cfg!(feature = "wasm-plugins"),
+            _ => true,
+        }
     }
 
     pub fn list(&self) -> Vec<FeatureState> {
