@@ -1,3 +1,5 @@
+pub mod config_subscriber;
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 

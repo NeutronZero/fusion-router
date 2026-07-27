@@ -93,8 +93,9 @@ async fn test_chat_completion_endpoint() {
             auth: Default::default(),
             rate_limiting: Default::default(),
             logging: Default::default(),
-        model_catalog: Default::default(),
+            model_catalog: Default::default(),
             connectors: std::collections::HashMap::new(),
+            features: std::collections::HashMap::new(),
         }
     });
 
@@ -289,6 +290,7 @@ fn test_config() -> AppConfig {
         logging: LoggingConfig::default(),
         model_catalog: Default::default(),
         connectors: std::collections::HashMap::new(),
+        features: std::collections::HashMap::new(),
     }
 }
 

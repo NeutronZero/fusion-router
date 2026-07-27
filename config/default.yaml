@@ -103,3 +103,16 @@ tools:
   allowed_read_directories:
     - "."
   enable_http_tool: true
+
+# Feature flags (runtime overridable)
+features:
+  streaming:
+    enabled: true
+  replay:
+    enabled: false
+  connector-health:
+    enabled: true
+  semantic-cache:
+    enabled: false
+  wasm-plugins:
+    enabled: false

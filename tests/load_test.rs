@@ -87,6 +87,7 @@ fn build_app(quota: &Quota) -> Router {
         logging: Default::default(),
         model_catalog: Default::default(),
         connectors: std::collections::HashMap::new(),
+        features: std::collections::HashMap::new(),
     };
 
     let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config, PathBuf::from("config/default.yaml"), Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()));

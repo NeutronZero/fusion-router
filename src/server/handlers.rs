@@ -482,6 +482,7 @@ mod tests {
             logging: LoggingConfig::default(),
             model_catalog: Default::default(),
             connectors: HashMap::new(),
+            features: HashMap::new(),
         };
         let state = AppState::new(
             Arc::new(crate::providers::openrouter::OpenRouterProvider::new(

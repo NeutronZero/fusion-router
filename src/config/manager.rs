@@ -172,6 +172,7 @@ mod tests {
             logging: LoggingConfig::default(),
             model_catalog: ModelCatalog::default(),
             connectors: HashMap::new(),
+            features: HashMap::new(),
         }
     }
 

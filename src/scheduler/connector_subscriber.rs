@@ -122,6 +122,7 @@ mod tests {
             logging: crate::config::LoggingConfig::default(),
             model_catalog: crate::types::ModelCatalog::default(),
             connectors,
+            features: HashMap::new(),
         };
         ConfigSnapshot {
             generation,

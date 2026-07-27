@@ -32,6 +32,7 @@ mod tools;
 mod cache;
 mod middleware;
 mod devex;
+mod feature_gate;
 
 #[cfg(feature = "wasm-plugins")]
 mod wasm;

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 
 use crate::config::error::{ConfigValidationError, ValidationSeverity};
+use crate::feature_gate::FeatureConfig;
 use crate::types::{Policy, PolicyAction, PolicyCondition, Quota, ProviderLimit};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,6 +30,8 @@ pub struct AppConfig {
     pub model_catalog: crate::types::ModelCatalog,
     #[serde(default)]
     pub connectors: HashMap<String, ConnectorConfig>,
+    #[serde(default)]
+    pub features: HashMap<String, FeatureConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

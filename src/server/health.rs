@@ -54,6 +54,7 @@ mod tests {
             logging: LoggingConfig::default(),
             model_catalog: Default::default(),
             connectors: HashMap::new(),
+            features: HashMap::new(),
         };
         crate::server::handlers::AppState::new(
             Arc::new(crate::providers::openrouter::OpenRouterProvider::new("test".into())),
