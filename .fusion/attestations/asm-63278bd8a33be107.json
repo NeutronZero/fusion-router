@@ -1,0 +1,43 @@
+{
+  "envelope_version": "v1",
+  "signed_attestation": {
+    "attestation": {
+      "schema_version": "fusion.router.release.attestation.v1",
+      "assessment": {
+        "assessment_id": "asm-63278bd8a33be107",
+        "timestamp": "2026-07-29T12:47:50.925056200Z",
+        "environment": "production",
+        "policy_evaluation": {
+          "environment": "production",
+          "decision": "approved",
+          "summary": {
+            "total_gates": 8,
+            "passed": 1,
+            "required_failed": 0,
+            "waived": 0,
+            "advisory_failed": 0
+          },
+          "required_failures": [],
+          "waived_failures": [],
+          "advisory_failures": [],
+          "passed_gates": [
+            "RPL-1"
+          ]
+        },
+        "gate_results": []
+      },
+      "host_info": {
+        "fusion_version": "0.11.0",
+        "os": "windows",
+        "arch": "x86_64"
+      }
+    },
+    "signature": {
+      "version": 1,
+      "algorithm": "mock-sha256",
+      "public_key_id": "mock-key-1",
+      "signature_bytes_base64": "6384936acc2468cd",
+      "signed_at": "2026-07-29T12:47:50.925405900Z"
+    }
+  }
+}

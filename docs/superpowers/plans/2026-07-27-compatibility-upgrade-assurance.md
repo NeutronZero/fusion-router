@@ -270,12 +270,13 @@ configs:
         let dir = std::env::temp_dir().join("fusion_m2_find_files");
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("a.yaml"), "a").unwrap();
-        std::fs::write(dir.join("b.yml"), "b").unwrap();
+        std::fs::write(dir.join("b.yaml"), "b").unwrap();
         std::fs::write(dir.join("c.txt"), "c").unwrap();
         let loader = FixtureLoader::new(PathBuf::from("."));
         let yaml_files = loader.find_files(&dir, "yaml").unwrap();
         assert!(yaml_files.iter().any(|p| p.ends_with("a.yaml")));
-        assert!(yaml_files.iter().any(|p| p.ends_with("b.yml"))); // ext match is substring
+        assert!(yaml_files.iter().any(|p| p.ends_with("b.yaml")));
+        assert_eq!(yaml_files.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -307,7 +308,7 @@ pub fn test_loader(root: &Path) -> FixtureLoader {
 }
 ```
 
-- [ ] **Step 6: Create tests/fixtures/manifest.yaml**   <!-- was Step 5 -->
+- [ ] **Step 6: Create tests/fixtures/manifest.yaml**
 
 ```yaml
 configs:
@@ -789,6 +790,7 @@ pub struct UpgradeGateConfig {
     pub fixture_root: PathBuf,
 }
 
+#[derive(Clone)]
 pub struct ConfigFixture {
     pub version: semver::Version,
     pub path: PathBuf,
@@ -899,10 +901,12 @@ impl ReleaseGate for UpgradeGate {
                 }
             }
             let has_errors = parse_result.is_err() || !validation_errors.is_empty();
+            // ExpectedOutcome::Warning: gate passes, but the GateCheck detail message
+            // still surfaces the warnings in the gate report so they aren't silently ignored.
             let check_passed = match fixture.expected {
                 ExpectedOutcome::Pass => !has_errors,
-                ExpectedOutcome::Warning => true,  // warnings are acceptable
-                ExpectedOutcome::Fail => has_errors,  // expected to fail → failing means regression
+                ExpectedOutcome::Warning => true,
+                ExpectedOutcome::Fail => has_errors,  // expected to fail → passing means regression
             };
             if !check_passed { all_passed = false; }
             let status = if check_passed { "PASS" } else { "FAIL" };
@@ -1086,6 +1090,13 @@ pub trait DeterminismBackend: Send + Sync {
     fn compile_fixture(&self, ctx: &DeterminismContext) -> Result<u64, GateError>;
 }
 
+/// **M2 note:** `RealDeterminismBackend` is expected to return `ToolNotAvailable`
+/// during Sprint M2 because the execution graph compiler does not yet exist.
+/// This is intentional — the gate is defined and testable via mocks, but the
+/// real backend requires a full `Requirements → WorkflowIR → ExecutionGraph`
+/// compilation pipeline. When invoked through `build_default_runner()` in
+/// production, DeterminismGate will report an execution error until a future
+/// sprint wires up the compiler.
 pub struct RealDeterminismBackend;
 
 impl DeterminismBackend for RealDeterminismBackend {
@@ -1241,7 +1252,7 @@ pub fn build_default_runner() -> GateRunner {
             ReplayGateConfig { fixture_root: workspace.clone() },
         )),
         Box::new(UpgradeGate::new(
-            Box::new(FilesystemUpgradeBackend),
+            Box::new(FilesystemUpgradeBackend::new(workspace.clone())),
             UpgradeGateConfig { fixture_root: workspace.clone() },
         )),
         Box::new(DeterminismGate::new(
@@ -1258,7 +1269,7 @@ Also add the necessary imports at the top of bootstrap.rs:
 use crate::release::gates::semver::SemVerGate;
 ```
 
-- [ ] **Step 2: Add runner registration test to tests/release_gate_tests.rs**
+- [ ] **Step 2: Add runner registration + category ordering tests to tests/release_gate_tests.rs**
 
 ```rust
 #[test]
@@ -1271,6 +1282,25 @@ fn test_bootstrap_registers_all_gates() {
     assert!(gate_ids.contains(&GateId::Upgrade1));
     assert!(gate_ids.contains(&GateId::Determinism1));
     assert_eq!(gate_ids.len(), 4);
+}
+
+#[test]
+fn test_gates_list_ordered_by_category() {
+    use fusion_router::release::bootstrap::build_default_runner;
+    use fusion_router::release::gate::GateCategory;
+    let runner = build_default_runner();
+    let gates = runner.gates();
+    // Verify gates appear in documented category order:
+    // Compatibility, Replay, Upgrade, Determinism
+    let categories: Vec<GateCategory> = gates.iter().map(|g| g.metadata().category).collect();
+    let expected_order = vec![
+        GateCategory::Compatibility,
+        GateCategory::Replay,
+        GateCategory::Upgrade,
+        GateCategory::Determinism,
+    ];
+    assert_eq!(categories, expected_order,
+        "Gates must be registered in documented category order");
 }
 ```
 
@@ -1318,6 +1348,23 @@ fn test_gates_list_contains_all_m2_gates() {
     assert!(stdout.contains("RPL-1"), "expected RPL-1 in gates list");
     assert!(stdout.contains("UPG-1"), "expected UPG-1 in gates list");
     assert!(stdout.contains("DET-1"), "expected DET-1 in gates list");
+}
+
+#[test]
+fn test_gates_list_category_order() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fusion"))
+        .args(["gates", "list"])
+        .output()
+        .expect("failed to run fusion gates list");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Verify category groups appear in documented order: Compatibility, Replay, Upgrade, Determinism
+    let compat_pos = stdout.find("Compatibility").expect("missing Compatibility category");
+    let replay_pos = stdout.find("Replay").expect("missing Replay category");
+    let upgrade_pos = stdout.find("Upgrade").expect("missing Upgrade category");
+    let determinism_pos = stdout.find("Determinism").expect("missing Determinism category");
+    assert!(compat_pos < replay_pos, "Compatibility must appear before Replay");
+    assert!(replay_pos < upgrade_pos, "Replay must appear before Upgrade");
+    assert!(upgrade_pos < determinism_pos, "Upgrade must appear before Determinism");
 }
 ```
 
