@@ -1,0 +1,11 @@
+error: invalid semver version 'not-a-version': unexpected character 'n' while parsing major version number
+ --> tests/compile-fail/invalid-semver.rs:8:1
+  |
+8 | struct BadVersion;
+  | ^^^^^^^^^^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/compile-fail/invalid-semver.rs:8:19
+  |
+8 | struct BadVersion;
+  |                   ^ consider adding a `main` function to `$DIR/tests/compile-fail/invalid-semver.rs`

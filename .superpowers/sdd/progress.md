@@ -27,3 +27,4 @@
 - **Full suite**: 702 tests, 0 failures
 - **CLI binary**: `fusion gates list/check/explain`, `fusion features list` all working
 Task 1: complete (commits 0e0a81b..d94b7b1, review clean)
+Task 2: complete (commits d94b7b1..8e3f9b0, review clean)
