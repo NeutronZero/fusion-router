@@ -2,6 +2,9 @@
 //!
 //! Minimal, lightweight public SDK for building FusionRouter plugins and capabilities.
 
+/// Current ABI version for capability packages (ADR-018).
+pub const CAPABILITY_ABI_VERSION: &str = "0.1.0";
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
