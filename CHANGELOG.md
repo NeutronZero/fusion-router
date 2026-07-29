@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- **Capability Platform SDK (Sprint O1)** (`crates/fusion-capability-sdk/`, `crates/fusion-capability-macros/`)
+  - **`fusion-capability-macros`** — proc-macro crate providing `#[capability]` attribute macro and `#[permission]` helper attribute
+  - **`#[capability]` macro** — generates `Plugin` and `CapabilityPlugin` trait implementations from annotated structs with compile-time semver validation and permission parsing
+  - **`#[permission]` attribute** — typed permission declarations (`Network`, `Filesystem`, `Http`, `Secrets`) with compile-time error propagation
+  - **`fusion-capability-sdk`** — developer SDK crate with `CapabilityBuilder`, `CapabilityManifestBuilder`, `SchemaBuilder`, and intentionally small `prelude`
+  - **`CapabilityBuilder`** — fluent, immutable-after-`finish()` builder for constructing `CapabilityContract` values
+  - **`CapabilityManifestBuilder`** — ADR-018 manifest stub builder with default `CAPABILITY_ABI_VERSION`
+  - **`SchemaBuilder`** — JSON Schema builder with optional `schemars`-based type derivation
+  - **`CAPABILITY_ABI_VERSION`** — shared constant `"0.1.0"` added to `fusion-plugin-api`
+  - **Architecture:** Three-crate stack (`fusion-plugin-api` → `fusion-capability-macros` → `fusion-capability-sdk`) preserving stable ABI no new execution trait hierarchy
+  - **Testing:** 15 unit tests + 5 trybuild compile-fail tests + 4 integration tests + clippy-clean
+
 ## [0.11.0] – 2026-07-27
 
 - **Runtime Intelligence & Event-Driven Core (v0.11)** (`src/events/`)
