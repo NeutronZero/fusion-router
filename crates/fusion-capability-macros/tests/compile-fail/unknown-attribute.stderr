@@ -1,0 +1,11 @@
+error: unknown capability attribute: unknown_field
+ --> tests/compile-fail/unknown-attribute.rs:7:5
+  |
+7 |     unknown_field = "value"
+  |     ^^^^^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/compile-fail/unknown-attribute.rs:9:20
+  |
+9 | struct UnknownAttr;
+  |                    ^ consider adding a `main` function to `$DIR/tests/compile-fail/unknown-attribute.rs`

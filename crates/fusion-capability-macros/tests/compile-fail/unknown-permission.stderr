@@ -1,0 +1,11 @@
+error: unknown permission variant: UnknownVariant
+ --> tests/compile-fail/unknown-permission.rs:8:14
+  |
+8 | #[permission(UnknownVariant)]
+  |              ^^^^^^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/compile-fail/unknown-permission.rs:9:22
+  |
+9 | struct BadPermission;
+  |                      ^ consider adding a `main` function to `$DIR/tests/compile-fail/unknown-permission.rs`

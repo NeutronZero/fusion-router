@@ -2,7 +2,6 @@ use syn::{parse::{Parse, ParseStream}, Token, LitStr, Path};
 
 /// Represents a single `#[permission(...)]` attribute value.
 /// Maps to the typed `Permission` enum planned for Sprint O2.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum PermissionAttr {
     Network,
@@ -11,18 +10,7 @@ pub enum PermissionAttr {
     Secrets(String),
 }
 
-#[allow(dead_code)]
 impl PermissionAttr {
-    /// Returns the permission variant name (e.g. "Network", "Filesystem").
-    pub fn variant_name(&self) -> &'static str {
-        match self {
-            PermissionAttr::Network => "Network",
-            PermissionAttr::Filesystem(_) => "Filesystem",
-            PermissionAttr::Http(_) => "Http",
-            PermissionAttr::Secrets(_) => "Secrets",
-        }
-    }
-
     /// Returns the string representation used in `CapabilityContract.permissions`.
     /// Single-arg variants include the value: `"Http(https://...)"`.
     pub fn to_permission_string(&self) -> String {
@@ -74,12 +62,12 @@ impl Parse for PermissionAttr {
 }
 
 /// Parses `#[permission(...)]` from struct attributes.
-#[allow(dead_code)]
-pub fn parse_permission_attrs(attrs: &[syn::Attribute]) -> Vec<PermissionAttr> {
-    attrs.iter()
-        .filter(|a| a.path().is_ident("permission"))
-        .filter_map(|a| a.parse_args::<PermissionAttr>().ok())
-        .collect()
+pub fn parse_permission_attrs(attrs: &[syn::Attribute]) -> Result<Vec<PermissionAttr>, syn::Error> {
+    let mut permissions = Vec::new();
+    for attr in attrs.iter().filter(|a| a.path().is_ident("permission")) {
+        permissions.push(attr.parse_args::<PermissionAttr>()?);
+    }
+    Ok(permissions)
 }
 
 #[cfg(test)]

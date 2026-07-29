@@ -65,7 +65,10 @@ pub fn capability(attr: TokenStream, item: TokenStream) -> TokenStream {
         return syn::Error::new_spanned(&item_struct, e).to_compile_error().into();
     }
 
-    let permissions = permission::parse_permission_attrs(&item_struct.attrs);
+    let permissions = match permission::parse_permission_attrs(&item_struct.attrs) {
+        Ok(p) => p,
+        Err(e) => return e.to_compile_error().into(),
+    };
     let permission_strings: Vec<String> = permissions.iter().map(|p| p.to_permission_string()).collect();
 
     let expanded = quote! {

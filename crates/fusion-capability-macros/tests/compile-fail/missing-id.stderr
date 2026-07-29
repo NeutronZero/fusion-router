@@ -1,0 +1,16 @@
+error: unexpected end of input, missing required attribute: id
+ --> tests/compile-fail/missing-id.rs:3:1
+  |
+3 | / #[capability(
+4 | |     description = "missing id",
+5 | |     version = "0.1.0"
+6 | | )]
+  | |__^
+  |
+  = note: this error originates in the attribute macro `capability` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/compile-fail/missing-id.rs:7:18
+  |
+7 | struct MissingId;
+  |                  ^ consider adding a `main` function to `$DIR/tests/compile-fail/missing-id.rs`
