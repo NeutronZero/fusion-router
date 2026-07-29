@@ -70,13 +70,13 @@ impl CapabilityPlannerCache {
 
 /// Symbol resolver matching `RequirementSet` against an immutable `CapabilityRegistry`.
 pub struct CapabilityResolver {
-    registry: Arc<CapabilityRegistry>,
+    registry: Arc<dyn CapabilityRegistry>,
     cache: CapabilityPlannerCache,
     aliases: HashMap<CapabilityId, CapabilityId>,
 }
 
 impl CapabilityResolver {
-    pub fn new(registry: Arc<CapabilityRegistry>) -> Self {
+    pub fn new(registry: Arc<dyn CapabilityRegistry>) -> Self {
         Self {
             registry,
             cache: CapabilityPlannerCache::new(100),
@@ -156,11 +156,12 @@ impl CapabilityResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::InMemoryCapabilityRegistry;
     use fusion_plugin_api::CapabilityContract;
     use serde_json::json;
 
-    fn build_test_registry() -> Arc<CapabilityRegistry> {
-        let mut reg = CapabilityRegistry::new();
+    fn build_test_registry() -> Arc<dyn CapabilityRegistry> {
+        let mut reg = InMemoryCapabilityRegistry::new();
         reg.register(CapabilityContract {
             id: CapabilityId::new("echo.text"),
             version: semver::Version::parse("0.1.0").unwrap(),
@@ -187,7 +188,8 @@ mod tests {
             supports_streaming: false,
         }).unwrap();
 
-        reg.freeze()
+        reg.freeze();
+        Arc::new(reg)
     }
 
     #[test]

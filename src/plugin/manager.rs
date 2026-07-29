@@ -6,7 +6,7 @@ use std::path::Path;
 
 use super::manifest::PluginManifest;
 use super::PluginRegistry;
-use crate::capability::CapabilityRegistry;
+use crate::capability::{CapabilityRegistry, InMemoryCapabilityRegistry};
 use fusion_plugin_api::{CapabilityPlugin, PluginMetadata};
 
 /// Current supported engine versions for compatibility validation.
@@ -44,7 +44,7 @@ impl CompatibilityChecker {
 
 pub struct PluginManager {
     registry: PluginRegistry,
-    capability_registry: CapabilityRegistry,
+    capability_registry: InMemoryCapabilityRegistry,
     manifests: HashMap<String, PluginManifest>,
     #[cfg(feature = "wasm-plugins")]
     wasm_runtime: Option<crate::wasm::WasmRuntime>,
@@ -56,7 +56,7 @@ impl PluginManager {
     pub fn new() -> Self {
         Self {
             registry: PluginRegistry::new(),
-            capability_registry: CapabilityRegistry::new(),
+            capability_registry: InMemoryCapabilityRegistry::new(),
             manifests: HashMap::new(),
             #[cfg(feature = "wasm-plugins")]
             wasm_runtime: None,
@@ -83,17 +83,18 @@ impl PluginManager {
 
         for contract in plugin.capabilities() {
             tracing::info!(capability = %contract.id, plugin = %metadata.name, "registered capability contract");
-            self.capability_registry.register(contract)?;
+            self.capability_registry.register(contract).map_err(|e| e.to_string())?;
         }
 
         Ok(())
     }
 
     /// Freezes and returns an immutable `Arc<CapabilityRegistry>`.
-    pub fn freeze_capability_registry(&mut self) -> Arc<CapabilityRegistry> {
-        let mut empty = CapabilityRegistry::new();
+    pub fn freeze_capability_registry(&mut self) -> Arc<dyn CapabilityRegistry> {
+        let mut empty = InMemoryCapabilityRegistry::new();
         std::mem::swap(&mut self.capability_registry, &mut empty);
-        empty.freeze()
+        empty.freeze();
+        Arc::new(empty)
     }
 
     pub fn load_manifests(&mut self, dir: &str) {

@@ -1,14 +1,15 @@
 //! Executable Architecture Conformance Test Suite (ADR-027 Invariants)
 
+use std::sync::Arc;
 use fusion_plugin_api::{CapabilityContract, CapabilityId, Plugin, PluginMetadata};
-use fusion_router::capability::CapabilityRegistry;
+use fusion_router::capability::{CapabilityRegistry, InMemoryCapabilityRegistry};
 use fusion_router::plugin::CompatibilityChecker;
 use fusion_router::planner::resolver::capability::{CapabilityGraph, CapabilityResolver, RequirementSet};
 use serde_json::json;
 
 #[test]
 fn invariant_capability_registry_immutable_post_freeze() {
-    let mut reg = CapabilityRegistry::new();
+    let mut reg = InMemoryCapabilityRegistry::new();
     let contract = CapabilityContract {
         id: CapabilityId::new("test.invar"),
         version: semver::Version::parse("0.1.0").unwrap(),
@@ -23,10 +24,10 @@ fn invariant_capability_registry_immutable_post_freeze() {
     };
 
     reg.register(contract).unwrap();
-    let frozen_reg = reg.freeze();
+    reg.freeze();
 
-    assert!(frozen_reg.is_frozen());
-    assert!(frozen_reg.contains(&CapabilityId::new("test.invar")));
+    assert!(reg.is_frozen());
+    assert!(reg.contains(&CapabilityId::new("test.invar")));
 }
 
 #[test]
@@ -50,7 +51,7 @@ fn invariant_compatibility_checker_rejects_api_mismatch() {
 
 #[test]
 fn invariant_capability_resolver_does_not_execute_logic() {
-    let mut reg = CapabilityRegistry::new();
+    let mut reg = InMemoryCapabilityRegistry::new();
     reg.register(CapabilityContract {
         id: CapabilityId::new("pure.symbol"),
         version: semver::Version::parse("0.1.0").unwrap(),
@@ -64,7 +65,8 @@ fn invariant_capability_resolver_does_not_execute_logic() {
         supports_streaming: false,
     }).unwrap();
 
-    let resolver = CapabilityResolver::new(reg.freeze());
+    reg.freeze();
+    let resolver = CapabilityResolver::new(Arc::new(reg));
     let reqs = RequirementSet::new(vec![CapabilityId::new("pure.symbol")]);
 
     let res = resolver.resolve(&reqs).unwrap();
