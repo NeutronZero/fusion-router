@@ -3,7 +3,7 @@
 //! Minimal, lightweight public SDK for building FusionRouter plugins and capabilities.
 
 /// Current ABI version for capability packages (ADR-018).
-pub const CAPABILITY_ABI_VERSION: &str = "0.1.0";
+pub const CAPABILITY_ABI_VERSION: &str = "0.2.0";
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,72 @@ impl std::fmt::Display for CapabilityId {
     }
 }
 
+/// Error type for `Permission::validate()`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PermissionError {
+    #[error("permission argument must not be empty")]
+    EmptyArgument,
+}
+
+/// Typed permission model for capability ABI contracts.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Permission {
+    Network,
+    Filesystem(String),
+    Http(String),
+    Secrets(String),
+    Environment(String),
+}
+
+impl Permission {
+    /// Validates that parameterized permissions have non-empty arguments.
+    pub fn validate(&self) -> Result<(), PermissionError> {
+        match self {
+            Permission::Network => Ok(()),
+            Permission::Filesystem(path) if path.is_empty() => Err(PermissionError::EmptyArgument),
+            Permission::Http(endpoint) if endpoint.is_empty() => Err(PermissionError::EmptyArgument),
+            Permission::Secrets(name) if name.is_empty() => Err(PermissionError::EmptyArgument),
+            Permission::Environment(name) if name.is_empty() => Err(PermissionError::EmptyArgument),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl std::fmt::Display for Permission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Permission::Network => write!(f, "Network"),
+            Permission::Filesystem(path) => write!(f, "Filesystem({path})"),
+            Permission::Http(endpoint) => write!(f, "Http({endpoint})"),
+            Permission::Secrets(name) => write!(f, "Secrets({name})"),
+            Permission::Environment(name) => write!(f, "Environment({name})"),
+        }
+    }
+}
+
+impl std::str::FromStr for Permission {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(arg) = s.strip_prefix("Filesystem(").and_then(|s| s.strip_suffix(')')) {
+            return Ok(Permission::Filesystem(arg.to_string()));
+        }
+        if let Some(arg) = s.strip_prefix("Http(").and_then(|s| s.strip_suffix(')')) {
+            return Ok(Permission::Http(arg.to_string()));
+        }
+        if let Some(arg) = s.strip_prefix("Secrets(").and_then(|s| s.strip_suffix(')')) {
+            return Ok(Permission::Secrets(arg.to_string()));
+        }
+        if let Some(arg) = s.strip_prefix("Environment(").and_then(|s| s.strip_suffix(')')) {
+            return Ok(Permission::Environment(arg.to_string()));
+        }
+        if s == "Network" {
+            return Ok(Permission::Network);
+        }
+        Err(format!("unknown permission variant: {s}"))
+    }
+}
+
 /// Metadata declared by a plugin for version compatibility checks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginMetadata {
@@ -46,7 +112,7 @@ pub struct CapabilityContract {
     pub description: String,
     pub inputs_schema: serde_json::Value,
     pub outputs_schema: serde_json::Value,
-    pub permissions: Vec<String>,
+    pub permissions: Vec<Permission>,
     pub estimated_cost_usd: f64,
     pub estimated_latency_ms: u64,
     pub reliability_score: f32,
@@ -94,4 +160,110 @@ pub trait CapabilityExecutor: Send + Sync {
         instance: &CapabilityInstance,
         input: serde_json::Value,
     ) -> Result<ExecutionResult, ExecutionError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn permission_network_display() {
+        assert_eq!(Permission::Network.to_string(), "Network");
+    }
+
+    #[test]
+    fn permission_filesystem_display() {
+        let p = Permission::Filesystem("/tmp".into());
+        assert_eq!(p.to_string(), "Filesystem(/tmp)");
+    }
+
+    #[test]
+    fn permission_http_display() {
+        let p = Permission::Http("https://api.example.com".into());
+        assert_eq!(p.to_string(), "Http(https://api.example.com)");
+    }
+
+    #[test]
+    fn permission_from_str_network() {
+        let p = Permission::from_str("Network").unwrap();
+        assert_eq!(p, Permission::Network);
+    }
+
+    #[test]
+    fn permission_from_str_filesystem() {
+        let p = Permission::from_str("Filesystem(/tmp)").unwrap();
+        assert_eq!(p, Permission::Filesystem("/tmp".into()));
+    }
+
+    #[test]
+    fn permission_round_trips() {
+        let cases = vec![
+            Permission::Network,
+            Permission::Filesystem("/data".into()),
+            Permission::Http("https://example.com".into()),
+            Permission::Secrets("API_KEY".into()),
+            Permission::Environment("HOME".into()),
+        ];
+        for p in cases {
+            let s = p.to_string();
+            let back = Permission::from_str(&s).unwrap();
+            assert_eq!(p, back, "round-trip failed for {s}");
+        }
+    }
+
+    #[test]
+    fn permission_validate_network_ok() {
+        assert!(Permission::Network.validate().is_ok());
+    }
+
+    #[test]
+    fn permission_validate_empty_filesystem_fails() {
+        let p = Permission::Filesystem("".into());
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn permission_validate_empty_http_fails() {
+        let p = Permission::Http("".into());
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn permission_validate_empty_secrets_fails() {
+        let p = Permission::Secrets("".into());
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn permission_validate_empty_environment_fails() {
+        let p = Permission::Environment("".into());
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn permission_json_round_trip() {
+        let p = Permission::Filesystem("/tmp".into());
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Permission = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn contract_permissions_typed() {
+        let contract = CapabilityContract {
+            id: CapabilityId::new("test.typed"),
+            version: semver::Version::parse("0.1.0").unwrap(),
+            description: "typed permissions".into(),
+            inputs_schema: serde_json::json!({}),
+            outputs_schema: serde_json::json!({}),
+            permissions: vec![Permission::Network, Permission::Http("https://example.com".into())],
+            estimated_cost_usd: 0.0,
+            estimated_latency_ms: 0,
+            reliability_score: 1.0,
+            supports_streaming: false,
+        };
+        assert_eq!(contract.permissions.len(), 2);
+        assert!(matches!(contract.permissions[0], Permission::Network));
+    }
 }
