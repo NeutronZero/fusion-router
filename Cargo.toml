@@ -65,6 +65,7 @@ clap = { version = "4", features = ["derive"] }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 fusion-plugin-echo = { path = "plugins/fusion-plugin-echo" }
+fusion-capability-sdk = { path = "crates/fusion-capability-sdk" }
 
 [[bench]]
 name = "compilation"
