@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
-    ExecutionError, ExecutionResult, Plugin, PluginMetadata,
+    ExecutionError, ExecutionResult, Permission, Plugin, PluginMetadata,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -32,7 +32,7 @@ impl CapabilityPlugin for ShellPlugin {
             description: "Executes shell commands in a sandboxed runtime".into(),
             inputs_schema: json!({"type": "object", "properties": {"command": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"stdout": {"type": "string"}}}),
-            permissions: vec!["shell".into()],
+            permissions: vec![Permission::Environment("SHELL".into())],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 10,
             reliability_score: 0.99,

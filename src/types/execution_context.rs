@@ -151,7 +151,6 @@ impl ExecutionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityInstance};
     use serde_json::json;
 
     #[test]

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
-    ExecutionError, ExecutionResult, Plugin, PluginMetadata,
+    ExecutionError, ExecutionResult, Permission, Plugin, PluginMetadata,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ impl CapabilityPlugin for HttpPlugin {
             description: "Makes an HTTP request".into(),
             inputs_schema: json!({"type": "object", "properties": {"url": {"type": "string"}, "method": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"body": {"type": "string"}, "status": {"type": "number"}}}),
-            permissions: vec!["http".into()],
+            permissions: vec![Permission::Network],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 150,
             reliability_score: 0.99,

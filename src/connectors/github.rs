@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
-    ExecutionError, ExecutionResult, Plugin, PluginMetadata,
+    ExecutionError, ExecutionResult, Permission, Plugin, PluginMetadata,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ impl CapabilityPlugin for GitHubPlugin {
             description: "Creates an issue on GitHub".into(),
             inputs_schema: json!({"type": "object", "properties": {"repo": {"type": "string"}, "title": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"issue_url": {"type": "string"}}}),
-            permissions: vec!["github".into()],
+            permissions: vec![Permission::Http("https://api.github.com".into())],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 100,
             reliability_score: 0.95,

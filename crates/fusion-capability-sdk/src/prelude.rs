@@ -6,6 +6,7 @@ pub use fusion_plugin_api::{
     CapabilityPlugin,
     CapabilityContract,
     CapabilityId,
+    Permission,
 };
 
 pub use crate::{

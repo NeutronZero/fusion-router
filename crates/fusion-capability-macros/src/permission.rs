@@ -1,24 +1,35 @@
+use proc_macro2::TokenStream;
+use quote::quote;
 use syn::{parse::{Parse, ParseStream}, Token, LitStr, Path};
 
 /// Represents a single `#[permission(...)]` attribute value.
-/// Maps to the typed `Permission` enum planned for Sprint O2.
+/// Maps to the typed `Permission` enum in `fusion_plugin_api`.
 #[derive(Debug, Clone)]
 pub enum PermissionAttr {
     Network,
     Filesystem(String),
     Http(String),
     Secrets(String),
+    Environment(String),
 }
 
 impl PermissionAttr {
-    /// Returns the string representation used in `CapabilityContract.permissions`.
-    /// Single-arg variants include the value: `"Http(https://...)"`.
-    pub fn to_permission_string(&self) -> String {
+    /// Emits a typed `::fusion_plugin_api::Permission::*` token stream.
+    pub fn to_permission_token_stream(&self) -> TokenStream {
         match self {
-            PermissionAttr::Network => "Network".to_string(),
-            PermissionAttr::Filesystem(path) => format!("Filesystem({path})"),
-            PermissionAttr::Http(url) => format!("Http({url})"),
-            PermissionAttr::Secrets(name) => format!("Secrets({name})"),
+            PermissionAttr::Network => quote! { ::fusion_plugin_api::Permission::Network },
+            PermissionAttr::Filesystem(path) => {
+                quote! { ::fusion_plugin_api::Permission::Filesystem(#path.into()) }
+            }
+            PermissionAttr::Http(endpoint) => {
+                quote! { ::fusion_plugin_api::Permission::Http(#endpoint.into()) }
+            }
+            PermissionAttr::Secrets(name) => {
+                quote! { ::fusion_plugin_api::Permission::Secrets(#name.into()) }
+            }
+            PermissionAttr::Environment(name) => {
+                quote! { ::fusion_plugin_api::Permission::Environment(#name.into()) }
+            }
         }
     }
 }
@@ -55,6 +66,12 @@ impl Parse for PermissionAttr {
                 syn::parenthesized!(content in input);
                 let name: LitStr = content.parse()?;
                 Ok(PermissionAttr::Secrets(name.value()))
+            }
+            "Environment" => {
+                let content;
+                syn::parenthesized!(content in input);
+                let name: LitStr = content.parse()?;
+                Ok(PermissionAttr::Environment(name.value()))
             }
             _ => Err(syn::Error::new_spanned(&path, format!("unknown permission variant: {name}")))
         }
@@ -97,5 +114,11 @@ mod tests {
     fn parse_secrets() {
         let attr: PermissionAttr = parse_quote!(Secrets("OPENAI_API_KEY"));
         assert!(matches!(attr, PermissionAttr::Secrets(k) if k == "OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn parse_environment() {
+        let attr: PermissionAttr = parse_quote!(Environment("HOME"));
+        assert!(matches!(attr, PermissionAttr::Environment(p) if p == "HOME"));
     }
 }

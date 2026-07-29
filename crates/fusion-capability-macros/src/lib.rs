@@ -69,7 +69,7 @@ pub fn capability(attr: TokenStream, item: TokenStream) -> TokenStream {
         Ok(p) => p,
         Err(e) => return e.to_compile_error().into(),
     };
-    let permission_strings: Vec<String> = permissions.iter().map(|p| p.to_permission_string()).collect();
+    let permission_tokens: Vec<proc_macro2::TokenStream> = permissions.iter().map(|p| p.to_permission_token_stream()).collect();
 
     let expanded = quote! {
         #item_struct
@@ -95,7 +95,7 @@ pub fn capability(attr: TokenStream, item: TokenStream) -> TokenStream {
                         description: #description.to_string(),
                         inputs_schema: ::fusion_capability_sdk::__reexports::serde_json::Value::Object(Default::default()),
                         outputs_schema: ::fusion_capability_sdk::__reexports::serde_json::Value::Object(Default::default()),
-                        permissions: vec![#(#permission_strings),*],
+                        permissions: vec![#(#permission_tokens),*],
                         estimated_cost_usd: 0.0,
                         estimated_latency_ms: 0,
                         reliability_score: 1.0,

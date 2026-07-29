@@ -1,4 +1,4 @@
-use fusion_plugin_api::{CapabilityContract, CapabilityId};
+use fusion_plugin_api::{CapabilityContract, CapabilityId, Permission};
 use semver::Version;
 use serde_json::Value;
 
@@ -9,7 +9,7 @@ pub struct CapabilityBuilder {
     description: Option<String>,
     inputs_schema: Option<Value>,
     outputs_schema: Option<Value>,
-    permissions: Vec<String>,
+    permissions: Vec<Permission>,
     estimated_cost_usd: f64,
     estimated_latency_ms: u64,
     reliability_score: f32,
@@ -52,8 +52,8 @@ impl CapabilityBuilder {
         self
     }
 
-    pub fn permission(mut self, permission: impl Into<String>) -> Self {
-        self.permissions.push(permission.into());
+    pub fn permission(mut self, permission: Permission) -> Self {
+        self.permissions.push(permission);
         self
     }
 
@@ -111,16 +111,27 @@ mod tests {
         let contract = CapabilityBuilder::new("test.full")
             .version("1.0.0")
             .description("A full test capability")
-            .permission("Network")
+            .permission(Permission::Network)
             .estimated_cost_usd(0.01)
             .estimated_latency_ms(50)
             .reliability_score(0.99)
             .supports_streaming(true)
             .finish();
         assert_eq!(contract.description, "A full test capability");
-        assert_eq!(contract.permissions, vec!["Network"]);
+        assert_eq!(contract.permissions, vec![Permission::Network]);
         assert_eq!(contract.estimated_cost_usd, 0.01);
         assert!(contract.supports_streaming);
+    }
+
+    #[test]
+    fn builds_with_typed_permissions() {
+        let contract = CapabilityBuilder::new("test.typed")
+            .version("0.1.0")
+            .permission(Permission::Network)
+            .permission(Permission::Http("https://api.example.com".into()))
+            .finish();
+        assert_eq!(contract.permissions.len(), 2);
+        assert_eq!(contract.permissions[0], Permission::Network);
     }
 
     #[test]

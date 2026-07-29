@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
-    ExecutionError, ExecutionResult, Plugin, PluginMetadata,
+    ExecutionError, ExecutionResult, Permission, Plugin, PluginMetadata,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ impl CapabilityPlugin for McpPlugin {
             description: "Invokes an MCP tool".into(),
             inputs_schema: json!({"type": "object", "properties": {"tool": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"result": {"type": "string"}}}),
-            permissions: vec!["mcp".into()],
+            permissions: vec![Permission::Network],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 200,
             reliability_score: 0.99,
