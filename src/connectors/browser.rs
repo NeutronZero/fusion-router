@@ -31,6 +31,7 @@ impl CapabilityPlugin for BrowserPlugin {
             inputs_schema: json!({"type": "object", "properties": {"url": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"content": {"type": "string"}}}),
             permissions: vec![Permission::Network],
+            dependencies: vec![],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 1000,
             reliability_score: 0.90,

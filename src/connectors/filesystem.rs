@@ -31,6 +31,7 @@ impl CapabilityPlugin for FilesystemPlugin {
             inputs_schema: json!({"type": "object", "properties": {"path": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"content": {"type": "string"}}}),
             permissions: vec![Permission::Filesystem("**".into())],
+            dependencies: vec![],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 5,
             reliability_score: 0.999,

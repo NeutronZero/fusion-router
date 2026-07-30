@@ -31,6 +31,7 @@ impl CapabilityPlugin for McpPlugin {
             inputs_schema: json!({"type": "object", "properties": {"tool": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"result": {"type": "string"}}}),
             permissions: vec![Permission::Network],
+            dependencies: vec![],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 200,
             reliability_score: 0.99,

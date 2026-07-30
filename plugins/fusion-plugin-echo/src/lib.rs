@@ -55,8 +55,9 @@ impl CapabilityPlugin for EchoPlugin {
                         "text": { "type": "string" }
                     }
                 }),
-                permissions: vec![],
-                estimated_cost_usd: 0.0,
+            permissions: vec![],
+            dependencies: vec![],
+            estimated_cost_usd: 0.0,
                 estimated_latency_ms: 1,
                 reliability_score: 1.0,
                 supports_streaming: false,
@@ -78,8 +79,9 @@ impl CapabilityPlugin for EchoPlugin {
                         "text": { "type": "string" }
                     }
                 }),
-                permissions: vec![],
-                estimated_cost_usd: 0.0,
+            permissions: vec![],
+            dependencies: vec![],
+            estimated_cost_usd: 0.0,
                 estimated_latency_ms: 1,
                 reliability_score: 1.0,
                 supports_streaming: false,

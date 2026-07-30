@@ -113,6 +113,7 @@ pub struct CapabilityContract {
     pub inputs_schema: serde_json::Value,
     pub outputs_schema: serde_json::Value,
     pub permissions: Vec<Permission>,
+    pub dependencies: Vec<CapabilityId>,
     pub estimated_cost_usd: f64,
     pub estimated_latency_ms: u64,
     pub reliability_score: f32,

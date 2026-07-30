@@ -171,6 +171,7 @@ mod tests {
                 inputs_schema: serde_json::json!({}),
                 outputs_schema: serde_json::json!({}),
                 permissions: vec![],
+                dependencies: vec![],
                 estimated_cost_usd: 0.0,
                 estimated_latency_ms: 1,
                 reliability_score: 1.0,

@@ -31,6 +31,7 @@ impl CapabilityPlugin for GitHubPlugin {
             inputs_schema: json!({"type": "object", "properties": {"repo": {"type": "string"}, "title": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"issue_url": {"type": "string"}}}),
             permissions: vec![Permission::Http("https://api.github.com".into())],
+            dependencies: vec![],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 100,
             reliability_score: 0.95,

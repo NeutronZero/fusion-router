@@ -96,6 +96,7 @@ pub fn capability(attr: TokenStream, item: TokenStream) -> TokenStream {
                         inputs_schema: ::fusion_capability_sdk::__reexports::serde_json::Value::Object(Default::default()),
                         outputs_schema: ::fusion_capability_sdk::__reexports::serde_json::Value::Object(Default::default()),
                         permissions: vec![#(#permission_tokens),*],
+                        dependencies: vec![],
                         estimated_cost_usd: 0.0,
                         estimated_latency_ms: 0,
                         reliability_score: 1.0,

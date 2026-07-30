@@ -31,6 +31,7 @@ impl CapabilityPlugin for HttpPlugin {
             inputs_schema: json!({"type": "object", "properties": {"url": {"type": "string"}, "method": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"body": {"type": "string"}, "status": {"type": "number"}}}),
             permissions: vec![Permission::Network],
+            dependencies: vec![],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 150,
             reliability_score: 0.99,

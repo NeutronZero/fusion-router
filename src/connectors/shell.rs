@@ -33,6 +33,7 @@ impl CapabilityPlugin for ShellPlugin {
             inputs_schema: json!({"type": "object", "properties": {"command": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"stdout": {"type": "string"}}}),
             permissions: vec![Permission::Filesystem("**".into())],
+            dependencies: vec![],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 10,
             reliability_score: 0.99,
