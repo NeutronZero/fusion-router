@@ -152,11 +152,11 @@ impl CapabilityResolver {
             // Check latency bound if specified
             if let Some(max_lat) = reqs.max_acceptable_latency_ms {
                 if contract.estimated_latency_ms > max_lat {
-                return Err(ResolverError::LatencyExceeded {
-                    capability: contract.id.clone(),
-                    latency_ms: contract.estimated_latency_ms,
-                    max_ms: max_lat,
-                });
+                    return Err(ResolverError::LatencyExceeded {
+                        capability: contract.id.clone(),
+                        latency_ms: contract.estimated_latency_ms,
+                        max_ms: max_lat,
+                    });
                 }
             }
 
