@@ -29,7 +29,9 @@ pub mod middleware;
 pub mod wasm;
 
 pub mod devex;
+pub mod package;
 pub mod runtime;
 pub mod release;
 pub mod feature_gate;
 pub mod events;
+pub mod operations;

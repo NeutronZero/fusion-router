@@ -1135,6 +1135,7 @@ dependencies = [
  "usearch",
  "uuid",
  "wasmtime",
+ "wat",
 ]
 
 [[package]]

@@ -36,6 +36,7 @@ mod feature_gate;
 
 #[cfg(feature = "wasm-plugins")]
 mod wasm;
+mod operations;
 
 use config::AppConfig;
 use providers::circuit_breaker::CircuitBreaker;
@@ -202,6 +203,37 @@ async fn main() {
             .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
             .layer(axum::Extension(limiter));
     }
+
+    let ops_registry = Arc::new(parking_lot::RwLock::new(crate::capability::InMemoryCapabilityRegistry::new()));
+    let ops_cache = Arc::new(crate::operations::RuntimeModuleCache::new());
+    let ops_dashboard = Arc::new(crate::operations::dashboard::DefaultDashboardDataProvider::new(
+        ops_registry.clone(),
+        ops_cache.clone(),
+    ));
+    let ops_inspector = Arc::new(crate::operations::runtime_inspector::RuntimeInspector::new(ops_cache.clone()));
+    let ops_store = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let ops_audit = Arc::new(crate::telemetry::audit::AuditLog::new(1000));
+    let ops_policy_admin = Arc::new(crate::operations::policy_admin::PolicyAdmin::new(ops_store, ops_audit.clone()));
+    let ops_verifier = Arc::new(crate::operations::MockPackageVerifier);
+    let ops_attestation_viewer = Arc::new(crate::operations::attestation_viewer::AttestationViewer::new(ops_verifier, ops_audit));
+
+    let ops_state = crate::operations::handlers::OperationsState {
+        dashboard: ops_dashboard,
+        inspector: ops_inspector,
+        policy_admin: ops_policy_admin,
+        attestation_viewer: ops_attestation_viewer,
+    };
+
+    let operations_routes = axum::Router::new()
+        .route("/v1/operations/registry", axum::routing::get(crate::operations::handlers::registry_handler))
+        .route("/v1/operations/runtime", axum::routing::get(crate::operations::handlers::runtime_handler))
+        .route("/v1/operations/metrics", axum::routing::get(crate::operations::handlers::metrics_handler))
+        .route("/v1/operations/policies", axum::routing::get(crate::operations::handlers::policies_list_handler))
+        .route("/v1/operations/policies", axum::routing::post(crate::operations::handlers::policies_create_handler))
+        .route("/v1/operations/attestations", axum::routing::get(crate::operations::handlers::attestations_handler))
+        .with_state(ops_state);
+
+    app = app.merge(operations_routes);
 
     let addr = format!("{}:{}", host, port)
         .parse::<std::net::SocketAddr>()
