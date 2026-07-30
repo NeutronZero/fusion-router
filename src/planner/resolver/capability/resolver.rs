@@ -303,7 +303,7 @@ impl CapabilityResolver {
             graph.add_dependency(edge.from.clone(), edge.to.clone());
         }
 
-        graph.validate().map_err(|e| ResolverError::GraphValidationFailed(e))?;
+        graph.validate().map_err(ResolverError::GraphValidationFailed)?;
 
         let resolved = ResolvedCapabilitySet { graph, instances: final_instances };
         self.cache.put(reqs.clone(), resolved.clone());
