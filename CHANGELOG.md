@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+- **Capability Resolution Bridge (Sprint O2.5)** (`src/planner/resolver/capability/`)
+  - SemVer resolution — extended `RequirementSet` with version constraints, resolver selects best compatible via `semver::VersionReq`
+  - Dependency expansion — BFS transitive expansion of declared dependencies before graph construction
+  - Policy constraints — allow/deny lists and release profile filtering evaluated during resolution, not in registry or runtime
+  - `CapabilityGraphLowerer` — deterministic lowering from `CapabilityGraph` to compiler `ExecutionGraph` via dedicated transformation component
+  - `ResolverError` — typed error enum replacing `Result<_, String>` across the resolution pipeline
+  - Resolver determinism guarantee — identical registry + requirements + policy → identical graphs
+  - All existing `CapabilityGraph`, `CapabilityResolver`, and registry invariants preserved
+
+- **Typed Permissions & Capability Registry (Sprint O2)** (`crates/fusion-plugin-api/`, `src/capability/`)
+  - **`Permission` enum** — typed ABI enum (`Network`, `Filesystem`, `Http`, `Secrets`, `Environment`) with `validate()`, `Display`, `FromStr`, `Serialize`, `Deserialize`, and full trait support (`Debug`, `Clone`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash`)
+  - **`PermissionError`** — `thiserror`-derived error type for `Permission::validate()`
+  - **ABI version bump** — `CAPABILITY_ABI_VERSION` updated from `"0.1.0"` to `"0.2.0"`
+  - **`CapabilityContract.permissions`** — changed from `Vec<String>` to `Vec<Permission>`, all consumers migrated
+  - **`CapabilityRegistry` trait** — `register()`, `get()`, `contains()`, `list()`, `freeze()`, `is_frozen()` with `Send + Sync` bound
+  - **`InMemoryCapabilityRegistry`** — `HashMap`-backed implementation with non-consuming `freeze()`, sorted `list()`, and permission validation during `register()`
+  - **`RegistryError`** — typed `#[non_exhaustive]` enum with `DuplicateId`, `Frozen`, `NotFound`, `InvalidContract` variants
+  - **`CapabilityDescriptor`** — discovery metadata wrapping `CapabilityContract` with `tags`, `categories`, `discoverable`, `provider`, `source`
+  - **`CapabilitySource`** — enum (`Builtin`, `Package`, `Development`, `Remote`) with serialization support
+  - **Macro & SDK migration** — `PermissionAttr::to_permission_token_stream()` emits typed `Permission` values; `CapabilityBuilder::permission()` accepts `Permission`; SDK prelude re-exports `Permission`
+  - **Consumer migration** — `PluginManager`, `CapabilityResolver`, `phase_invariants.rs`, 6 connectors updated to typed permissions and trait-based registry
+  - **Validation pipeline** — 3-stage validation (builders → registry `register()` → runtime assumes valid)
+
 - **Capability Platform SDK (Sprint O1)** (`crates/fusion-capability-sdk/`, `crates/fusion-capability-macros/`)
   - **`fusion-capability-macros`** — proc-macro crate providing `#[capability]` attribute macro and `#[permission]` helper attribute
   - **`#[capability]` macro** — generates `Plugin` and `CapabilityPlugin` trait implementations from annotated structs with compile-time semver validation and permission parsing
