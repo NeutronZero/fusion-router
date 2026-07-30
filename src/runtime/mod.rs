@@ -87,4 +87,20 @@ mod tests {
     fn capabiltiy_host_services_is_object_safe() {
         fn _assert_object_safe(_: Arc<dyn CapabilityHostServices>) {}
     }
+
+    #[test]
+    fn sandbox_runtime_trait_object_safe() {
+        fn _take(_rt: Box<dyn SandboxRuntime>) {}
+    }
+
+    #[test]
+    fn sandbox_instance_trait_object_safe() {
+        fn _take(_inst: Box<dyn SandboxInstance>) {}
+    }
+
+    #[test]
+    fn sandbox_runtime_is_send_sync() {
+        fn check<T: Send + Sync>() {}
+        check::<Box<dyn SandboxRuntime>>();
+    }
 }
