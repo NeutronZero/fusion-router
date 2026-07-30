@@ -144,13 +144,12 @@ impl SandboxInstance for WasmtimeSandboxInstance {
         self.memory.write(&mut self.store, ptr as usize, input)
             .map_err(|_| RuntimeError::OutOfMemory)?;
 
-        let result = self.invoke.call(&mut self.store, (ptr, len));
+        let (out_ptr, out_len) = self.invoke.call(&mut self.store, (ptr, len))
+            .map_err(Self::map_trap_error)?;
 
         if self.growth_rejected.load(Ordering::SeqCst) {
             return Err(RuntimeError::OutOfMemory);
         }
-
-        let (out_ptr, out_len) = result.map_err(Self::map_trap_error)?;
 
         let mut output = vec![0u8; out_len as usize];
         self.memory.read(&self.store, out_ptr as usize, &mut output)
