@@ -9,6 +9,47 @@ use fusion_plugin_api::{CapabilityId, CapabilityInstance};
 use crate::capability::CapabilityRegistry;
 use super::graph::CapabilityGraph;
 
+/// Errors that can occur during capability resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ResolverError {
+    UnregisteredCapability(CapabilityId),
+    NoCompatibleVersion { capability: String, requirement: String },
+    AmbiguousResolution { capability: String, matches: Vec<CapabilityId> },
+    UnresolvedDependency { capability: CapabilityId, dependency: CapabilityId },
+    CircularDependency,
+    PolicyDenied { capability: CapabilityId, reason: String },
+    LatencyExceeded { capability: CapabilityId, latency_ms: u64, max_ms: u64 },
+    GraphValidationFailed(String),
+}
+
+impl std::fmt::Display for ResolverError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolverError::UnregisteredCapability(id) => write!(f, "capability not registered: {id}"),
+            ResolverError::NoCompatibleVersion { capability, requirement } => {
+                write!(f, "no compatible version for '{capability}' matching '{requirement}'")
+            }
+            ResolverError::AmbiguousResolution { capability, matches } => {
+                write!(f, "ambiguous resolution for '{capability}': matches {matches:?}")
+            }
+            ResolverError::UnresolvedDependency { capability, dependency } => {
+                write!(f, "unresolved dependency: '{capability}' requires '{dependency}'")
+            }
+            ResolverError::CircularDependency => write!(f, "circular dependency detected"),
+            ResolverError::PolicyDenied { capability, reason } => {
+                write!(f, "policy denied '{capability}': {reason}")
+            }
+            ResolverError::LatencyExceeded { capability, latency_ms, max_ms } => {
+                write!(f, "capability '{capability}' latency {latency_ms}ms exceeds {max_ms}ms")
+            }
+            ResolverError::GraphValidationFailed(msg) => write!(f, "graph validation failed: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ResolverError {}
+
 /// Represents extracted intent requirements requesting capability lookup.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct RequirementSet {
@@ -90,7 +131,7 @@ impl CapabilityResolver {
     }
 
     /// Resolves a `RequirementSet` into a `ResolvedCapabilitySet` with dependency graph checks.
-    pub fn resolve(&self, reqs: &RequirementSet) -> Result<ResolvedCapabilitySet, String> {
+    pub fn resolve(&self, reqs: &RequirementSet) -> Result<ResolvedCapabilitySet, ResolverError> {
         // 1. Check Planner Cache
         if let Some(cached) = self.cache.get(reqs) {
             return Ok(cached);
@@ -105,16 +146,17 @@ impl CapabilityResolver {
             let target_id = self.aliases.get(req_id).unwrap_or(req_id);
 
             let contract = self.registry.get(target_id).ok_or_else(|| {
-                format!("Capability resolution failed: required capability '{}' not registered", req_id)
+                ResolverError::UnregisteredCapability(req_id.clone())
             })?;
 
             // Check latency bound if specified
             if let Some(max_lat) = reqs.max_acceptable_latency_ms {
                 if contract.estimated_latency_ms > max_lat {
-                    return Err(format!(
-                        "Capability '{}' latency ({}ms) exceeds requirement limit ({}ms)",
-                        contract.id, contract.estimated_latency_ms, max_lat
-                    ));
+                return Err(ResolverError::LatencyExceeded {
+                    capability: contract.id.clone(),
+                    latency_ms: contract.estimated_latency_ms,
+                    max_ms: max_lat,
+                });
                 }
             }
 
@@ -142,7 +184,7 @@ impl CapabilityResolver {
         }
 
         // 4. Validate Graph Invariants (Dependencies, Conflicts, Cycles)
-        graph.validate()?;
+        graph.validate().map_err(ResolverError::GraphValidationFailed)?;
 
         let resolved = ResolvedCapabilitySet { graph, instances };
 

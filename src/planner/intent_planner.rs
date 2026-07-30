@@ -209,7 +209,7 @@ impl IntentPlanner {
         &self,
         resolver: &super::resolver::capability::CapabilityResolver,
         required: Vec<fusion_plugin_api::CapabilityId>,
-    ) -> Result<super::resolver::capability::ResolvedCapabilitySet, String> {
+    ) -> Result<super::resolver::capability::ResolvedCapabilitySet, super::resolver::capability::ResolverError> {
         let reqs = super::resolver::capability::RequirementSet::new(required);
         resolver.resolve(&reqs)
     }
