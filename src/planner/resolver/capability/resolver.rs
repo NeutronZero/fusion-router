@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use parking_lot::Mutex;
-use fusion_plugin_api::{CapabilityId, CapabilityInstance};
+use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityInstance};
 use crate::capability::CapabilityRegistry;
 use super::graph::CapabilityGraph;
 
@@ -50,13 +50,31 @@ impl std::fmt::Display for ResolverError {
 
 impl std::error::Error for ResolverError {}
 
+/// Context for policy evaluation (stub — used in Task 5).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct PolicyContext {
+    pub environment: String,
+    pub allow_list: Option<Vec<CapabilityId>>,
+    pub deny_list: Vec<CapabilityId>,
+    pub release_profile: Option<String>,
+}
+
+/// A semver version constraint on a capability prefix.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct VersionConstraint {
+    pub capability_prefix: String,
+    pub requirement: semver::VersionReq,
+}
+
 /// Represents extracted intent requirements requesting capability lookup.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct RequirementSet {
     pub required_capabilities: Vec<CapabilityId>,
     pub optional_capabilities: Vec<CapabilityId>,
+    pub version_constraints: Vec<VersionConstraint>,
     pub max_acceptable_latency_ms: Option<u64>,
     pub max_cost_usd: Option<u64>, // Scaled by 10^6 for integer hashing
+    pub policy: Option<PolicyContext>,
 }
 
 impl RequirementSet {
@@ -64,8 +82,10 @@ impl RequirementSet {
         Self {
             required_capabilities: required,
             optional_capabilities: Vec::new(),
+            version_constraints: Vec::new(),
             max_acceptable_latency_ms: None,
             max_cost_usd: None,
+            policy: None,
         }
     }
 }
@@ -130,6 +150,25 @@ impl CapabilityResolver {
         self.aliases.insert(alias, target);
     }
 
+    /// Resolves a single `VersionConstraint` to the highest-matching `CapabilityContract`.
+    fn resolve_version(&self, constraint: &VersionConstraint) -> Result<CapabilityContract, ResolverError> {
+        let mut candidates: Vec<&CapabilityContract> = self.registry.list()
+            .into_iter()
+            .filter(|c| c.id.as_str().starts_with(&constraint.capability_prefix))
+            .filter(|c| constraint.requirement.matches(&c.version))
+            .collect();
+
+        if candidates.is_empty() {
+            return Err(ResolverError::NoCompatibleVersion {
+                capability: constraint.capability_prefix.clone(),
+                requirement: constraint.requirement.to_string(),
+            });
+        }
+
+        candidates.sort_by(|a, b| b.version.cmp(&a.version));
+        Ok(candidates[0].clone())
+    }
+
     /// Resolves a `RequirementSet` into a `ResolvedCapabilitySet` with dependency graph checks.
     pub fn resolve(&self, reqs: &RequirementSet) -> Result<ResolvedCapabilitySet, ResolverError> {
         // 1. Check Planner Cache
@@ -141,7 +180,19 @@ impl CapabilityResolver {
         let mut instances = Vec::new();
         let mut visited = HashSet::new();
 
-        // 2. Resolve Required Capabilities
+        // 2. Resolve Version Constraints
+        for vc in &reqs.version_constraints {
+            let contract = self.resolve_version(vc)?;
+            if visited.insert(contract.id.clone()) {
+                graph.add_node(contract.clone());
+                instances.push(CapabilityInstance {
+                    contract,
+                    runtime_params: serde_json::json!({}),
+                });
+            }
+        }
+
+        // 3. Resolve Required Capabilities
         for req_id in &reqs.required_capabilities {
             let target_id = self.aliases.get(req_id).unwrap_or(req_id);
 
@@ -169,7 +220,7 @@ impl CapabilityResolver {
             }
         }
 
-        // 3. Resolve Optional Capabilities (Graceful Degradation)
+        // 4. Resolve Optional Capabilities (Graceful Degradation)
         for opt_id in &reqs.optional_capabilities {
             let target_id = self.aliases.get(opt_id).unwrap_or(opt_id);
             if let Some(contract) = self.registry.get(target_id) {
@@ -183,12 +234,12 @@ impl CapabilityResolver {
             }
         }
 
-        // 4. Validate Graph Invariants (Dependencies, Conflicts, Cycles)
+        // 5. Validate Graph Invariants (Dependencies, Conflicts, Cycles)
         graph.validate().map_err(ResolverError::GraphValidationFailed)?;
 
         let resolved = ResolvedCapabilitySet { graph, instances };
 
-        // 5. Store in Cache
+        // 6. Store in Cache
         self.cache.put(reqs.clone(), resolved.clone());
 
         Ok(resolved)
@@ -279,5 +330,79 @@ mod tests {
         let res2 = resolver.resolve(&reqs).unwrap(); // Cache hit
 
         assert_eq!(res2.instances.len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // SemVer resolution tests
+    // -----------------------------------------------------------------------
+
+    fn build_semver_registry() -> Arc<dyn CapabilityRegistry> {
+        let mut reg = InMemoryCapabilityRegistry::new();
+
+        for (ver_str, id_suffix) in &[
+            ("1.0.0", "v1.0.0"),
+            ("1.1.0", "v1.1.0"),
+            ("1.2.0", "v1.2.0"),
+            ("2.0.0", "v2.0.0"),
+        ] {
+            reg.register(CapabilityContract {
+                id: CapabilityId::new(&format!("echo.{}", id_suffix)),
+                version: semver::Version::parse(ver_str).unwrap(),
+                description: String::new(),
+                inputs_schema: json!({}),
+                outputs_schema: json!({}),
+                permissions: vec![],
+                dependencies: vec![],
+                estimated_cost_usd: 0.0,
+                estimated_latency_ms: 10,
+                reliability_score: 1.0,
+                supports_streaming: false,
+            }).unwrap();
+        }
+
+        reg.freeze();
+        Arc::new(reg)
+    }
+
+    #[test]
+    fn semver_resolves_caret() {
+        let registry = build_semver_registry();
+        let resolver = CapabilityResolver::new(registry);
+
+        let vc = VersionConstraint {
+            capability_prefix: "echo.v".into(),
+            requirement: semver::VersionReq::parse("^1.0").unwrap(),
+        };
+
+        let contract = resolver.resolve_version(&vc).unwrap();
+        assert_eq!(contract.version, semver::Version::new(1, 2, 0));
+    }
+
+    #[test]
+    fn semver_resolves_tilde() {
+        let registry = build_semver_registry();
+        let resolver = CapabilityResolver::new(registry);
+
+        let vc = VersionConstraint {
+            capability_prefix: "echo.v".into(),
+            requirement: semver::VersionReq::parse("~1.0").unwrap(),
+        };
+
+        let contract = resolver.resolve_version(&vc).unwrap();
+        assert_eq!(contract.version, semver::Version::new(1, 0, 0));
+    }
+
+    #[test]
+    fn semver_no_compatible_version_fails() {
+        let registry = build_semver_registry();
+        let resolver = CapabilityResolver::new(registry);
+
+        let vc = VersionConstraint {
+            capability_prefix: "echo.v".into(),
+            requirement: semver::VersionReq::parse("^3.0").unwrap(),
+        };
+
+        let err = resolver.resolve_version(&vc).unwrap_err();
+        assert!(matches!(err, ResolverError::NoCompatibleVersion { .. }));
     }
 }

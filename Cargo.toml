@@ -56,7 +56,7 @@ rand = "0.8"
 futures = "0.3"
 rusqlite = { version = "0.29", features = ["bundled"] }
 dotenv = "0.15"
-semver = "1.0"
+semver = { version = "1.0", features = ["serde"] }
 usearch = { version = "2", optional = true }
 wasmtime = { version = "47", optional = true, default-features = false, features = ["cranelift", "wat", "runtime", "std", "anyhow"] }
 petgraph = "0.8.3"
