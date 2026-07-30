@@ -61,11 +61,16 @@ usearch = { version = "2", optional = true }
 wasmtime = { version = "47", optional = true, default-features = false, features = ["cranelift", "wat", "runtime", "std", "anyhow"] }
 petgraph = "0.8.3"
 clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+tar = "0.4"
+ctrlc = "3"
+http = "0.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 fusion-plugin-echo = { path = "plugins/fusion-plugin-echo" }
 fusion-capability-sdk = { path = "crates/fusion-capability-sdk" }
+tempfile = "3"
 
 [[bench]]
 name = "compilation"

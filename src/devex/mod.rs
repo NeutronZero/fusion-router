@@ -1,7 +1,8 @@
 pub mod commands;
-pub mod visualizer;
-pub mod trace_inspector;
 pub mod scaffold;
+pub mod testing;
+pub mod trace_inspector;
+pub mod visualizer;
 
 #[allow(unused_imports)]
 pub use visualizer::GraphVisualizer;

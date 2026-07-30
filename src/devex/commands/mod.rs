@@ -1,2 +1,11 @@
+pub mod build;
+pub mod config_cmd;
+pub mod dev;
 pub mod features;
 pub mod gates;
+pub mod info;
+pub mod inspect;
+pub mod logs;
+pub mod new;
+pub mod publish;
+pub mod test;

@@ -186,7 +186,17 @@ mod tests {
 
     #[async_trait]
     impl CapabilityHostServices for MockHostServices {
+        async fn emit_event(&self, _event: crate::events::payload::ExecutionEvent) -> Result<(), crate::release::gate::GateError> {
+            Ok(())
+        }
         async fn log(&self, _level: tracing::Level, _message: &str) {}
+        async fn fetch_secret(&self, _secret_name: &str) -> Result<String, crate::release::gate::GateError> {
+            Err(crate::release::gate::GateError::PermissionDenied("mock denied".into()))
+        }
+        async fn http_request(&self, _req: reqwest::Request) -> Result<reqwest::Response, crate::release::gate::GateError> {
+            Err(crate::release::gate::GateError::PermissionDenied("mock denied".into()))
+        }
+        fn record_metric(&self, _name: &str, _value: f64) {}
     }
 
     struct MockTelemetryContext {

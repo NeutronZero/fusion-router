@@ -32,6 +32,44 @@ enum Commands {
     Features(FeaturesCmd),
     #[command(subcommand)]
     Trace(TraceCmd),
+    #[command(subcommand)]
+    Capability(CapabilityCmd),
+}
+
+#[derive(Subcommand)]
+enum CapabilityCmd {
+    New {
+        name: String,
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    Build {
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+        #[arg(long, default_value = "output")]
+        output_dir: PathBuf,
+    },
+    Test {
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    Publish {
+        pkg_path: PathBuf,
+        #[arg(long)]
+        registry: String,
+        #[arg(long)]
+        key: Option<String>,
+    },
+    Dev {
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+        #[arg(long, default_value_t = 3030)]
+        port: u16,
+    },
+    Inspect,
+    Info,
+    Logs,
+    Config,
 }
 
 #[derive(Subcommand)]
@@ -231,6 +269,45 @@ async fn main() {
                 }
             }
         },
+        Commands::Capability(cmd) => match cmd {
+            CapabilityCmd::New { name, path } => {
+                if let Err(e) = commands::new::execute_new(&name, &path) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            CapabilityCmd::Build { path, output_dir } => {
+                if let Err(e) = commands::build::execute_build(&path, &output_dir) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            CapabilityCmd::Test { path } => {
+                if let Err(e) = commands::test::execute_test(&path) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            CapabilityCmd::Publish { pkg_path, registry, key } => {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                if let Err(e) = rt.block_on(
+                    commands::publish::execute_publish(&pkg_path, &registry, key.as_deref())
+                ) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            CapabilityCmd::Dev { path, port } => {
+                if let Err(e) = commands::dev::execute_dev(&path, port) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            CapabilityCmd::Inspect => commands::inspect::execute_inspect(),
+            CapabilityCmd::Info => commands::info::execute_info(),
+            CapabilityCmd::Logs => commands::logs::execute_logs(),
+            CapabilityCmd::Config => commands::config_cmd::execute_config(),
+        },
     }
 }
 
@@ -299,5 +376,51 @@ mod tests {
         } else {
             panic!("expected TraceCmd::Events");
         }
+    }
+
+    #[test]
+    fn test_cli_help_contains_capability() {
+        let mut cmd = Cli::command();
+        let help = cmd.render_help().to_string();
+        assert!(help.contains("capability"));
+    }
+
+    #[test]
+    fn test_parse_capability_new() {
+        let cli = Cli::try_parse_from(&["fusion", "capability", "new", "my-cap"]).unwrap();
+        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::New { .. })));
+    }
+
+    #[test]
+    fn test_parse_capability_build() {
+        let cli = Cli::try_parse_from(&["fusion", "capability", "build"]).unwrap();
+        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Build { .. })));
+    }
+
+    #[test]
+    fn test_parse_capability_test() {
+        let cli = Cli::try_parse_from(&["fusion", "capability", "test"]).unwrap();
+        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Test { .. })));
+    }
+
+    #[test]
+    fn test_parse_capability_publish() {
+        let cli = Cli::try_parse_from(&[
+            "fusion", "capability", "publish", "pkg.fusionpkg",
+            "--registry", "http://localhost",
+        ]).unwrap();
+        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Publish { .. })));
+    }
+
+    #[test]
+    fn test_parse_capability_dev() {
+        let cli = Cli::try_parse_from(&["fusion", "capability", "dev"]).unwrap();
+        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Dev { .. })));
+    }
+
+    #[test]
+    fn test_parse_capability_inspect() {
+        let cli = Cli::try_parse_from(&["fusion", "capability", "inspect"]).unwrap();
+        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Inspect)));
     }
 }

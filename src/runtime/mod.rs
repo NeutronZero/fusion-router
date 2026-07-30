@@ -1,12 +1,17 @@
 pub mod config;
 pub mod context;
 pub mod host_services;
+pub mod policy;
 pub mod sandbox_instance;
 pub mod sandbox_runtime;
 pub mod telemetry_context;
 
 #[cfg(feature = "wasm-plugins")]
+pub mod linker;
+#[cfg(feature = "wasm-plugins")]
 pub mod module_cache;
+#[cfg(feature = "wasm-plugins")]
+pub mod wasmtime_host;
 #[cfg(feature = "wasm-plugins")]
 pub mod wasmtime_runtime;
 
@@ -42,12 +47,17 @@ impl std::error::Error for RuntimeError {}
 pub use config::SandboxConfig;
 pub use context::RuntimeContext;
 pub use host_services::CapabilityHostServices;
+pub use policy::{check_http_access, check_secret_access};
 pub use sandbox_instance::SandboxInstance;
 pub use sandbox_runtime::SandboxRuntime;
 pub use telemetry_context::TelemetryContext;
 
 #[cfg(feature = "wasm-plugins")]
+pub use linker::configure_linker;
+#[cfg(feature = "wasm-plugins")]
 pub use module_cache::RuntimeModuleCache;
+#[cfg(feature = "wasm-plugins")]
+pub use wasmtime_host::WasmtimeCapabilityHost;
 #[cfg(feature = "wasm-plugins")]
 pub use wasmtime_runtime::WasmtimeSandboxRuntime;
 

@@ -118,6 +118,8 @@ pub enum GateError {
     ExecutionFailed(String),
     #[error("Required tool not available: {0}")]
     ToolNotAvailable(String),
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
 }
 
 #[derive(Debug, Clone)]
