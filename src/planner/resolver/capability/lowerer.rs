@@ -45,8 +45,23 @@ impl CapabilityGraphLowerer {
 
         let mut id_map: HashMap<CapabilityId, Uuid> = HashMap::new();
         let mut nodes = Vec::new();
+        // Compute DAG depth via DP on topological order
+        let mut depths: HashMap<CapabilityId, u32> = HashMap::new();
+        for cap_id in &order {
+            let mut d = 1u32;
+            for dep in cap_graph.dependencies() {
+                if dep.from == *cap_id {
+                    if let Some(&pred_depth) = depths.get(&dep.to) {
+                        d = d.max(1 + pred_depth);
+                    }
+                }
+            }
+            depths.insert(cap_id.clone(), d);
+        }
+        let max_depth = depths.values().max().copied().unwrap_or(0);
+
         let mut total_cost: u64 = 0;
-        let mut total_tokens: u64 = 0;
+        let total_tokens: u64 = 0;
 
         for cap_id in &order {
             let node_id = deterministic_uuid(cap_id);
@@ -54,7 +69,6 @@ impl CapabilityGraphLowerer {
 
             let node = cap_graph.get_node(cap_id).expect("node from topological sort must exist");
             total_cost += (node.contract.estimated_cost_usd * 1000.0) as u64;
-            total_tokens += node.contract.estimated_latency_ms;
 
             let mut config = std::collections::HashMap::new();
             config.insert("capability_id".into(), serde_json::json!(cap_id.as_str()));
@@ -94,8 +108,8 @@ impl CapabilityGraphLowerer {
             edges,
             metadata: GraphMetadata {
                 estimated_cost: (total_cost as f64) / 1000.0,
-                estimated_tokens: total_tokens,
-                max_depth: cap_graph.node_count() as u32,
+                estimated_tokens: 0,
+                max_depth,
                 node_count: cap_graph.node_count() as u32,
             },
             total_tokens,
