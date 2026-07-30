@@ -226,10 +226,37 @@ impl CapabilityResolver {
         Ok((result, dep_edges))
     }
 
+    fn apply_policy(&self, contract: &CapabilityContract, policy: &PolicyContext) -> Result<(), ResolverError> {
+        if policy.deny_list.contains(&contract.id) {
+            return Err(ResolverError::PolicyDenied {
+                capability: contract.id.clone(),
+                reason: "capability is in the deny list".into(),
+            });
+        }
+        if let Some(ref allow) = policy.allow_list {
+            if !allow.contains(&contract.id) {
+                return Err(ResolverError::PolicyDenied {
+                    capability: contract.id.clone(),
+                    reason: "capability is not in the allow list".into(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Resolves a `RequirementSet` into a `ResolvedCapabilitySet` with dependency graph checks.
     pub fn resolve(&self, reqs: &RequirementSet) -> Result<ResolvedCapabilitySet, ResolverError> {
         if let Some(cached) = self.cache.get(reqs) {
             return Ok(cached);
+        }
+
+        if let Some(ref policy) = reqs.policy {
+            for req_id in &reqs.required_capabilities {
+                let target_id = self.aliases.get(req_id).unwrap_or(req_id);
+                if let Some(contract) = self.registry.get(target_id) {
+                    self.apply_policy(contract, policy)?;
+                }
+            }
         }
 
         let mut instances = Vec::new();
@@ -576,5 +603,61 @@ mod tests {
         let reqs = RequirementSet::new(vec![CapabilityId::new("cap.broken")]);
         let err = resolver.resolve(&reqs).unwrap_err();
         assert!(matches!(err, ResolverError::UnresolvedDependency { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Policy constraint tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn deny_list_excludes_capability() {
+        let registry = build_test_registry();
+        let resolver = CapabilityResolver::new(registry);
+
+        let mut reqs = RequirementSet::new(vec![CapabilityId::new("echo.text")]);
+        reqs.policy = Some(PolicyContext {
+            environment: "test".into(),
+            allow_list: None,
+            deny_list: vec![CapabilityId::new("echo.text")],
+            release_profile: None,
+        });
+
+        let err = resolver.resolve(&reqs).unwrap_err();
+        assert!(matches!(err, ResolverError::PolicyDenied { .. }));
+    }
+
+    #[test]
+    fn allow_list_restricts_to_specific() {
+        let registry = build_test_registry();
+        let resolver = CapabilityResolver::new(registry);
+
+        let mut reqs = RequirementSet::new(vec![CapabilityId::new("echo.uppercase")]);
+        reqs.policy = Some(PolicyContext {
+            environment: "test".into(),
+            allow_list: Some(vec![CapabilityId::new("echo.text")]),
+            deny_list: vec![],
+            release_profile: None,
+        });
+
+        let err = resolver.resolve(&reqs).unwrap_err();
+        assert!(matches!(err, ResolverError::PolicyDenied { .. }));
+    }
+
+    #[test]
+    fn policy_pass_allows_resolution() {
+        let registry = build_test_registry();
+        let resolver = CapabilityResolver::new(registry);
+
+        let mut reqs = RequirementSet::new(vec![CapabilityId::new("echo.text")]);
+        reqs.policy = Some(PolicyContext {
+            environment: "test".into(),
+            allow_list: Some(vec![CapabilityId::new("echo.text")]),
+            deny_list: vec![],
+            release_profile: None,
+        });
+
+        let res = resolver.resolve(&reqs).unwrap();
+        assert_eq!(res.instances.len(), 1);
+        assert_eq!(res.instances[0].contract.id.as_str(), "echo.text");
     }
 }
