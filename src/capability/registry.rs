@@ -5,6 +5,7 @@ use fusion_plugin_api::{CapabilityContract, CapabilityId};
 
 /// Errors that can occur during registry operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RegistryError {
     DuplicateId(CapabilityId),
     Frozen,
@@ -96,6 +97,11 @@ impl CapabilityRegistry for InMemoryCapabilityRegistry {
         if self.contracts.contains_key(&contract.id) {
             return Err(RegistryError::DuplicateId(contract.id.clone()));
         }
+        for perm in &contract.permissions {
+            perm.validate().map_err(|e| {
+                RegistryError::InvalidContract(format!("invalid permission: {e}"))
+            })?;
+        }
         self.contracts.insert(contract.id.clone(), contract);
         Ok(())
     }
@@ -126,6 +132,7 @@ impl CapabilityRegistry for InMemoryCapabilityRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fusion_plugin_api::Permission;
 
     #[test]
     fn register_and_get() {
@@ -242,6 +249,27 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].id.as_str(), "a.first");
         assert_eq!(list[1].id.as_str(), "z.last");
+    }
+
+    #[test]
+    fn rejects_invalid_permissions() {
+        let mut reg = InMemoryCapabilityRegistry::new();
+        let contract = CapabilityContract {
+            id: CapabilityId::new("test.invalid"),
+            version: semver::Version::parse("0.1.0").unwrap(),
+            description: String::new(),
+            inputs_schema: serde_json::json!({}),
+            outputs_schema: serde_json::json!({}),
+            permissions: vec![Permission::Filesystem("".into())],
+            estimated_cost_usd: 0.0,
+            estimated_latency_ms: 0,
+            reliability_score: 1.0,
+            supports_streaming: false,
+        };
+        match reg.register(contract) {
+            Err(RegistryError::InvalidContract(_)) => {}
+            _ => panic!("expected InvalidContract error"),
+        }
     }
 
     #[test]
