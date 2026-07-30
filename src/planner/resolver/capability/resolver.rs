@@ -16,6 +16,7 @@ use super::graph::DependencyEdge;
 pub enum ResolverError {
     UnregisteredCapability(CapabilityId),
     NoCompatibleVersion { capability: String, requirement: String },
+    #[allow(dead_code)]
     AmbiguousResolution { capability: String, matches: Vec<CapabilityId> },
     UnresolvedDependency { capability: CapabilityId, dependency: CapabilityId },
     CircularDependency,
@@ -94,6 +95,7 @@ impl RequirementSet {
 /// Output of symbol resolution containing resolved contracts and instantiated runtime handles.
 #[derive(Debug, Clone)]
 pub struct ResolvedCapabilitySet {
+    #[allow(dead_code)]
     pub graph: CapabilityGraph,
     pub instances: Vec<CapabilityInstance>,
 }
@@ -438,7 +440,7 @@ mod tests {
             ("2.0.0", "v2.0.0"),
         ] {
             reg.register(CapabilityContract {
-                id: CapabilityId::new(&format!("echo.{}", id_suffix)),
+                id: CapabilityId::new(format!("echo.{}", id_suffix)),
                 version: semver::Version::parse(ver_str).unwrap(),
                 description: String::new(),
                 inputs_schema: json!({}),

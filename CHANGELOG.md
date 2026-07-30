@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **Sprint O2.5 integration verification** — full test suite (852+), clippy-clean on new code, no-default-features, determinism invariant confirmed, task 6 review issues resolved (max_depth = true DAG depth, tokens = 0 not latency)
 - **Capability Resolution Bridge (Sprint O2.5)** (`src/planner/resolver/capability/`)
   - SemVer resolution — extended `RequirementSet` with version constraints, resolver selects best compatible via `semver::VersionReq`
   - Dependency expansion — BFS transitive expansion of declared dependencies before graph construction
