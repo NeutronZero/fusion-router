@@ -2,12 +2,13 @@
 //!
 //! Symbol resolution for capabilities, matching intent requirements to frozen contracts.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use parking_lot::Mutex;
 use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityInstance};
 use crate::capability::CapabilityRegistry;
 use super::graph::CapabilityGraph;
+use super::graph::DependencyEdge;
 
 /// Errors that can occur during capability resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,38 +170,88 @@ impl CapabilityResolver {
         Ok(candidates[0].clone())
     }
 
+    /// BFS transitive dependency expansion before graph construction.
+    fn expand_dependencies(
+        &self,
+        contracts: &[CapabilityContract],
+    ) -> Result<(Vec<CapabilityContract>, Vec<DependencyEdge>), ResolverError> {
+        let mut result_map: HashMap<CapabilityId, CapabilityContract> = HashMap::new();
+        let mut dep_edges: Vec<DependencyEdge> = Vec::new();
+        let mut queue: VecDeque<CapabilityId> = VecDeque::new();
+
+        for c in contracts {
+            let id = c.id.clone();
+            result_map.insert(id.clone(), c.clone());
+            queue.push_back(id);
+        }
+
+        let mut in_flight: HashSet<CapabilityId> = queue.iter().cloned().collect();
+
+        while let Some(current_id) = queue.pop_front() {
+            let current = result_map.get(&current_id)
+                .ok_or_else(|| ResolverError::UnregisteredCapability(current_id.clone()))?;
+            let deps = current.dependencies.clone();
+
+            for dep_id in &deps {
+                if in_flight.contains(dep_id) {
+                    if let Some(dep_contract) = self.registry.get(dep_id) {
+                        if dep_contract.dependencies.contains(&current_id) {
+                            return Err(ResolverError::CircularDependency);
+                        }
+                    }
+                }
+
+                if !result_map.contains_key(dep_id) {
+                    let dep_contract = self.registry.get(dep_id).ok_or_else(|| {
+                        ResolverError::UnresolvedDependency {
+                            capability: current_id.clone(),
+                            dependency: dep_id.clone(),
+                        }
+                    })?;
+
+                    result_map.insert(dep_id.clone(), dep_contract.clone());
+                    queue.push_back(dep_id.clone());
+                    in_flight.insert(dep_id.clone());
+                }
+
+                dep_edges.push(DependencyEdge {
+                    from: current_id.clone(),
+                    to: dep_id.clone(),
+                });
+            }
+        }
+
+        let mut result: Vec<CapabilityContract> = result_map.into_values().collect();
+        result.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        Ok((result, dep_edges))
+    }
+
     /// Resolves a `RequirementSet` into a `ResolvedCapabilitySet` with dependency graph checks.
     pub fn resolve(&self, reqs: &RequirementSet) -> Result<ResolvedCapabilitySet, ResolverError> {
-        // 1. Check Planner Cache
         if let Some(cached) = self.cache.get(reqs) {
             return Ok(cached);
         }
 
-        let mut graph = CapabilityGraph::new();
         let mut instances = Vec::new();
         let mut visited = HashSet::new();
 
-        // 2. Resolve Version Constraints
+        // Resolve version-constrained requirements
         for vc in &reqs.version_constraints {
             let contract = self.resolve_version(vc)?;
             if visited.insert(contract.id.clone()) {
-                graph.add_node(contract.clone());
                 instances.push(CapabilityInstance {
-                    contract,
+                    contract: contract.clone(),
                     runtime_params: serde_json::json!({}),
                 });
             }
         }
 
-        // 3. Resolve Required Capabilities
+        // Resolve Required Capabilities (exact ID)
         for req_id in &reqs.required_capabilities {
             let target_id = self.aliases.get(req_id).unwrap_or(req_id);
-
             let contract = self.registry.get(target_id).ok_or_else(|| {
                 ResolverError::UnregisteredCapability(req_id.clone())
             })?;
-
-            // Check latency bound if specified
             if let Some(max_lat) = reqs.max_acceptable_latency_ms {
                 if contract.estimated_latency_ms > max_lat {
                     return Err(ResolverError::LatencyExceeded {
@@ -210,9 +261,7 @@ impl CapabilityResolver {
                     });
                 }
             }
-
             if visited.insert(contract.id.clone()) {
-                graph.add_node(contract.clone());
                 instances.push(CapabilityInstance {
                     contract: contract.clone(),
                     runtime_params: serde_json::json!({}),
@@ -220,12 +269,11 @@ impl CapabilityResolver {
             }
         }
 
-        // 4. Resolve Optional Capabilities (Graceful Degradation)
+        // Resolve Optional Capabilities
         for opt_id in &reqs.optional_capabilities {
             let target_id = self.aliases.get(opt_id).unwrap_or(opt_id);
             if let Some(contract) = self.registry.get(target_id) {
                 if visited.insert(contract.id.clone()) {
-                    graph.add_node(contract.clone());
                     instances.push(CapabilityInstance {
                         contract: contract.clone(),
                         runtime_params: serde_json::json!({}),
@@ -234,14 +282,31 @@ impl CapabilityResolver {
             }
         }
 
-        // 5. Validate Graph Invariants (Dependencies, Conflicts, Cycles)
-        graph.validate().map_err(ResolverError::GraphValidationFailed)?;
+        // Expand transitive dependencies
+        let resolved_contracts: Vec<CapabilityContract> = instances.iter().map(|i| i.contract.clone()).collect();
+        let (all_contracts, dep_edges) = self.expand_dependencies(&resolved_contracts)?;
 
-        let resolved = ResolvedCapabilitySet { graph, instances };
+        // Rebuild graph from expanded set
+        let mut graph = CapabilityGraph::new();
+        let mut final_instances = Vec::new();
+        let mut final_visited = HashSet::new();
+        for contract in &all_contracts {
+            if final_visited.insert(contract.id.clone()) {
+                graph.add_node(contract.clone());
+                final_instances.push(CapabilityInstance {
+                    contract: contract.clone(),
+                    runtime_params: serde_json::json!({}),
+                });
+            }
+        }
+        for edge in &dep_edges {
+            graph.add_dependency(edge.from.clone(), edge.to.clone());
+        }
 
-        // 6. Store in Cache
+        graph.validate().map_err(|e| ResolverError::GraphValidationFailed(e))?;
+
+        let resolved = ResolvedCapabilitySet { graph, instances: final_instances };
         self.cache.put(reqs.clone(), resolved.clone());
-
         Ok(resolved)
     }
 }
@@ -404,5 +469,112 @@ mod tests {
 
         let err = resolver.resolve_version(&vc).unwrap_err();
         assert!(matches!(err, ResolverError::NoCompatibleVersion { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Dependency expansion tests
+    // -----------------------------------------------------------------------
+
+    fn build_registry_with_deps() -> Arc<dyn CapabilityRegistry> {
+        let mut reg = InMemoryCapabilityRegistry::new();
+
+        reg.register(CapabilityContract {
+            id: CapabilityId::new("cap.shell"),
+            version: semver::Version::parse("0.1.0").unwrap(),
+            description: "Shell access".into(),
+            inputs_schema: json!({}),
+            outputs_schema: json!({}),
+            permissions: vec![],
+            dependencies: vec![],
+            estimated_cost_usd: 0.0,
+            estimated_latency_ms: 5,
+            reliability_score: 1.0,
+            supports_streaming: false,
+        }).unwrap();
+
+        reg.register(CapabilityContract {
+            id: CapabilityId::new("cap.filesystem"),
+            version: semver::Version::parse("0.1.0").unwrap(),
+            description: "Filesystem access".into(),
+            inputs_schema: json!({}),
+            outputs_schema: json!({}),
+            permissions: vec![],
+            dependencies: vec![CapabilityId::new("cap.shell")],
+            estimated_cost_usd: 0.0,
+            estimated_latency_ms: 10,
+            reliability_score: 1.0,
+            supports_streaming: false,
+        }).unwrap();
+
+        reg.register(CapabilityContract {
+            id: CapabilityId::new("cap.browser"),
+            version: semver::Version::parse("0.1.0").unwrap(),
+            description: "Browser access".into(),
+            inputs_schema: json!({}),
+            outputs_schema: json!({}),
+            permissions: vec![],
+            dependencies: vec![CapabilityId::new("cap.filesystem")],
+            estimated_cost_usd: 0.0,
+            estimated_latency_ms: 20,
+            reliability_score: 1.0,
+            supports_streaming: false,
+        }).unwrap();
+
+        reg.freeze();
+        Arc::new(reg)
+    }
+
+    #[test]
+    fn expands_transitive_dependencies() {
+        let registry = build_registry_with_deps();
+        let resolver = CapabilityResolver::new(registry);
+
+        let reqs = RequirementSet::new(vec![CapabilityId::new("cap.browser")]);
+        let res = resolver.resolve(&reqs).unwrap();
+
+        assert_eq!(res.instances.len(), 3);
+        let ids: Vec<&str> = res.instances.iter().map(|i| i.contract.id.as_str()).collect();
+        assert!(ids.contains(&"cap.browser"));
+        assert!(ids.contains(&"cap.filesystem"));
+        assert!(ids.contains(&"cap.shell"));
+    }
+
+    #[test]
+    fn deduplicates_dependencies() {
+        let registry = build_registry_with_deps();
+        let resolver = CapabilityResolver::new(registry);
+
+        let reqs = RequirementSet::new(vec![
+            CapabilityId::new("cap.browser"),
+            CapabilityId::new("cap.filesystem"),
+        ]);
+        let res = resolver.resolve(&reqs).unwrap();
+
+        assert_eq!(res.instances.len(), 3);
+    }
+
+    #[test]
+    fn unresolved_dependency_fails() {
+        let mut reg = InMemoryCapabilityRegistry::new();
+        reg.register(CapabilityContract {
+            id: CapabilityId::new("cap.broken"),
+            version: semver::Version::parse("0.1.0").unwrap(),
+            description: "Broken cap".into(),
+            inputs_schema: json!({}),
+            outputs_schema: json!({}),
+            permissions: vec![],
+            dependencies: vec![CapabilityId::new("cap.missing")],
+            estimated_cost_usd: 0.0,
+            estimated_latency_ms: 10,
+            reliability_score: 1.0,
+            supports_streaming: false,
+        }).unwrap();
+        reg.freeze();
+        let registry: Arc<dyn CapabilityRegistry> = Arc::new(reg);
+        let resolver = CapabilityResolver::new(registry);
+
+        let reqs = RequirementSet::new(vec![CapabilityId::new("cap.broken")]);
+        let err = resolver.resolve(&reqs).unwrap_err();
+        assert!(matches!(err, ResolverError::UnresolvedDependency { .. }));
     }
 }
