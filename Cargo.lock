@@ -1062,6 +1062,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fusion-ir"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "uuid",
+]
+
+[[package]]
 name = "fusion-plugin-api"
 version = "0.1.0"
 dependencies = [
@@ -1100,6 +1110,7 @@ dependencies = [
  "dotenv",
  "flate2",
  "fusion-capability-sdk",
+ "fusion-ir",
  "fusion-plugin-api",
  "fusion-plugin-echo",
  "futures",
