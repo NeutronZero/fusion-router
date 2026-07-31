@@ -1,12 +1,29 @@
 # FusionRouter Overview
 
-**Version:** 0.12.0
+**Version:** 0.13.0
 **License:** MIT OR Apache-2.0
 **Language:** Rust (2021 edition)
 
 ## Project Vision
 
 FusionRouter is an **AI Execution Compiler and Runtime** — an LLM orchestration operating system, event-driven runtime, and release-governed capability platform. It compiles high-level intents into executable DAGs and manages their full lifecycle.
+
+## Frozen v0.13 Architecture
+
+The v0.13.0 architecture is frozen. Six stable contracts define the system:
+
+| Contract | Location |
+|----------|----------|
+| NormalizedIntent | `src/intent/` |
+| WorkflowIR | `src/ir/` |
+| ExecutionAbi | `src/abi/` |
+| ExecutionTarget | `src/target/` |
+| ExecutionRuntimeInterface | `src/eri/` |
+| CapabilityRegistry + CapabilityTrait | `src/capability/`, `crates/fusion-plugin-api` |
+
+All new development integrates through these contracts (ADR-033). The v0.12
+planner→compiler→scheduler→executor pipeline remains functional; reconciling
+it to the frozen contracts is v0.14 boundary work.
 
 ## System Pipeline
 

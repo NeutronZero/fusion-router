@@ -1,22 +1,20 @@
 # FusionRouter Roadmap
 
-## Current: v0.12.0 — Capability Platform
+## Current: v0.13.0 (Architecture Freeze)
 
-### Delivered
-- Capability Registry immutable architecture (ADR-021)
-- Capability Resolution with dependency graph (ADR-023)
-- Capability SDK with macros and builder API
-- Policy compilation pass (ADR-024)
-- Connector abstraction late-binding (ADR-025)
-- Execution session stores (Memory, SQLite) (ADR-026)
-- Capability contract evolution with SemVer (ADR-028)
-- Capability Binary Interface (`.fusionpkg`)
-- Capability Host Interface (WASM host services)
-- Capability Runtime (`SandboxRuntime`, `WasmtimeSandboxRuntime`, `RuntimeModuleCache`)
-- Package Platform (`.fusionpkg` verify/load/registry)
-- Developer Platform (`fusion new/build/test/publish/dev`)
-- Operations Platform (`/v1/operations/*` REST API)
-- Certification and ecosystem tooling
+- Six core abstractions frozen: NormalizedIntent, WorkflowIR, ExecutionAbi, ExecutionTarget, ERI, CapabilityRegistry (ADR-033)
+- Architecture specification published: `docs/specifications/architecture-v0.13.md`
+- Execution ABI defined separately from compiler-internal PrimitiveGraph (ADR-032)
+- Capability traits added to the capability contract (`CapabilityTrait`)
+- Reconciliation design: `docs/superpowers/specs/2026-07-30-v0.13-reconciliation-design.md`
+
+## Next: v0.14.0 — Compiler Core
+
+- Workflow IR implementation
+- Execution ABI v1
+- Compiler pass framework
+- Capability registry
+- Local runtime
 
 ## v0.9.0 — Foundation
 

@@ -6,10 +6,14 @@
 
 ## A
 
+**AbiConstraints** — `src/abi/mod.rs` — ExecutionAbi node constraints
+**AbiEdgeKind** — `src/abi/mod.rs` — ABI edge kinds (Sequential, Parallel, Conditional, Retry, Merge, Loop)
+**AbiRetryPolicy** — `src/abi/mod.rs` — ABI node retry policy
 **AuditLog** — `src/telemetry/audit.rs` — Structured audit logging for security events
 
 ## B
 
+**Budget** — `src/intent/mod.rs` — NormalizedIntent budget constraints
 **BroadcastEventBus** — `src/events/bus.rs` — In-memory broadcast event bus implementation
 **BudgetEnvelope** — `src/resource/budget.rs` — Token/time budget enforcement
 **BudgetOptimisation** — `src/compiler/passes/legacy_passes.rs` — Budget application compiler pass
@@ -17,6 +21,7 @@
 ## C
 
 **CancellingStream** — `src/resource/cancelling_stream.rs` — Safe stream cancellation
+**CachePolicy** — `src/abi/mod.rs` — ABI node cache policy
 **CapabilityBuilder** — `crates/fusion-capability-sdk/src/builder.rs` — Builder for capability construction
 **CapabilityContract** — `crates/fusion-plugin-api/src/lib.rs` — Declarative capability ABI contract
 **CapabilityExecutor** (trait) — `crates/fusion-plugin-api/src/lib.rs` — Capability execution trait
@@ -29,6 +34,7 @@
 **CapabilityPlugin** (trait) — `crates/fusion-plugin-api/src/lib.rs` — Capability declaration trait
 **CapabilityRegistry** — `src/capability/registry.rs` — Immutable capability registry (frozen after startup)
 **CapabilityResolver** — `src/planner/resolver/capability/resolver.rs` — Resolves abstract capability references
+**CapabilityTrait** — `crates/fusion-plugin-api/src/lib.rs` — Capability semantic traits (Streaming, LongContext, ...)
 **CheckpointEngine** — `src/session/checkpoint.rs` — Session snapshot creation at intervals
 **CircuitBreaker** — `src/providers/circuit_breaker.rs` — 3-state provider circuit breaker
 **CircuitBreakingProvider** — `src/providers/circuit_breaking_provider.rs` — Provider wrapper with circuit breaking
@@ -38,6 +44,7 @@
 **ConnectorHealth** — `src/scheduler/connector_health.rs` — Connector health monitoring
 **ConnectorSubscriber** — `src/scheduler/connector_subscriber.rs` — Connector event subscription
 **ConstraintValidation** — `src/compiler/passes/legacy_passes.rs` — WorkflowIR structural validation pass
+**Constraints** — `src/intent/mod.rs` — NormalizedIntent constraints
 **ContextAssembler** — `src/context/assembler.rs` — ContextSnapshot construction
 **ContextSnapshot** — `src/types/execution_context.rs` — Assembled execution context
 
@@ -53,13 +60,22 @@
 ## E
 
 **EventBus** (trait) — `src/events/mod.rs` — Runtime event stream interface
+**EriError** — `src/eri/mod.rs` — ERI error type
+**EvaluationPolicy** — `src/abi/mod.rs` — ABI node evaluation policy
 **EvidenceRepository** (trait) — `src/telemetry/mod.rs` — Evidence storage interface
+**ExecutionAbi** — `src/abi/mod.rs` — Frozen executable workflow contract (v0.13)
+**ExecutionAbiNode** — `src/abi/mod.rs` — ABI execution node contract
+**ExecutionAbiResult** — `src/eri/mod.rs` — ERI execution result
+**ExecutionEnvironment** — `src/target/mod.rs` — Runtime placement environments
 **ExecutionError** — `crates/fusion-plugin-api/src/lib.rs` — Structured execution error
 **ExecutionEventEnvelope** — `src/events/payload.rs` — Immutable runtime event envelope
 **ExecutionGraph** — `src/types/execution.rs` — Compiled executable DAG
 **ExecutionResult** — `crates/fusion-plugin-api/src/lib.rs` — Standardized execution output
+**ExecutionRuntimeInterface** — `src/eri/mod.rs` — Runtime execution contract trait (v0.13)
 **ExecutionRequest** — `src/trigger/types.rs` — Canonical execution request
 **ExecutionSession** — `src/session/types.rs` — Execution identity container
+**ExecutionState** — `src/eri/mod.rs` — Nine-state execution model
+**ExecutionTarget** — `src/target/mod.rs` — Provider-independent placement contract (v0.13)
 **Executor** (trait) — `src/executor/mod.rs` — Core executor interface
 
 ## F
@@ -77,6 +93,7 @@
 ## I
 
 **IntentPlanner** — `src/planner/intent_planner.rs` — Entry-point planner delegating to sub-planners
+**IntentKind** — `src/intent/mod.rs` — NormalizedIntent classification
 
 ## L
 
@@ -89,16 +106,21 @@
 
 ## N
 
+**NetworkConstraints** — `src/target/mod.rs` — Target egress constraints
 **NodeFusion** — `src/compiler/passes/legacy_passes.rs` — Node merging optimization pass
+**NormalizedIntent** — `src/intent/mod.rs` — Canonical goals and constraints (v0.13)
 
 ## O
 
 **OllamaModel** — `src/providers/ollama_model.rs` — Ollama model adapter
 **OpenRouterModel** — `src/providers/openrouter_model.rs` — OpenRouter model adapter
+**OperationError** — `src/operations/mod.rs` — Operations platform error type
 
 ## P
 
 **PassRegistry** — `src/compiler/registry/mod.rs` — Compiler pass registry
+**PackageLoader** — `src/package/loader.rs` — WASM compilation and contract registration
+**PackageVerifier** — `src/package/verifier.rs` — .fusionpkg structural and attestation verification
 **Permission** (enum) — `crates/fusion-plugin-api/src/lib.rs` — 5 permission variants with scoping
 **Planner** (trait) — `src/planner/mod.rs` — Core planner interface
 **Plugin** (trait) — `crates/fusion-plugin-api/src/lib.rs` — Plugin identity trait
@@ -115,18 +137,28 @@
 
 ## R
 
+**ReasoningBudget** — `src/abi/mod.rs` — ABI node reasoning budget
 **ReplayEngine** — `src/session/replay.rs` — 3-mode execution replay
 **RequirementsExtractor** — `src/requirements/extractor.rs` — Intent classification
 **ResourceGuard** — `src/resource/guard.rs` — RAII resource cleanup
+**ResourceLimits** — `src/target/mod.rs` — Target resource limits
 **ResourceManager** — `src/resource/mod.rs` — Central resource tracking
 **RetryFallbackInsertion** — `src/compiler/passes/legacy_passes.rs` — Retry/fallback pass
 **RouterError** — `src/types/error.rs` — Centralized error type with PipelineStage
+**RuntimeError** — `src/runtime/mod.rs` — Capability runtime error type
+**RuntimeModuleCache** — `src/runtime/module_cache.rs` — Compiled module cache
 
 ## S
 
+**SandboxConfig** — `src/runtime/config.rs` — Sandbox memory/fuel/timeout limits
+**SandboxInstance** — `src/runtime/sandbox_instance.rs` — Ephemeral sandbox instance trait
+**SandboxRuntime** — `src/runtime/sandbox_runtime.rs` — Sandbox instantiation trait
 **Scheduler** (trait) — `src/scheduler/mod.rs` — Core scheduler interface
+**SchedulerKind** — `src/target/mod.rs` — Preferred scheduler enumeration
 **SchemaBuilder** — `crates/fusion-capability-sdk/src/schema.rs` — JSON Schema builder
 **SchedulingHints** — `src/compiler/passes/legacy_passes.rs` — Scheduling annotation pass
+**SecurityPolicy** — `src/abi/mod.rs` — ABI node security policy
+**SecurityProfile** — `src/target/mod.rs` — Target security profile
 **SessionSnapshot** — `src/session/types.rs` — Point-in-time execution state
 **SessionStore** (trait) — `src/session/store/mod.rs` — Session persistence interface
 **SimplePlanner** — `src/planner/simple.rs` — Default single-node planner
@@ -141,12 +173,17 @@
 **ToolRegistry** — `src/tools/registry.rs` — Tool registration
 **TraceInspector** — `src/devex/trace_inspector.rs` — Execution trace debugger
 **Transport** (trait) — `src/transport/mod.rs` — Wire protocol interface
+**TelemetryHook** — `src/abi/mod.rs` — ABI node telemetry hook
 **TriggerTrace** — `src/trigger/trace.rs` — Execution provenance chain
 
 ## W
 
+**WasmtimeSandboxRuntime** — `src/runtime/wasmtime_runtime.rs` — Wasmtime concrete runtime
 **WorkflowDefinition** — `src/workflow/mod.rs` — YAML workflow template
+**WorkflowEdgeKind** — `src/ir/workflow.rs` — Workflow edge kinds (Sequential, Parallel, Conditional, Retry, Merge, Loop)
 **WorkflowIR** — `src/types/execution.rs` — High-level abstract plan
+**WorkflowIR** (v0.13 contract) — `src/ir/workflow.rs` — Canonical provider-free workflow (v0.13)
+**WorkflowNodeKind** — `src/ir/workflow.rs` — Nine workflow node kinds
 **WorkflowPlanner** — `src/planner/workflow.rs` — Registry-first planner
 **WorkflowRegistry** — `src/workflow/registry.rs` — YAML workflow loader
 **WorkQueue** — `src/scheduler/work_queue.rs` — Topological DAG scheduling queue

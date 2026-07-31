@@ -176,7 +176,7 @@ No layer reaches backward
 ## File System Layout
 
 ```
-Cargo.toml ─── workspace root (fusion-router v0.12.0)
+Cargo.toml ─── workspace root (fusion-router v0.13.0)
 src/ ───────── 125+ files across 33 modules
 crates/ ────── 3 SDK crates
 plugins/ ───── example plugins
