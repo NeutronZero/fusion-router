@@ -13,6 +13,7 @@ pub mod resource;
 pub mod telemetry;
 pub mod types;
 pub mod intent;
+pub mod ir;
 pub mod config;
 pub mod plugin;
 pub mod capability;
