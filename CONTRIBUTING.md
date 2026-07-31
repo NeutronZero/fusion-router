@@ -9,3 +9,4 @@
 5. **Serialization tests** — All IR and graph types implement `Serialize`/`Deserialize` and are tested for round-trip stability.
 6. **Golden tests** — Compiler outputs are tested against stored golden files.
 7. **Deterministic compilation** — Given the same IR and config, the compiler must always produce the same graph.
+8. **Architecture changes update .memory/** — Source code is the implementation. `.memory/` is the architectural contract. They evolve together. Run `python scripts/check-memory.py` before committing any architecture change.

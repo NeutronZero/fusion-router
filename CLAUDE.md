@@ -1,5 +1,37 @@
 # FusionRouter Rules & Guidelines
 
+## 🏛️ Architecture Memory
+
+This repository has a curated architecture handbook in `.memory/`. Always read it before exploring source code.
+
+### Session Bootstrap (read these first)
+1. `.memory/architecture-map.md` — one-page system pipeline map
+2. `.memory/overview.md` — project vision, module catalog, invariants
+3. `.memory/editing-guide.md` — edit boundaries, common tasks, safety rules
+
+### Consult on Demand
+- `.memory/architecture.md` — full system design, invariants, data flow
+- `.memory/compiler.md` — compiler passes, IR, optimization
+- `.memory/runtime.md` — DAG execution, node model, scheduling
+- `.memory/planner.md` — planner types, WorkflowIR generation
+- `.memory/capability-system.md` — capability registry, SDK, plugin API
+- `.memory/execution.md` — execution model, sessions, replay
+- `.memory/providers.md` — provider abstraction, transports, adapters
+- `.memory/scheduler.md` — scheduler, work queue, distributed
+- `.memory/policies.md` — policy compilation, release gates, attestation
+- `.memory/telemetry.md` — events, metrics, tracing, audit
+- `.memory/plugin-system.md` — extension points, WASM, ABI
+- `.memory/roadmap.md` — version milestones
+- `.memory/glossary.md` — terminology
+- `.memory/adrs.md` — ADR index
+- `.memory/module-index.md` — component directory
+
+### Validation
+- Architecture changes are incomplete until `.memory/` is updated.
+- Run `python scripts/check-memory.py` before committing architecture changes.
+
+---
+
 ## 🛠️ Build & Test Commands
 - **Check code**: `cargo check`
 - **Run default tests**: `cargo test`
