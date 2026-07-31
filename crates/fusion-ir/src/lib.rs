@@ -28,13 +28,16 @@
 
 mod builder;
 mod edge;
+mod error;
 mod node;
+mod serialize;
 mod validate;
 mod version;
 mod workflow;
 
 pub use builder::WorkflowBuilder;
 pub use edge::{WorkflowEdge, WorkflowEdgeKind};
+pub use error::WorkflowIrError;
 pub use node::{WorkflowNode, WorkflowNodeKind};
 pub use validate::{ValidationError, ValidationIssue, ValidationReport};
 pub use version::WORKFLOW_IR_VERSION;

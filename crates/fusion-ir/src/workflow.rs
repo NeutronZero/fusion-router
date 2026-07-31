@@ -51,11 +51,23 @@ impl WorkflowIR {
     }
 }
 
+impl WorkflowIR {
+    pub fn to_canonical_json(&self) -> Result<String, crate::error::WorkflowIrError> {
+        crate::serialize::to_canonical_json(self)
+    }
+
+    pub fn from_json(s: &str) -> Result<WorkflowIR, crate::error::WorkflowIrError> {
+        crate::serialize::from_json(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::edge::WorkflowEdgeKind;
+    use crate::error::WorkflowIrError;
     use crate::node::WorkflowNodeKind;
+    use crate::validate::ValidationError;
     use std::collections::BTreeMap;
 
     fn sample() -> WorkflowIR {
@@ -108,5 +120,78 @@ mod tests {
     fn ir_rejects_provider_fields_at_serde_level() {
         let json = r#"{"version":1,"workflow_id":"00000000-0000-0000-0000-000000000000","nodes":[],"edges":[],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0},"provider":"openai"}"#;
         assert!(serde_json::from_str::<WorkflowIR>(json).is_err());
+    }
+
+    #[test]
+    fn workflow_ir_is_deterministic() {
+        let first = crate::builder::WorkflowBuilder::new()
+            .with_workflow_id(Uuid::from_u128(42))
+            .task("n1", "CodeGeneration")
+            .unwrap()
+            .output("n2")
+            .unwrap()
+            .sequential("n1", "n2")
+            .unwrap()
+            .build()
+            .unwrap();
+        let second = crate::builder::WorkflowBuilder::new()
+            .with_workflow_id(Uuid::from_u128(42))
+            .output("n2")
+            .unwrap()
+            .task("n1", "CodeGeneration")
+            .unwrap()
+            .sequential("n1", "n2")
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(first.to_canonical_json().unwrap(), second.to_canonical_json().unwrap());
+    }
+
+    #[test]
+    fn workflow_ir_round_trip_is_lossless() {
+        let mut ir = sample();
+        ir.metadata.estimated_cost = 0.0123456789;
+        ir.metadata.estimated_tokens = 500;
+        let json = ir.to_canonical_json().unwrap();
+        let back = WorkflowIR::from_json(&json).unwrap();
+        assert_eq!(back.to_canonical_json().unwrap(), json);
+    }
+
+    #[test]
+    fn workflow_id_stable_across_round_trip() {
+        let ir = sample();
+        let back = WorkflowIR::from_json(&ir.to_canonical_json().unwrap()).unwrap();
+        assert_eq!(back.workflow_id, ir.workflow_id);
+    }
+
+    #[test]
+    fn canonical_json_sorts_nodes_by_id() {
+        let ir = crate::builder::WorkflowBuilder::new()
+            .with_workflow_id(Uuid::from_u128(42))
+            .task("n2", "A")
+            .unwrap()
+            .output("n1")
+            .unwrap()
+            .sequential("n2", "n1")
+            .unwrap()
+            .build()
+            .unwrap();
+        let json = ir.to_canonical_json().unwrap();
+        assert!(json.find("\"n1\"").unwrap() < json.find("\"n2\"").unwrap());
+    }
+
+    #[test]
+    fn from_json_rejects_wrong_version() {
+        let mut ir = sample();
+        ir.version = 99;
+        let json = serde_json::to_string(&ir).unwrap();
+        let err = WorkflowIR::from_json(&json).unwrap_err();
+        assert!(matches!(err, WorkflowIrError::Validation(ValidationError::VersionMismatch(99, WORKFLOW_IR_VERSION))));
+    }
+
+    #[test]
+    fn from_json_rejects_invalid_workflow() {
+        let json = r#"{"version":1,"workflow_id":"00000000-0000-0000-0000-000000000000","nodes":[{"id":"a","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"a","to":"a","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#;
+        assert!(WorkflowIR::from_json(json).is_err());
     }
 }
