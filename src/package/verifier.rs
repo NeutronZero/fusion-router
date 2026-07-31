@@ -103,6 +103,7 @@ mod tests {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         let pkg_bytes = crate::package::format::build_test_fusionpkg(
             "test.cap", "0.1.0", &[contract], &[],
@@ -158,6 +159,7 @@ mod tests {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         let pkg_bytes = crate::package::format::build_test_fusionpkg(
             "test.verify", "0.1.0", &[contract], &["Network".into()],

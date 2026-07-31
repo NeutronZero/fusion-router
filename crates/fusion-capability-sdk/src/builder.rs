@@ -1,4 +1,4 @@
-use fusion_plugin_api::{CapabilityContract, CapabilityId, Permission};
+use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityTrait, Permission};
 use semver::Version;
 use serde_json::Value;
 
@@ -15,6 +15,7 @@ pub struct CapabilityBuilder {
     estimated_latency_ms: u64,
     reliability_score: f32,
     supports_streaming: bool,
+    traits: Vec<CapabilityTrait>,
 }
 
 impl CapabilityBuilder {
@@ -31,6 +32,7 @@ impl CapabilityBuilder {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: Vec::new(),
         }
     }
 
@@ -79,6 +81,11 @@ impl CapabilityBuilder {
         self
     }
 
+    pub fn trait_(mut self, trait_: CapabilityTrait) -> Self {
+        self.traits.push(trait_);
+        self
+    }
+
     pub fn finish(self) -> CapabilityContract {
         CapabilityContract {
             id: CapabilityId::new(self.id),
@@ -92,6 +99,7 @@ impl CapabilityBuilder {
             estimated_latency_ms: self.estimated_latency_ms,
             reliability_score: self.reliability_score,
             supports_streaming: self.supports_streaming,
+            traits: self.traits,
         }
     }
 }

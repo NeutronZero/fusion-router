@@ -36,6 +36,7 @@ impl CapabilityPlugin for McpPlugin {
             estimated_latency_ms: 200,
             reliability_score: 0.99,
             supports_streaming: false,
+            traits: vec![],
         }]
     }
 }

@@ -36,6 +36,7 @@ impl CapabilityPlugin for FilesystemPlugin {
             estimated_latency_ms: 5,
             reliability_score: 0.999,
             supports_streaming: false,
+            traits: vec![],
         }]
     }
 }

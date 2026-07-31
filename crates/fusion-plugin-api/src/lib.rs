@@ -94,6 +94,17 @@ impl std::str::FromStr for Permission {
     }
 }
 
+/// Semantic execution traits advertised by capabilities (v0.13 contract 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CapabilityTrait {
+    Streaming,
+    LongContext,
+    StructuredOutput,
+    LowLatency,
+    DeterministicOutput,
+    ComputerUse,
+}
+
 /// Metadata declared by a plugin for version compatibility checks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginMetadata {
@@ -118,6 +129,8 @@ pub struct CapabilityContract {
     pub estimated_latency_ms: u64,
     pub reliability_score: f32,
     pub supports_streaming: bool,
+    #[serde(default)]
+    pub traits: Vec<CapabilityTrait>,
 }
 
 /// Bound runtime execution object pairing a `CapabilityContract` with runtime execution contexts.
@@ -259,12 +272,37 @@ mod tests {
             inputs_schema: serde_json::json!({}),
             outputs_schema: serde_json::json!({}),
             permissions: vec![Permission::Network, Permission::Http("https://example.com".into())],
+            dependencies: vec![],
             estimated_cost_usd: 0.0,
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         assert_eq!(contract.permissions.len(), 2);
         assert!(matches!(contract.permissions[0], Permission::Network));
+    }
+
+    #[test]
+    fn capability_trait_serde_round_trip() {
+        for trait_ in [
+            CapabilityTrait::Streaming,
+            CapabilityTrait::LongContext,
+            CapabilityTrait::StructuredOutput,
+            CapabilityTrait::LowLatency,
+            CapabilityTrait::DeterministicOutput,
+            CapabilityTrait::ComputerUse,
+        ] {
+            let json = serde_json::to_string(&trait_).unwrap();
+            let back: CapabilityTrait = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, trait_);
+        }
+    }
+
+    #[test]
+    fn contract_defaults_traits_to_empty() {
+        let json = r#"{"id":"x.cap","version":"1.0.0","description":"d","inputs_schema":{},"outputs_schema":{},"permissions":[],"dependencies":[],"estimated_cost_usd":0.0,"estimated_latency_ms":0,"reliability_score":1.0,"supports_streaming":false}"#;
+        let contract: CapabilityContract = serde_json::from_str(json).unwrap();
+        assert!(contract.traits.is_empty());
     }
 }

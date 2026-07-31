@@ -361,6 +361,7 @@ mod tests {
             estimated_latency_ms: 10,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         }).unwrap();
 
         reg.register(CapabilityContract {
@@ -375,6 +376,7 @@ mod tests {
             estimated_latency_ms: 50,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         }).unwrap();
 
         reg.freeze();
@@ -451,6 +453,7 @@ mod tests {
                 estimated_latency_ms: 10,
                 reliability_score: 1.0,
                 supports_streaming: false,
+                traits: vec![],
             }).unwrap();
         }
 
@@ -519,6 +522,7 @@ mod tests {
             estimated_latency_ms: 5,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         }).unwrap();
 
         reg.register(CapabilityContract {
@@ -533,6 +537,7 @@ mod tests {
             estimated_latency_ms: 10,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         }).unwrap();
 
         reg.register(CapabilityContract {
@@ -547,6 +552,7 @@ mod tests {
             estimated_latency_ms: 20,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         }).unwrap();
 
         reg.freeze();
@@ -597,6 +603,7 @@ mod tests {
             estimated_latency_ms: 10,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         }).unwrap();
         reg.freeze();
         let registry: Arc<dyn CapabilityRegistry> = Arc::new(reg);

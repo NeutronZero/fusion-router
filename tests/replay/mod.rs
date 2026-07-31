@@ -23,6 +23,7 @@ async fn test_replay_validation_from_checkpoint() {
             estimated_latency_ms: 1,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         },
         runtime_params: json!({}),
     };

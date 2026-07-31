@@ -36,6 +36,7 @@ impl CapabilityPlugin for GitHubPlugin {
             estimated_latency_ms: 100,
             reliability_score: 0.95,
             supports_streaming: false,
+            traits: vec![],
         }]
     }
 }

@@ -30,6 +30,7 @@ fn create_sample_ctx() -> ExecutionContext {
             estimated_latency_ms: 1,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         },
         runtime_params: json!({}),
     };

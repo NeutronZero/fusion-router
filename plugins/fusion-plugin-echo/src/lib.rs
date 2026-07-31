@@ -57,10 +57,11 @@ impl CapabilityPlugin for EchoPlugin {
                 }),
             permissions: vec![],
             dependencies: vec![],
-            estimated_cost_usd: 0.0,
+                estimated_cost_usd: 0.0,
                 estimated_latency_ms: 1,
                 reliability_score: 1.0,
                 supports_streaming: false,
+                traits: vec![],
             },
             CapabilityContract {
                 id: CapabilityId::new("echo.uppercase"),
@@ -81,10 +82,11 @@ impl CapabilityPlugin for EchoPlugin {
                 }),
             permissions: vec![],
             dependencies: vec![],
-            estimated_cost_usd: 0.0,
+                estimated_cost_usd: 0.0,
                 estimated_latency_ms: 1,
                 reliability_score: 1.0,
                 supports_streaming: false,
+                traits: vec![],
             },
         ]
     }

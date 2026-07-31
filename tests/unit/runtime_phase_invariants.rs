@@ -50,6 +50,7 @@ fn create_engine() -> (CapabilityExecutorEngine, CapabilityContract) {
         estimated_latency_ms: 1,
         reliability_score: 1.0,
         supports_streaming: false,
+        traits: vec![],
     };
 
     (CapabilityExecutorEngine::new(resolver), contract)

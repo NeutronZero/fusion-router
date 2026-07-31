@@ -38,6 +38,7 @@ impl CapabilityPlugin for ShellPlugin {
             estimated_latency_ms: 10,
             reliability_score: 0.99,
             supports_streaming: false,
+            traits: vec![],
         }]
     }
 }

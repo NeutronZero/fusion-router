@@ -36,6 +36,7 @@ impl CapabilityPlugin for HttpPlugin {
             estimated_latency_ms: 150,
             reliability_score: 0.99,
             supports_streaming: false,
+            traits: vec![],
         }]
     }
 }

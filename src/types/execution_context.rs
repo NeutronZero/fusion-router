@@ -168,6 +168,7 @@ mod tests {
                 estimated_latency_ms: 1,
                 reliability_score: 1.0,
                 supports_streaming: false,
+                traits: vec![],
             },
             runtime_params: serde_json::json!({}),
         };

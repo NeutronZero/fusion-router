@@ -77,6 +77,7 @@ mod tests {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         reg.register(c1).unwrap();
         reg.freeze();

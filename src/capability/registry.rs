@@ -149,6 +149,7 @@ mod tests {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         reg.register(contract.clone()).unwrap();
         assert!(reg.contains(&CapabilityId::new("test.trait")));
@@ -174,6 +175,7 @@ mod tests {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         reg.register(contract).unwrap();
         reg.freeze();
@@ -190,6 +192,7 @@ mod tests {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         match reg.register(dup) {
             Err(RegistryError::Frozen) => {}
@@ -212,6 +215,7 @@ mod tests {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         reg.register(contract.clone()).unwrap();
         match reg.register(contract) {
@@ -235,6 +239,7 @@ mod tests {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         let c2 = CapabilityContract {
             id: CapabilityId::new("a.first"),
@@ -248,6 +253,7 @@ mod tests {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         reg.register(c1).unwrap();
         reg.register(c2).unwrap();
@@ -272,6 +278,7 @@ mod tests {
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
+            traits: vec![],
         };
         match reg.register(contract) {
             Err(RegistryError::InvalidContract(_)) => {}

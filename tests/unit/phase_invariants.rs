@@ -22,6 +22,7 @@ fn invariant_capability_registry_immutable_post_freeze() {
         estimated_latency_ms: 1,
         reliability_score: 1.0,
         supports_streaming: false,
+        traits: vec![],
     };
 
     reg.register(contract).unwrap();
@@ -65,6 +66,7 @@ fn invariant_capability_resolver_does_not_execute_logic() {
         estimated_latency_ms: 1,
         reliability_score: 1.0,
         supports_streaming: false,
+        traits: vec![],
     }).unwrap();
 
     reg.freeze();
@@ -91,6 +93,7 @@ fn invariant_capability_graph_detects_conflicts_and_cycles() {
         estimated_latency_ms: 1,
         reliability_score: 1.0,
         supports_streaming: false,
+        traits: vec![],
     };
     let c2 = CapabilityContract {
         id: CapabilityId::new("node_b"),
@@ -104,6 +107,7 @@ fn invariant_capability_graph_detects_conflicts_and_cycles() {
         estimated_latency_ms: 1,
         reliability_score: 1.0,
         supports_streaming: false,
+        traits: vec![],
     };
 
     graph.add_node(c1);

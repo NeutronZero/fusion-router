@@ -36,6 +36,7 @@ impl CapabilityPlugin for BrowserPlugin {
             estimated_latency_ms: 1000,
             reliability_score: 0.90,
             supports_streaming: false,
+            traits: vec![],
         }]
     }
 }

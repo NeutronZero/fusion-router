@@ -101,6 +101,7 @@ pub fn capability(attr: TokenStream, item: TokenStream) -> TokenStream {
                         estimated_latency_ms: 0,
                         reliability_score: 1.0,
                         supports_streaming: false,
+                        traits: vec![],
                     }
                 ]
             }
