@@ -1,4 +1,7 @@
-use std::io::{Read, Write};
+use std::io::Read;
+
+#[cfg(test)]
+use std::io::Write;
 use std::path::Path;
 use serde::{Deserialize, Serialize};
 use fusion_plugin_api::{CapabilityContract, CapabilityId};
