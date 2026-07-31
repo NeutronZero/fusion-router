@@ -1,5 +1,16 @@
 # FusionRouter Roadmap
 
+| Version   | Theme                           | Status       |
+|-----------|---------------------------------|--------------|
+| v0.12.x   | Capability Platform             | Complete     |
+| v0.13.0   | Architecture Freeze             | Complete     |
+| **v0.13.1** | **Compiler Core**              | **Next**     |
+| v0.13.2   | Intelligent Runtime             | Planned      |
+| v0.13.3   | Adaptive Optimization           | Planned      |
+| v0.14.0   | Distributed Execution           | Future       |
+
+The **v0.13.x** series is the implementation series for the frozen v0.13.0 architecture.
+
 ## Current: v0.13.0 (Architecture Freeze)
 
 - Six core abstractions frozen: NormalizedIntent, WorkflowIR, ExecutionAbi, ExecutionTarget, ERI, CapabilityRegistry (ADR-033)
@@ -10,11 +21,31 @@
 
 ## Next: v0.13.1 — Compiler Core
 
-- Workflow IR implementation
-- Execution ABI v1
-- Compiler pass framework
-- Capability registry
-- Local runtime
+Compiler pipeline: NormalizedIntent → WorkflowIR → Compiler (Semantic / Optimizer / Correctness / ABI Generator) → Execution ABI v1.
+
+Implementation priority:
+
+1. Workflow IR data model and builder
+2. Execution ABI v1 schema
+3. Compiler pass pipeline and pass registration
+4. ABI generation pass
+5. Capability Registry execution and lookup
+6. Runtime contract implementation consuming the ABI (ERI integration)
+7. End-to-end compile path: NormalizedIntent → WorkflowIR → ExecutionAbi → Runtime
+
+Deliverable: first complete compile-and-execute path (optimizations may remain stubbed).
+
+## Planned: v0.13.2 — Intelligent Runtime
+
+- ERI-based runtime contract implementations, ABI consumption, execution state model (9 states)
+
+## Planned: v0.13.3 — Adaptive Optimization
+
+- Adaptive loop, optimizer stages, cost model, optimization levels (O0–O3)
+
+## Future: v0.14.0 — Distributed Execution
+
+- Next major architectural capability; requires ADR-driven changes before implementation
 
 ## v0.9.0 — Foundation
 
