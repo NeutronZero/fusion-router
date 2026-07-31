@@ -252,7 +252,7 @@ mod tests {
             .conditional("n1", "n2", "confidence > 0.8")?
             .sequential("n2", "n3")?
             .sequential("n3", "n4")?
-            .loop_edge("n4", "n2")?
+            .loop_edge("n3", "n2")?
             .build()?;
         assert_eq!(ir.edges.len(), 4);
         assert!(ir.validate().is_empty());
