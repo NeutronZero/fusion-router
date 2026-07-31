@@ -11,3 +11,5 @@ advisory-dbs/
 *.db-shm
 *.db-wal
 
+
+# git worktrees.worktrees/
