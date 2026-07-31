@@ -44,6 +44,7 @@
 | ADR-018 | Capability Binary Interface | Approved | `.fusionpkg` format, typed permissions, WASI sandbox invariants |
 | ADR-019 | Capability Host Interface | Approved | `CapabilityHostServices` trait, 5 host functions, SandboxRuntime |
 | ADR-032 | Execution ABI Separate from PrimitiveGraph | Accepted | PrimitiveGraph stays compiler-internal; ABI generator emits ExecutionAbi (v0.13 contract, Decision 1) |
+| ADR-033 | v0.13 Architecture Freeze | Accepted (Frozen) | Six core abstractions frozen as stable public contracts |
 
 ## ADR Location: `docs/decisions/`
 
