@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+## [0.12.0] – 2026-07-31
+
+- **Capability Runtime (Sprint P1)** (`src/runtime/`)
+  - `RuntimeError`, `RuntimeContext`, `CapabilityHostServices`, `TelemetryContext` base traits
+  - `SandboxRuntime` / `SandboxInstance` traits — object-safe, ephemeral instance creation
+  - `RuntimeModuleCache` — compiled module cache keyed by `(CapabilityId, Version)`
+  - `WasmtimeSandboxRuntime` — fuel metering, memory limits, trap handling, deterministic instance creation
+  - `SandboxConfig` — serde-backed memory/fuel/timeout configuration
+  - Integration tests: full lifecycle, fuel exhaustion, traps, metrics
+
+- **Host Interface (Sprint P2)** (`src/runtime/`, `src/release/`)
+  - `CapabilityHostServices` — 5-method host service trait (`emit_event`, `log`, `fetch_secret`, `http_request`, `record_metric`)
+  - `WasmtimeCapabilityHost` — wasmtime Linker wiring, host-level permission gating
+  - `policy.rs` — glob-based secret/HTTP permission helpers
+  - `GateError::PermissionDenied` variant for host-level errors
+  - Integration tests (`tests/host_tests.rs`)
+
+- **Package Platform (Sprint P3)** (`src/package/`)
+  - `.fusionpkg` format — gzipped tarball (`manifest.toml` + `module.wasm` + `attestation.json`)
+  - `PackageVerifier` — structural, attestation, WASM, and permission checks
+  - `PackageLoader` — WASM compilation and contract registration
+  - `FilesystemPackageRegistry` — registry storage layout
+  - Integration tests (`tests/package_tests.rs`) exercising verify → load → resolve → execute
+
+- **Developer Platform (Sprint P4)** (`src/devex/`)
+  - `fusion new`, `build`, `test`, `publish`, `dev` CLI commands
+  - `MockHostServices` and `NativeSandboxRuntime` dev-only testing utilities
+  - 4 reserved commands (`inspect`, `info`, `logs`, `config`)
+
+- **Operations Platform (Sprint P5)** (`src/operations/`)
+  - `OperationError`, `RegistrySummary`, `RuntimeSummary`, `InvocationMetric`, `TimeWindow`
+  - `DashboardDataProvider`, `RuntimeInspector`, `PolicyAdmin`, `AttestationViewer`
+  - `/v1/operations/*` REST API routes
+
 - **Sprint O2.5 integration verification** — full test suite (852+), clippy-clean on new code, no-default-features, determinism invariant confirmed, task 6 review issues resolved (max_depth = true DAG depth, tokens = 0 not latency)
 - **Capability Resolution Bridge (Sprint O2.5)** (`src/planner/resolver/capability/`)
   - SemVer resolution — extended `RequirementSet` with version constraints, resolver selects best compatible via `semver::VersionReq`
