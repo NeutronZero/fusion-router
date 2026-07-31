@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod lowering;
+
+pub use lowering::intent_to_workflow;
+
 /// Canonical representation of goals and constraints (v0.13 contract 1).
 /// Provider-free by contract: no model, provider, or endpoint fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
