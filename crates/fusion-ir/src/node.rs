@@ -4,10 +4,28 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowNode {
-    pub id: String,
-    pub kind: WorkflowNodeKind,
-    pub capability: Option<String>,
-    pub config: BTreeMap<String, serde_json::Value>,
+    pub(crate) id: String,
+    pub(crate) kind: WorkflowNodeKind,
+    pub(crate) capability: Option<String>,
+    pub(crate) config: BTreeMap<String, serde_json::Value>,
+}
+
+impl WorkflowNode {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn kind(&self) -> WorkflowNodeKind {
+        self.kind
+    }
+
+    pub fn capability(&self) -> Option<&str> {
+        self.capability.as_deref()
+    }
+
+    pub fn config(&self) -> &BTreeMap<String, serde_json::Value> {
+        &self.config
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -3,10 +3,28 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowEdge {
-    pub from: String,
-    pub to: String,
-    pub kind: WorkflowEdgeKind,
-    pub condition: Option<String>,
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) kind: WorkflowEdgeKind,
+    pub(crate) condition: Option<String>,
+}
+
+impl WorkflowEdge {
+    pub fn from(&self) -> &str {
+        &self.from
+    }
+
+    pub fn to(&self) -> &str {
+        &self.to
+    }
+
+    pub fn kind(&self) -> WorkflowEdgeKind {
+        self.kind
+    }
+
+    pub fn condition(&self) -> Option<&str> {
+        self.condition.as_deref()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

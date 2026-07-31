@@ -8,11 +8,11 @@ use crate::version::WORKFLOW_IR_VERSION;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowIR {
-    pub version: u16,
-    pub workflow_id: Uuid,
-    pub nodes: Vec<WorkflowNode>,
-    pub edges: Vec<WorkflowEdge>,
-    pub metadata: WorkflowMetadata,
+    pub(crate) version: u16,
+    pub(crate) workflow_id: Uuid,
+    pub(crate) nodes: Vec<WorkflowNode>,
+    pub(crate) edges: Vec<WorkflowEdge>,
+    pub(crate) metadata: WorkflowMetadata,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -23,6 +23,26 @@ pub struct WorkflowMetadata {
 }
 
 impl WorkflowIR {
+    pub fn version(&self) -> u16 {
+        self.version
+    }
+
+    pub fn workflow_id(&self) -> Uuid {
+        self.workflow_id
+    }
+
+    pub fn nodes(&self) -> &[WorkflowNode] {
+        &self.nodes
+    }
+
+    pub fn edges(&self) -> &[WorkflowEdge] {
+        &self.edges
+    }
+
+    pub fn metadata(&self) -> &WorkflowMetadata {
+        &self.metadata
+    }
+
     pub fn validate(&self) -> crate::validate::ValidationReport {
         let mut report = crate::validate::ValidationReport::default();
         crate::validate::run_all(&self, &mut report);

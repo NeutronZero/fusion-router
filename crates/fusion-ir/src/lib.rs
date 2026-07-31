@@ -15,6 +15,12 @@
 //! (`model`, `provider`, `endpoint`) are rejected by validation. The list may
 //! be expanded without redefining the law.
 //!
+//! ## Immutability
+//!
+//! Fields are crate-private. Reads happen through getters; the only
+//! construction path is `WorkflowBuilder`. Every publicly constructed
+//! `WorkflowIR` has passed structural validation.
+//!
 //! ## Dependency rule
 //!
 //! This crate is a leaf: it depends on nothing in the FusionRouter stack.
