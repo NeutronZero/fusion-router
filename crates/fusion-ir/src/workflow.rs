@@ -22,6 +22,15 @@ pub struct WorkflowMetadata {
     pub estimated_tokens: u64,
 }
 
+impl WorkflowIR {
+    pub fn validate(&self) -> crate::validate::ValidationReport {
+        let mut report = crate::validate::ValidationReport::default();
+        crate::validate::run_all(&self, &mut report);
+        report.sort_deterministic();
+        report
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

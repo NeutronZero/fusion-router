@@ -22,10 +22,12 @@
 
 mod edge;
 mod node;
+mod validate;
 mod version;
 mod workflow;
 
 pub use edge::{WorkflowEdge, WorkflowEdgeKind};
 pub use node::{WorkflowNode, WorkflowNodeKind};
+pub use validate::{ValidationError, ValidationIssue, ValidationReport};
 pub use version::WORKFLOW_IR_VERSION;
 pub use workflow::{WorkflowIR, WorkflowMetadata};
