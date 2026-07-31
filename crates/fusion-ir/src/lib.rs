@@ -18,8 +18,16 @@
 //! ## Immutability
 //!
 //! Fields are crate-private. Reads happen through getters; the only
-//! construction path is `WorkflowBuilder`. Every publicly constructed
-//! `WorkflowIR` has passed structural validation.
+//! construction path is `WorkflowBuilder`. Every `WorkflowIR` built via
+//! `WorkflowBuilder` or parsed via `from_json` has passed structural
+//! validation.
+//!
+//! ## Canonical serialization
+//!
+//! Deterministic from day one: nodes serialized sorted by `id`; edges
+//! sorted by `(from, to, kind, condition)`; `config` keys sorted via
+//! `BTreeMap`. Identical logical workflows — even built via different
+//! construction orderings — produce byte-identical output.
 //!
 //! ## Dependency rule
 //!
