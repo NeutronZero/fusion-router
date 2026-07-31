@@ -163,7 +163,7 @@ Three layers, separated by responsibility:
 
 Deterministic canonical JSON, first-class from day one:
 
-- `to_canonical_json(&self) -> String` and `from_json(&str) -> Result<WorkflowIR, WorkflowIrError>`.
+- `to_canonical_json(&self) -> Result<String, WorkflowIrError>` and `from_json(&str) -> Result<WorkflowIR, WorkflowIrError>`.
 - **Canonical ordering** (explicit): nodes serialized sorted by `id`; edges serialized sorted by `(from, to, kind, condition)`; `config` via `BTreeMap` (sorted keys); serde struct field order is stable. *(Deviation note: the frozen wording was `(from, to, kind)`, which is not a total order — two conditional edges between the same nodes tie and stable sort then leaks insertion order, violating byte-determinism. `condition` completes the edge identity; exact duplicates are byte-identical elements whose relative order cannot affect output.)*
 - **Determinism is a property of the IR, not the builder:** the builder accepts any insertion order; canonical serialization establishes the canonical ordering.
 - Canonical invariant: identical logical workflows — even built via different construction orderings — produce byte-identical output.
