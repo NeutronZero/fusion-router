@@ -16,6 +16,7 @@ pub mod intent;
 pub mod ir;
 pub mod abi;
 pub mod target;
+pub mod eri;
 pub mod config;
 pub mod plugin;
 pub mod capability;
