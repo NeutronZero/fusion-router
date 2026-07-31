@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.13.0] – 2026-07-31
+
+- **Architecture Freeze** — v0.13.0 establishes the platform's architectural identity: an AI Execution Compiler and Runtime
+  - `docs/specifications/architecture-v0.13.md` — frozen architecture specification: vision, six core abstractions, three layers, Execution ABI, ERI, capability registry, compiler context, cost model, optimization levels, 9-state execution model, architectural laws, roadmap
+  - **ADR-032** — Execution ABI generated separately from `PrimitiveGraph` (Option B); PrimitiveGraph remains compiler-internal
+  - **ADR-033** — v0.13 architecture freeze declaration; future core changes require ADR-driven governance
+  - **Provider-free invariant enforced** — compiler contracts reference intent, capabilities, workflows, policies, and execution — never models, providers, or endpoints
+
+- **Frozen Contracts** (`src/`)
+  - `NormalizedIntent` (`src/intent/`) — provider-free intent contract (`IntentKind` ×6, `Constraints`, `Budget`)
+  - `WorkflowIR` (`src/ir/`) — canonical logical workflow (`WorkflowNodeKind` ×9, `WorkflowEdgeKind` ×6, versioned)
+  - `ExecutionAbi` v1 (`src/abi/`) — compiler/runtime boundary contract (`AbiConstraints`, retry/cache/security/evaluation policies, telemetry hooks)
+  - `ExecutionTarget` (`src/target/`) — execution environment, scheduler kind, resource limits, network constraints, security profile
+  - `ERI` (`src/eri/`) — `ExecutionRuntimeInterface` trait + 9-state `ExecutionState`, `ExecutionAbiResult`, `EriError`
+  - All contracts serde-backed with `deny_unknown_fields`; tests reject provider/model/endpoint fields
+
+- **Capability Registry**
+  - `CapabilityTrait` enum (`Streaming`, `LongContext`, `StructuredOutput`, `LowLatency`, `DeterministicOutput`, `ComputerUse`)
+  - `CapabilityContract.traits` — `#[serde(default)] Vec<CapabilityTrait>`, all 34 construction sites migrated
+  - `CapabilityBuilder::trait_()`; `#[capability]` macro emits `traits: vec![]`
+
+- **Version & Memory** — version bumped to `0.13.0`; `.memory/` handbook frozen and validated (`check-memory.py` ALL CHECKS PASSED); five v0.12 plans reclassified as historical
+
 ## [0.12.0] – 2026-07-31
 
 - **Capability Runtime (Sprint P1)** (`src/runtime/`)
