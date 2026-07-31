@@ -1,8 +1,13 @@
 use crate::workflow::WorkflowIR;
 use crate::error::WorkflowIrError;
 
-fn edge_sort_key(e: &crate::edge::WorkflowEdge) -> (String, String, String) {
-    (e.from.clone(), e.to.clone(), format!("{:?}", e.kind))
+fn edge_sort_key(e: &crate::edge::WorkflowEdge) -> (String, String, String, String) {
+    (
+        e.from.clone(),
+        e.to.clone(),
+        format!("{:?}", e.kind),
+        e.condition.clone().unwrap_or_default(),
+    )
 }
 
 pub(crate) fn to_canonical_json(ir: &WorkflowIR) -> Result<String, WorkflowIrError> {
