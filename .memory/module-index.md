@@ -92,8 +92,9 @@
 
 ## I
 
-**IntentPlanner** — `src/planner/intent_planner.rs` — Entry-point planner delegating to sub-planners
+**intent_to_workflow** — `src/intent/lowering.rs` — Planner's initial lowering: NormalizedIntent → WorkflowIR
 **IntentKind** — `src/intent/mod.rs` — NormalizedIntent classification
+**IntentPlanner** — `src/planner/intent_planner.rs` — Entry-point planner delegating to sub-planners
 
 ## L
 
@@ -176,14 +177,21 @@
 **TelemetryHook** — `src/abi/mod.rs` — ABI node telemetry hook
 **TriggerTrace** — `src/trigger/trace.rs` — Execution provenance chain
 
+## V
+
+**ValidationError / ValidationReport** — `crates/fusion-ir/src/validate.rs` — Three-layer validation results
+
 ## W
 
 **WasmtimeSandboxRuntime** — `src/runtime/wasmtime_runtime.rs` — Wasmtime concrete runtime
+**WORKFLOW_IR_VERSION** — `crates/fusion-ir/src/version.rs` — IR schema version (1)
+**WorkflowBuilder** — `crates/fusion-ir/src/builder.rs` — Immutable builder; only public construction path
 **WorkflowDefinition** — `src/workflow/mod.rs` — YAML workflow template
-**WorkflowEdgeKind** — `src/ir/workflow.rs` — Workflow edge kinds (Sequential, Parallel, Conditional, Retry, Merge, Loop)
-**WorkflowIR** — `src/types/execution.rs` — High-level abstract plan
-**WorkflowIR** (v0.13 contract) — `src/ir/workflow.rs` — Canonical provider-free workflow (v0.13)
-**WorkflowNodeKind** — `src/ir/workflow.rs` — Nine workflow node kinds
+**WorkflowEdge / WorkflowEdgeKind** — `crates/fusion-ir/src/edge.rs` — Edge types (6 frozen kinds)
+**WorkflowIR** — `crates/fusion-ir/src/workflow.rs` — Canonical immutable workflow graph (v0.13 contract 2, migrated)
+**WorkflowIrError** — `crates/fusion-ir/src/error.rs` — Serialization/validation error wrapper
+**WorkflowMetadata** — `crates/fusion-ir/src/workflow.rs` — Extensible provider-independent workflow metadata
+**WorkflowNode / WorkflowNodeKind** — `crates/fusion-ir/src/node.rs` — Node types (9 frozen kinds)
 **WorkflowPlanner** — `src/planner/workflow.rs` — Registry-first planner
 **WorkflowRegistry** — `src/workflow/registry.rs` — YAML workflow loader
 **WorkQueue** — `src/scheduler/work_queue.rs` — Topological DAG scheduling queue

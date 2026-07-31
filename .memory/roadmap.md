@@ -28,7 +28,7 @@ Compiler pipeline: NormalizedIntent → WorkflowIR → Compiler (Semantic / Opti
 
 Implementation priority:
 
-1. Workflow IR data model and builder
+1. - [x] Workflow IR data model and builder — Implemented: Workflow IR data model + builder (crates/fusion-ir) — Tasks 1-8 of the fusion-ir plan.
 2. Execution ABI v1 schema
 3. Compiler pass pipeline and pass registration
 4. ABI generation pass
