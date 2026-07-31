@@ -8,13 +8,10 @@
 - Capability traits added to the capability contract (`CapabilityTrait`)
 - Reconciliation design: `docs/superpowers/specs/2026-07-30-v0.13-reconciliation-design.md`
 
-## Next: v0.14.0 — Compiler Core
+## Next: v0.13.1 (Post-Freeze Maintenance)
 
-- Workflow IR implementation
-- Execution ABI v1
-- Compiler pass framework
-- Capability registry
-- Local runtime
+- Bug fixes and narrowly scoped ADR-driven changes only; v0.13.0 architecture treated as immutable
+- Compiler Core work (WorkflowIR lowering, Execution ABI generation pass, capability registry execution, runtime contracts) deferred to a future minor release
 
 ## v0.9.0 — Foundation
 
