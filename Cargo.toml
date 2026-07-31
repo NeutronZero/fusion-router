@@ -72,7 +72,9 @@ http = "0.2"
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 fusion-plugin-echo = { path = "plugins/fusion-plugin-echo" }
 fusion-capability-sdk = { path = "crates/fusion-capability-sdk" }
+serde_json = "1"
 tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
 wat = "1"
 
 [[bench]]
