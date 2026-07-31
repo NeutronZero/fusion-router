@@ -90,6 +90,7 @@ fn test_full_verify_load_resolve_cycle() {
         estimated_latency_ms: 10,
         reliability_score: 0.99,
         supports_streaming: false,
+        traits: vec![],
     };
     let pkg_bytes = build_signed_fusionpkg(
         "test.echo", "0.1.0", &[contract], &["Network".into()],
