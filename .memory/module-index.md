@@ -189,6 +189,7 @@
 **WorkflowDefinition** — `src/workflow/mod.rs` — YAML workflow template
 **WorkflowEdge / WorkflowEdgeKind** — `crates/fusion-ir/src/edge.rs` — Edge types (6 frozen kinds)
 **WorkflowIR** — `crates/fusion-ir/src/workflow.rs` — Canonical immutable workflow graph (v0.13 contract 2, migrated)
+**WorkflowIR (legacy)** — `src/types/mod.rs` — High-level abstract plan used by the planner/compiler pipeline (superseded by fusion-ir WorkflowIR)
 **WorkflowIrError** — `crates/fusion-ir/src/error.rs` — Serialization/validation error wrapper
 **WorkflowMetadata** — `crates/fusion-ir/src/workflow.rs` — Extensible provider-independent workflow metadata
 **WorkflowNode / WorkflowNodeKind** — `crates/fusion-ir/src/node.rs` — Node types (9 frozen kinds)
