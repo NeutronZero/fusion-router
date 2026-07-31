@@ -11,13 +11,16 @@
 
 The **v0.13.x** series is the implementation series for the frozen v0.13.0 architecture.
 
-## Current: v0.13.0 (Architecture Freeze)
+## Current: v0.13.0 (Complete)
 
-- Six core abstractions frozen: NormalizedIntent, WorkflowIR, ExecutionAbi, ExecutionTarget, ERI, CapabilityRegistry (ADR-033)
-- Architecture specification published: `docs/specifications/architecture-v0.13.md`
-- Execution ABI defined separately from compiler-internal PrimitiveGraph (ADR-032)
-- Capability traits added to the capability contract (`CapabilityTrait`)
-- Reconciliation design: `docs/superpowers/specs/2026-07-30-v0.13-reconciliation-design.md`
+Architecture frozen.
+
+Key deliverables:
+
+- Architecture specification
+- ADR-032 / ADR-033
+- Six core abstractions frozen
+- Provider-free compiler contracts
 
 ## Next: v0.13.1 — Compiler Core
 
@@ -35,17 +38,44 @@ Implementation priority:
 
 Deliverable: first complete compile-and-execute path (optimizations may remain stubbed).
 
+Success Criteria:
+
+- WorkflowIR implemented
+- Execution ABI v1 implemented
+- Compiler pipeline operational
+- Capability Registry executable
+- Local Runtime executes Execution ABI
+- End-to-end compile path passes integration tests
+
 ## Planned: v0.13.2 — Intelligent Runtime
 
-- ERI-based runtime contract implementations, ABI consumption, execution state model (9 states)
+- Execution scheduler
+- Provider resolution
+- Retry engine
+- Streaming
+- Execution state machine
+- Circuit breaker
+- Rate limiter
+- Runtime telemetry
 
 ## Planned: v0.13.3 — Adaptive Optimization
 
-- Adaptive loop, optimizer stages, cost model, optimization levels (O0–O3)
+- Cost model
+- Compiler optimizer stages
+- Optimization levels
+- Telemetry feedback
+- Adaptive heuristics
+- Cache optimization
 
 ## Future: v0.14.0 — Distributed Execution
 
-- Next major architectural capability; requires ADR-driven changes before implementation
+- Execution Coordinator
+- Worker Runtime
+- Remote ABI execution
+- Distributed scheduling
+- Checkpointing
+
+Requires ADR-driven changes before implementation.
 
 ## v0.9.0 — Foundation
 
