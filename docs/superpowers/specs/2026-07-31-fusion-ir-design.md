@@ -99,6 +99,8 @@ All structs keep `#[serde(deny_unknown_fields)]`. All types derive `Debug, Clone
 
 > WorkflowIR is the canonical immutable graph representation. There is intentionally no separate WorkflowGraph type. All graph operations are performed directly on WorkflowIR. Additional graph views may be introduced in future versions without changing the WorkflowIR contract.
 
+**Metadata extensibility:** `WorkflowMetadata` is intentionally extensible while remaining provider-independent — future additions (telemetry hints, provenance, planner annotations) must not require changes to the core graph model.
+
 **Immutability:** public construction happens only through `WorkflowBuilder`. `WorkflowIR`/`WorkflowNode`/`WorkflowEdge` constructors are crate-private; no mutation methods are exposed. Every publicly constructed `WorkflowIR` has passed structural validation.
 
 ## 6. Builder
@@ -145,7 +147,7 @@ Three layers, separated by responsibility:
 
 ### Architectural (executable frozen laws)
 
-- **Provider-free:** no `model`, `provider`, or `endpoint` keys anywhere — including a recursive scan of `config` maps.
+- **Provider-free:** reject provider-identifying configuration fields reserved by the architecture (initially `model`, `provider`, and `endpoint`), including a recursive scan of `config` maps. The reserved list may be expanded later without redefining the law.
 - **Versioned:** `version == WORKFLOW_IR_VERSION`, enforced at construction and deserialization.
 - **Deterministic:** canonical serialization is stable (Section 8).
 - **Immutable:** no mutation surface after construction.
@@ -161,7 +163,8 @@ Three layers, separated by responsibility:
 Deterministic canonical JSON, first-class from day one:
 
 - `to_canonical_json(&self) -> String` and `from_json(&str) -> Result<WorkflowIR, WorkflowIrError>`.
-- Determinism rules: `config` uses `BTreeMap` (sorted keys); serde struct field order is stable; nodes/edges serialize in construction order (the builder produces deterministic orderings).
+- **Canonical ordering** (explicit): nodes serialized sorted by `id`; edges serialized sorted by `(from, to, kind)`; `config` via `BTreeMap` (sorted keys); serde struct field order is stable.
+- **Determinism is a property of the IR, not the builder:** the builder accepts any insertion order; canonical serialization establishes the canonical ordering.
 - Canonical invariant: identical logical workflows — even built via different construction orderings — produce byte-identical output.
 - The canonical form is the basis for future fingerprints, caching, snapshots, and telemetry correlation.
 
