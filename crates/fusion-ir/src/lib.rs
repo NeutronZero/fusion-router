@@ -20,12 +20,14 @@
 //! This crate is a leaf: it depends on nothing in the FusionRouter stack.
 //! Everything else in the stack depends on this crate.
 
+mod builder;
 mod edge;
 mod node;
 mod validate;
 mod version;
 mod workflow;
 
+pub use builder::WorkflowBuilder;
 pub use edge::{WorkflowEdge, WorkflowEdgeKind};
 pub use node::{WorkflowNode, WorkflowNodeKind};
 pub use validate::{ValidationError, ValidationIssue, ValidationReport};
