@@ -59,7 +59,11 @@ async fn test_path_traversal() {
 
 #[tokio::test]
 async fn test_shell_injection() {
-    let tool = ShellCommandTool::new(vec!["cmd".to_string(), "echo".to_string()], 5);
+    #[cfg(windows)]
+    let allowed = vec!["cmd".to_string(), "echo".to_string()];
+    #[cfg(not(windows))]
+    let allowed = vec!["echo".to_string()];
+    let tool = ShellCommandTool::new(allowed, 5);
 
     let result = tool
         .execute(serde_json::json!({
@@ -70,10 +74,15 @@ async fn test_shell_injection() {
     let err = result.unwrap_err();
     assert!(err.contains("not in allowed list"));
 
+    #[cfg(windows)]
+    let (cmd, args) = ("cmd", vec!["/c", "echo", "hello"]);
+    #[cfg(not(windows))]
+    let (cmd, args) = ("echo", vec!["hello"]);
+
     let result2 = tool
         .execute(serde_json::json!({
-            "command": "cmd",
-            "args": ["/c", "echo", "hello"]
+            "command": cmd,
+            "args": args
         }))
         .await;
     assert!(result2.is_ok());
