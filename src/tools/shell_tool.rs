@@ -98,13 +98,16 @@ mod tests {
     #[tokio::test]
     async fn test_shell_tool_allowed_command() {
         let tool = ShellCommandTool::new(
-            vec!["cmd".to_string(), "echo".to_string()],
+            vec!["echo".to_string(), "cmd".to_string()],
             5,
         );
-        // Use cmd.exe /c echo hello world on Windows
+        #[cfg(windows)]
+        let (cmd, args): (&str, Vec<&str>) = ("cmd", vec!["/c", "echo", "hello world"]);
+        #[cfg(not(windows))]
+        let (cmd, args): (&str, Vec<&str>) = ("echo", vec!["hello world"]);
         let result = tool.execute(serde_json::json!({
-            "command": "cmd",
-            "args": ["/c", "echo", "hello world"]
+            "command": cmd,
+            "args": args
         })).await;
         assert!(result.is_ok());
         let val = result.unwrap();

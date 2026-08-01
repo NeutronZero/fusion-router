@@ -15,6 +15,12 @@ pub struct WorkflowBuilder {
     seen: HashSet<String>,
 }
 
+impl Default for WorkflowBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WorkflowBuilder {
     pub fn new() -> Self {
         Self {

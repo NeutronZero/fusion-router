@@ -14,7 +14,7 @@ pub(crate) fn to_canonical_json(ir: &WorkflowIR) -> Result<String, WorkflowIrErr
     let mut nodes = ir.nodes.clone();
     nodes.sort_by(|a, b| a.id.cmp(&b.id));
     let mut edges = ir.edges.clone();
-    edges.sort_by(|a, b| edge_sort_key(a).cmp(&edge_sort_key(b)));
+    edges.sort_by_key(edge_sort_key);
     let canonical = WorkflowIR {
         version: ir.version,
         workflow_id: ir.workflow_id,

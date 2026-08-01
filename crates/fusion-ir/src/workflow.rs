@@ -45,7 +45,7 @@ impl WorkflowIR {
 
     pub fn validate(&self) -> crate::validate::ValidationReport {
         let mut report = crate::validate::ValidationReport::default();
-        crate::validate::run_all(&self, &mut report);
+        crate::validate::run_all(self, &mut report);
         report.sort_deterministic();
         report
     }

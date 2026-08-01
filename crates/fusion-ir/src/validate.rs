@@ -182,14 +182,12 @@ fn semantic_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
                     });
                 }
             }
-            WorkflowEdgeKind::Merge => {
-                if incoming.get(e.to.as_str()).copied().unwrap_or(0) < 2 {
-                    report.push(ValidationIssue {
-                        node: None,
-                        edge: edge_ref,
-                        error: ValidationError::MergeArity(e.to.clone()),
-                    });
-                }
+            WorkflowEdgeKind::Merge if incoming.get(e.to.as_str()).copied().unwrap_or(0) < 2 => {
+                report.push(ValidationIssue {
+                    node: None,
+                    edge: edge_ref,
+                    error: ValidationError::MergeArity(e.to.clone()),
+                });
             }
             _ => {}
         }
