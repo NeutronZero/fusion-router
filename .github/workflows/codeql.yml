@@ -24,7 +24,7 @@ jobs:
       matrix:
         include:
           - language: rust
-            build-mode: manual
+            build-mode: none
 
     steps:
       - name: Checkout repository
@@ -36,10 +36,6 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: security-extended
-
-      - name: Build
-        run: |
-          cargo build --all-features
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
