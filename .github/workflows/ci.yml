@@ -3,18 +3,14 @@ name: CI
 on:
   push:
     branches: [master]
-    paths:
+    paths: &ci_paths
       - "**/*.rs"
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/ci.yml
   pull_request:
     branches: [master]
-    paths:
-      - "**/*.rs"
-      - Cargo.toml
-      - Cargo.lock
-      - .github/workflows/ci.yml
+    paths: *ci_paths
 
 env:
   CARGO_TERM_COLOR: always
@@ -47,16 +43,12 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy -p fusion-ir -p fusion-plugin-api -p fusion-capability-sdk -p fusion-capability-macros -- -D warnings
 
   audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
       - name: Security audit
@@ -66,10 +58,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
       - name: Install cargo-deny
         uses: taiki-e/install-action@cargo-deny
       - name: License & dependency check

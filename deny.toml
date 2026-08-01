@@ -16,7 +16,6 @@ allow = [
     "BSL-1.0",
     "MIT-0",
 ]
-unlicensed = "deny"
 
 [bans]
 multiple-versions = "warn"

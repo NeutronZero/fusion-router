@@ -3,18 +3,14 @@ name: "CodeQL"
 on:
   push:
     branches: ["master"]
-    paths:
+    paths: &codeql_paths
       - "**/*.rs"
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/codeql.yml
   pull_request:
     branches: ["master"]
-    paths:
-      - "**/*.rs"
-      - Cargo.toml
-      - Cargo.lock
-      - .github/workflows/codeql.yml
+    paths: *codeql_paths
   schedule:
     - cron: "0 0 * * 0"
 
