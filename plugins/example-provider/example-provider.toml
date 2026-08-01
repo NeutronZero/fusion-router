@@ -7,3 +7,4 @@ entry = "target/debug/example_provider.dll"
 [provider]
 name = "example"
 models = ["example-model"]
+config = {}
