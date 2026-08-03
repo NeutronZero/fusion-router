@@ -55,6 +55,7 @@ Legality rules govern pass ordering. Rollback safety ensures recovery from faile
 - PrimitiveGraph → ExecutionGraph derivation via `to_execution_graph()` (ADR-019)
 - A workflow violating a matched Deny policy rule cannot produce an `ExecutionGraph` (ADR-034, v0.13.1)
 - Every execution endpoint compiles through the shared `build_compiler()` pass pipeline; no production path constructs `DefaultCompiler` with an empty pass list (ADR-034, v0.13.1)
+- Phase 1 law tests: `law1_build_compiler_*` / `law1_build_compiler_produces_mandatory_passes`, `law2_deny_blocks_compilation`, `law4_compile_failure_yields_no_graph` (unit, `src/compiler/mod.rs`), `law5_execution_plane_uses_full_passes` + rejection cases (end-to-end, `tests/security_invariants.rs`) — all green as of v0.13.1 Phase 1 (2026-08-03)
 
 ## Source Files
 

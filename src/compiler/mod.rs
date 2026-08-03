@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn law2_deny_policy_blocks_compilation_through_factory() {
+    async fn law2_deny_blocks_compilation() {
         let json_raw = r#"{
             "version": "1.0",
             "declarations": [
