@@ -416,7 +416,7 @@ async fn process_request(
             intent: reqs.intent_classification,
             latency_ms: result.total_latency_ms,
             tokens: result.total_tokens as u32,
-            cost: result.total_cost as f64,
+            cost: result.total_cost,
             success: result.success,
             timestamp: chrono::Utc::now().timestamp(),
         };

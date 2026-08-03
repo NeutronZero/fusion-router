@@ -17,11 +17,19 @@ impl FilesystemArchiveBackend {
     pub fn new(archive_dir: PathBuf) -> Self {
         Self { archive_dir }
     }
+
+    fn validate_id(id: &str) -> Result<(), GateError> {
+        if id.contains('/') || id.contains('\\') || id.contains("..") {
+            return Err(GateError::ExecutionFailed("invalid assessment ID: path traversal detected".to_string()));
+        }
+        Ok(())
+    }
 }
 
 impl ArchiveBackend for FilesystemArchiveBackend {
     fn store(&self, envelope: &AttestationEnvelope) -> Result<PathBuf, GateError> {
         let assessment_id = &envelope.signed_attestation.attestation.assessment.assessment_id;
+        Self::validate_id(assessment_id)?;
         let file_name = format!("{assessment_id}.json");
         let target_path = self.archive_dir.join(file_name);
 
@@ -47,6 +55,7 @@ impl ArchiveBackend for FilesystemArchiveBackend {
     }
 
     fn load(&self, assessment_id: &str) -> Result<AttestationEnvelope, GateError> {
+        Self::validate_id(assessment_id)?;
         let file_name = format!("{assessment_id}.json");
         let target_path = if assessment_id.ends_with(".json") {
             self.archive_dir.join(assessment_id)
@@ -69,6 +78,9 @@ impl ArchiveBackend for FilesystemArchiveBackend {
     }
 
     fn exists(&self, assessment_id: &str) -> bool {
+        if Self::validate_id(assessment_id).is_err() {
+            return false;
+        }
         let file_name = format!("{assessment_id}.json");
         let target_path = if assessment_id.ends_with(".json") {
             self.archive_dir.join(assessment_id)
@@ -145,6 +157,46 @@ mod tests {
         assert_eq!(loaded.signed_attestation.attestation.assessment.assessment_id, id);
         let list = archive.list().unwrap();
         assert!(list.contains(&id));
+
+        let _ = std::fs::remove_dir_all(temp_path);
+    }
+
+    #[test]
+    fn test_filesystem_archive_path_traversal() {
+        let temp_path = std::env::temp_dir().join(format!("fusion_test_{}", Uuid::new_v4()));
+        let archive = FilesystemArchiveBackend::new(temp_path.clone());
+
+        let eval = PolicyEvaluation {
+            environment: ReleaseEnvironment::Production,
+            decision: ReleaseDecision::Approved,
+            summary: PolicySummary::default(),
+            required_failures: vec![],
+            waived_failures: vec![],
+            advisory_failures: vec![],
+            passed_gates: vec![],
+        };
+        let mut assessment = ReleaseAssessment::new(ReleaseEnvironment::Production, eval, vec![]);
+
+        // Attempt path traversal
+        assessment.assessment_id = "../../../etc/passwd".to_string();
+
+        let id = assessment.assessment_id.clone();
+        let attestation = ReleaseAttestation::new(assessment);
+        let signer = MockSigner::default();
+        let canonical_bytes = crate::release::attestation::AttestationBuilder::to_canonical_bytes(&attestation).unwrap();
+        let sig = signer.sign(&canonical_bytes).unwrap();
+        let signed = crate::release::signing::SignedAttestation { attestation, signature: sig };
+        let envelope = AttestationEnvelope::new(signed);
+
+        assert!(!archive.exists(&id));
+
+        let store_err = archive.store(&envelope);
+        assert!(store_err.is_err());
+        assert!(store_err.unwrap_err().to_string().contains("path traversal"));
+
+        let load_err = archive.load(&id);
+        assert!(load_err.is_err());
+        assert!(load_err.unwrap_err().to_string().contains("path traversal"));
 
         let _ = std::fs::remove_dir_all(temp_path);
     }
