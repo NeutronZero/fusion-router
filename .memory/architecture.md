@@ -103,6 +103,18 @@ From `docs/architecture/invariants.md`:
 | `dev-console` | No | `console-subscriber` for tokio console |
 | `otel` | No | OpenTelemetry OTLP exporter |
 
+## Security Mitigations (verified, do not reflag)
+
+These mitigations are already in place. Future audits should treat them as resolved.
+
+| Threat | Mitigation | Location |
+|--------|-----------|----------|
+| Auth bypass on `/v1/executions` | All routes merged **before** `.layer(auth_middleware)` is applied; axum layers apply to all merged routes | `src/main.rs` (~line 223-236) |
+| Auth config missing → open access | `auth_middleware` **fails closed** (returns 401 if `AuthConfig` extension absent) | `src/middleware/auth.rs` (~line 15) |
+| Shell interpreter escape (`cmd /c ...`) | Hard blocklist `REJECTED_SHELLS` (`cmd`, `cmd.exe`, `sh`, `bash`, `powershell`, `powershell.exe`, `pwsh`, `zsh`) checked **before** allow-list; reject `cmd` also removed from `config/default.yaml` | `src/tools/shell_tool.rs` (~line 28) |
+| Rate limiter busy-loop when `cleanup_interval_secs = 0` | `cleanup_interval_secs.max(1)` clamps to minimum 1 s; config validation rejects 0 at startup | `src/middleware/rate_limit.rs` (~line 46), `src/config/mod.rs` (~line 351) |
+| Silent LLM response truncation (`finish_reason="length"` + empty content) | `ensure_non_truncated` returns an error instead of silently returning `""` | `src/providers/mod.rs` (~line 88), used in `zen_model.rs`, `openrouter_model.rs` |
+
 ## External Crates (FusionRouter SDK)
 
 | Crate | Path | Purpose |
