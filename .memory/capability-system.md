@@ -93,6 +93,8 @@ Binary plugins distributed as `.fusionpkg`:
 - Capability execution is unified via `CapabilityExecutor`
 - ABI version negotiation ensures compatibility
 - Permissions are declared in contract, enforced at execution
+- Policy (deny/allow lists) is enforced on **every** resolution path — required, version-constrained, optional, and transitive dependencies (incl. the final resolved instance set) — and any violation fails resolution (H13 / ADR-034, v0.13.1). `apply_policy` checks both the requested id (after alias resolution) and the resolved contract id; with an allow list present, both must be listed.
+- Caching caveat: the planner cache (`CapabilityPlannerCache`) keys on the full `RequirementSet` (which includes `policy`), so policy changes never reuse a cached resolution.
 
 ## Related ADRs
 

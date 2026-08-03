@@ -173,9 +173,12 @@ impl CapabilityResolver {
     }
 
     /// BFS transitive dependency expansion before graph construction.
+    /// Every contract added to the result map (root or transitive) is
+    /// policy-checked when a policy is present (H13 / ADR-034).
     fn expand_dependencies(
         &self,
         contracts: &[CapabilityContract],
+        policy: Option<&PolicyContext>,
     ) -> Result<(Vec<CapabilityContract>, Vec<DependencyEdge>), ResolverError> {
         let mut result_map: HashMap<CapabilityId, Arc<CapabilityContract>> = HashMap::new();
         let mut dep_edges: Vec<DependencyEdge> = Vec::new();
@@ -183,6 +186,9 @@ impl CapabilityResolver {
 
         for c in contracts {
             let id = c.id.clone();
+            if let Some(policy) = policy {
+                self.apply_policy(&id, c, policy)?;
+            }
             result_map.insert(id.clone(), Arc::new(c.clone()));
             queue.push_back(id);
         }
@@ -214,6 +220,10 @@ impl CapabilityResolver {
                         }
                     })?;
 
+                    if let Some(policy) = policy {
+                        self.apply_policy(dep_id, &dep_contract, policy)?;
+                    }
+
                     result_map.insert(dep_id.clone(), Arc::new(dep_contract.clone()));
                     queue.push_back(dep_id.clone());
                     in_flight.insert(dep_id.clone());
@@ -234,15 +244,20 @@ impl CapabilityResolver {
         Ok((result, dep_edges))
     }
 
-    fn apply_policy(&self, contract: &CapabilityContract, policy: &PolicyContext) -> Result<(), ResolverError> {
-        if policy.deny_list.contains(&contract.id) {
+    fn apply_policy(
+        &self,
+        requested: &CapabilityId,
+        contract: &CapabilityContract,
+        policy: &PolicyContext,
+    ) -> Result<(), ResolverError> {
+        if policy.deny_list.contains(requested) || policy.deny_list.contains(&contract.id) {
             return Err(ResolverError::PolicyDenied {
                 capability: contract.id.clone(),
                 reason: "capability is in the deny list".into(),
             });
         }
         if let Some(ref allow) = policy.allow_list {
-            if !allow.contains(&contract.id) {
+            if !allow.contains(requested) || !allow.contains(&contract.id) {
                 return Err(ResolverError::PolicyDenied {
                     capability: contract.id.clone(),
                     reason: "capability is not in the allow list".into(),
@@ -262,7 +277,7 @@ impl CapabilityResolver {
             for req_id in &reqs.required_capabilities {
                 let target_id = self.aliases.get(req_id).unwrap_or(req_id);
                 if let Some(contract) = self.registry.get(target_id) {
-                    self.apply_policy(contract, policy)?;
+                    self.apply_policy(req_id, contract, policy)?;
                 }
             }
         }
@@ -273,6 +288,9 @@ impl CapabilityResolver {
         // Resolve version-constrained requirements
         for vc in &reqs.version_constraints {
             let contract = self.resolve_version(vc)?;
+            if let Some(ref policy) = reqs.policy {
+                self.apply_policy(&contract.id, &contract, policy)?;
+            }
             if visited.insert(contract.id.clone()) {
                 instances.push(CapabilityInstance {
                     contract: contract.clone(),
@@ -287,6 +305,9 @@ impl CapabilityResolver {
             let contract = self.registry.get(target_id).ok_or_else(|| {
                 ResolverError::UnregisteredCapability(req_id.clone())
             })?;
+            if let Some(ref policy) = reqs.policy {
+                self.apply_policy(req_id, contract, policy)?;
+            }
             if let Some(max_lat) = reqs.max_acceptable_latency_ms {
                 if contract.estimated_latency_ms > max_lat {
                     return Err(ResolverError::LatencyExceeded {
@@ -308,6 +329,9 @@ impl CapabilityResolver {
         for opt_id in &reqs.optional_capabilities {
             let target_id = self.aliases.get(opt_id).unwrap_or(opt_id);
             if let Some(contract) = self.registry.get(target_id) {
+                if let Some(ref policy) = reqs.policy {
+                    self.apply_policy(opt_id, contract, policy)?;
+                }
                 if visited.insert(contract.id.clone()) {
                     instances.push(CapabilityInstance {
                         contract: contract.clone(),
@@ -319,7 +343,8 @@ impl CapabilityResolver {
 
         // Expand transitive dependencies
         let resolved_contracts: Vec<CapabilityContract> = instances.iter().map(|i| i.contract.clone()).collect();
-        let (all_contracts, dep_edges) = self.expand_dependencies(&resolved_contracts)?;
+        let (all_contracts, dep_edges) =
+            self.expand_dependencies(&resolved_contracts, reqs.policy.as_ref())?;
 
         // Rebuild graph from expanded set
         let mut graph = CapabilityGraph::new();
@@ -339,6 +364,14 @@ impl CapabilityResolver {
         }
 
         graph.validate().map_err(ResolverError::GraphValidationFailed)?;
+
+        // Final belt-and-braces: re-verify every resolved instance against policy
+        // (guards against future resolution paths forgetting the check).
+        if let Some(ref policy) = reqs.policy {
+            for instance in &final_instances {
+                self.apply_policy(&instance.contract.id, &instance.contract, policy)?;
+            }
+        }
 
         let resolved = ResolvedCapabilitySet { graph, instances: final_instances };
         self.cache.put(reqs.clone(), resolved.clone());
@@ -674,5 +707,102 @@ mod tests {
         let res = resolver.resolve(&reqs).unwrap();
         assert_eq!(res.instances.len(), 1);
         assert_eq!(res.instances[0].contract.id.as_str(), "echo.text");
+    }
+
+    #[test]
+    fn deny_list_rejects_version_constrained_capability() {
+        let registry = build_semver_registry();
+        let resolver = CapabilityResolver::new(registry);
+
+        let mut reqs = RequirementSet::new(vec![]);
+        reqs.version_constraints = vec![VersionConstraint {
+            capability_prefix: "echo.v".into(),
+            requirement: semver::VersionReq::parse("^1.0").unwrap(),
+        }];
+        reqs.policy = Some(PolicyContext {
+            environment: "test".into(),
+            allow_list: None,
+            deny_list: vec![CapabilityId::new("echo.v1.2.0")],
+            release_profile: None,
+        });
+
+        let err = resolver.resolve(&reqs).unwrap_err();
+        assert!(matches!(err, ResolverError::PolicyDenied { .. }));
+    }
+
+    #[test]
+    fn deny_list_rejects_optional_capability() {
+        let registry = build_test_registry();
+        let resolver = CapabilityResolver::new(registry);
+
+        let mut reqs = RequirementSet::new(vec![CapabilityId::new("echo.text")]);
+        reqs.optional_capabilities = vec![CapabilityId::new("echo.uppercase")];
+        reqs.policy = Some(PolicyContext {
+            environment: "test".into(),
+            allow_list: None,
+            deny_list: vec![CapabilityId::new("echo.uppercase")],
+            release_profile: None,
+        });
+
+        let err = resolver.resolve(&reqs).unwrap_err();
+        assert!(matches!(err, ResolverError::PolicyDenied { .. }));
+    }
+
+    #[test]
+    fn deny_list_rejects_transitive_dependency() {
+        let registry = build_registry_with_deps();
+        let resolver = CapabilityResolver::new(registry);
+
+        let mut reqs = RequirementSet::new(vec![CapabilityId::new("cap.browser")]);
+        reqs.policy = Some(PolicyContext {
+            environment: "test".into(),
+            allow_list: None,
+            deny_list: vec![CapabilityId::new("cap.shell")],
+            release_profile: None,
+        });
+
+        let err = resolver.resolve(&reqs).unwrap_err();
+        assert!(matches!(err, ResolverError::PolicyDenied { .. }));
+    }
+
+    #[test]
+    fn allow_list_allows_transitive_dependency() {
+        let registry = build_registry_with_deps();
+        let resolver = CapabilityResolver::new(registry);
+
+        let mut reqs = RequirementSet::new(vec![CapabilityId::new("cap.browser")]);
+        reqs.policy = Some(PolicyContext {
+            environment: "test".into(),
+            allow_list: Some(vec![
+                CapabilityId::new("cap.browser"),
+                CapabilityId::new("cap.filesystem"),
+                CapabilityId::new("cap.shell"),
+            ]),
+            deny_list: vec![],
+            release_profile: None,
+        });
+
+        let res = resolver.resolve(&reqs).unwrap();
+        assert_eq!(res.instances.len(), 3);
+    }
+
+    #[test]
+    fn allow_list_rejects_non_allowlisted_transitive_dependency() {
+        let registry = build_registry_with_deps();
+        let resolver = CapabilityResolver::new(registry);
+
+        let mut reqs = RequirementSet::new(vec![CapabilityId::new("cap.browser")]);
+        reqs.policy = Some(PolicyContext {
+            environment: "test".into(),
+            allow_list: Some(vec![
+                CapabilityId::new("cap.browser"),
+                CapabilityId::new("cap.filesystem"),
+            ]),
+            deny_list: vec![],
+            release_profile: None,
+        });
+
+        let err = resolver.resolve(&reqs).unwrap_err();
+        assert!(matches!(err, ResolverError::PolicyDenied { .. }));
     }
 }

@@ -39,6 +39,8 @@ The planner converts a user intent and `ContextSnapshot` into a `WorkflowIR` —
 
 The resolver is called during the **Capability Resolution** compiler pass to bind abstract capability references to concrete `CapabilityInstance` objects.
 
+Policy enforcement (v0.13.1, H13/ADR-034): `apply_policy` runs on all resolution paths — required, version-constrained, optional, transitive dependencies inside `expand_dependencies`, and a final re-verification over the resolved instance set. Any deny-list hit (or allow-list miss) fails resolution with `ResolverError::PolicyDenied`; no capability can bypass policy through version constraints, optional requirements, aliases, or transitive deps.
+
 ## Workflow Registry (`src/workflow/`)
 
 | Component | File | Purpose |
