@@ -3,6 +3,8 @@ use serde_json::Value;
 
 use super::Tool;
 
+const MAX_EXPRESSION_LEN: usize = 512;
+
 pub struct CalculatorTool;
 
 #[async_trait]
@@ -32,6 +34,12 @@ impl Tool for CalculatorTool {
         let expr = args.get("expression")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing 'expression' argument".to_string())?;
+
+        if expr.len() > MAX_EXPRESSION_LEN {
+            return Err(format!(
+                "expression exceeds max length of {MAX_EXPRESSION_LEN} characters"
+            ));
+        }
 
         let result = meval::eval_str(expr)
             .map_err(|e| format!("Calculation error: {}", e))?;
@@ -114,27 +122,24 @@ impl Tool for FileReadTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing 'path' argument".to_string())?;
 
-        let allowed_dir = self.allowed_dir.clone();
-        let full_path_str = std::path::Path::new(&allowed_dir).join(path).to_string_lossy().to_string();
+        let allowed = std::path::PathBuf::from(&self.allowed_dir);
+        let full_path = allowed.join(path);
 
-        tokio::task::spawn_blocking(move || {
-            let allowed = std::path::Path::new(&allowed_dir);
-            let full_path = std::path::Path::new(&full_path_str);
-            let canonical = std::fs::canonicalize(full_path)
-                .map_err(|_| "Path does not exist or is inaccessible".to_string())?;
-            let allowed_canonical = std::fs::canonicalize(allowed)
-                .map_err(|_| "Allowed directory not found".to_string())?;
-            if !canonical.starts_with(&allowed_canonical) {
-                return Err("Path traversal detected".to_string());
-            }
+        let allowed_canonical = tokio::fs::canonicalize(&allowed)
+            .await
+            .map_err(|_| "Allowed directory not found".to_string())?;
+        let canonical = tokio::fs::canonicalize(&full_path)
+            .await
+            .map_err(|_| "Path does not exist or is inaccessible".to_string())?;
+        if !canonical.starts_with(&allowed_canonical) {
+            return Err("Path traversal detected".to_string());
+        }
 
-            let content = std::fs::read_to_string(&canonical)
-                .map_err(|e| format!("File read error: {}", e))?;
+        let content = tokio::fs::read_to_string(&canonical)
+            .await
+            .map_err(|e| format!("File read error: {}", e))?;
 
-            Ok(serde_json::json!({ "content": content }))
-        })
-        .await
-        .map_err(|e| format!("File read task failed: {}", e))?
+        Ok(serde_json::json!({ "content": content }))
     }
 }
 
@@ -155,6 +160,15 @@ mod tests {
         let tool = CalculatorTool;
         let result = tool.execute(serde_json::json!({"expression": "invalid"})).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_calculator_tool_rejects_oversized_expression() {
+        let tool = CalculatorTool;
+        let long_expr = "1 + ".repeat(200);
+        let result = tool.execute(serde_json::json!({"expression": long_expr})).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("max length"));
     }
 
     #[tokio::test]

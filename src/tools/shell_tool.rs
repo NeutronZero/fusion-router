@@ -4,6 +4,9 @@ use tokio::process::Command;
 
 use super::Tool;
 
+const MAX_ARGS: usize = 32;
+const MAX_ARG_LEN: usize = 1024;
+
 pub struct ShellCommandTool {
     allowed_commands: Vec<String>,
     timeout_secs: u64,
@@ -12,6 +15,27 @@ pub struct ShellCommandTool {
 impl ShellCommandTool {
     pub fn new(allowed_commands: Vec<String>, timeout_secs: u64) -> Self {
         Self { allowed_commands, timeout_secs }
+    }
+
+    fn validate_args(args: &[String]) -> Result<(), String> {
+        if args.len() > MAX_ARGS {
+            return Err(format!(
+                "too many arguments: {} (max {})",
+                args.len(),
+                MAX_ARGS
+            ));
+        }
+        for arg in args {
+            if arg.len() > MAX_ARG_LEN {
+                return Err(format!(
+                    "argument exceeds max length of {MAX_ARG_LEN} bytes"
+                ));
+            }
+            if arg.contains('\0') {
+                return Err("arguments must not contain NUL bytes".to_string());
+            }
+        }
+        Ok(())
     }
 
     pub fn validate_command(&self, cmd: &str) -> Result<(), String> {
@@ -92,6 +116,8 @@ impl Tool for ShellCommandTool {
             })
             .unwrap_or_default();
 
+        Self::validate_args(&cmd_args)?;
+
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs),
             Command::new(cmd).args(&cmd_args).output(),
@@ -152,15 +178,14 @@ mod tests {
 
         assert!(tool.validate_command(cmd).is_ok());
 
-        let result = tool.execute(serde_json::json!({
-            "command": cmd,
-            "args": args
-        })).await;
-
         // Even if OS cannot find echo binary directly without shell on Windows, validation must pass.
         // On non-windows, command execution completes successfully.
         #[cfg(not(windows))]
         {
+            let result = tool.execute(serde_json::json!({
+                "command": cmd,
+                "args": args
+            })).await;
             assert!(result.is_ok());
             let val = result.unwrap();
             assert!(val["stdout"].as_str().unwrap_or("").contains("hello"));
@@ -175,5 +200,56 @@ mod tests {
         );
         let result = tool.execute(serde_json::json!({})).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_args_rejects_nul_bytes() {
+        let result = ShellCommandTool::validate_args(&["payload\0--delete".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("NUL"));
+    }
+
+    #[test]
+    fn test_validate_args_rejects_too_many() {
+        let args: Vec<String> = (0..(MAX_ARGS + 1)).map(|i| format!("arg{i}")).collect();
+        let result = ShellCommandTool::validate_args(&args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too many arguments"));
+    }
+
+    #[test]
+    fn test_validate_args_rejects_oversized() {
+        let result = ShellCommandTool::validate_args(&["x".repeat(MAX_ARG_LEN + 1)]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_args_accepts_normal_args() {
+        assert!(ShellCommandTool::validate_args(&["hello".into(), "world".into()]).is_ok());
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn test_shell_tool_args_passed_verbatim_without_shell() {
+        let tool = ShellCommandTool::new(vec!["echo".to_string()], 5);
+        let marker = format!("injected_marker_{}", uuid::Uuid::new_v4());
+
+        let result = tool.execute(serde_json::json!({
+            "command": "echo",
+            "args": [format!("a; touch {marker}")]
+        })).await;
+
+        assert!(result.is_ok(), "execution failed: {:?}", result.err());
+        let val = result.unwrap();
+        let stdout = val["stdout"].as_str().unwrap_or("");
+        assert!(
+            stdout.contains("a; touch"),
+            "args must be passed verbatim without shell interpretation, got: {stdout}"
+        );
+        assert!(
+            !std::path::Path::new(&marker).exists(),
+            "semicolon in an argument must not execute a second command"
+        );
+        let _ = std::fs::remove_file(&marker);
     }
 }

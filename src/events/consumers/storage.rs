@@ -13,13 +13,14 @@ impl PersistentEventStoreProjection {
         Self { storage_dir }
     }
 
-    pub fn load_events(&self, execution_id: &str) -> Result<Vec<ExecutionEventEnvelope>, GateError> {
+    pub async fn load_events(&self, execution_id: &str) -> Result<Vec<ExecutionEventEnvelope>, GateError> {
         let file_path = self.storage_dir.join(format!("{execution_id}.jsonl"));
-        if !file_path.exists() {
+        if !tokio::fs::try_exists(&file_path).await.unwrap_or(false) {
             return Ok(vec![]);
         }
 
-        let content = std::fs::read_to_string(&file_path)
+        let content = tokio::fs::read_to_string(&file_path)
+            .await
             .map_err(|e| GateError::ExecutionFailed(format!("read events file {}: {e}", file_path.display())))?;
 
         let mut events = Vec::new();
@@ -105,9 +106,65 @@ mod tests {
         store.handle_event(&env1).await.unwrap();
         store.handle_event(&env2).await.unwrap();
 
-        let loaded = store.load_events("exec-999").unwrap();
+        let loaded = store.load_events("exec-999").await.unwrap();
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].sequence_number, 1);
+        assert_eq!(loaded[1].sequence_number, 2);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_load_events_missing_file_returns_empty() {
+        let temp_dir = std::env::temp_dir().join(format!("fusion_store_test_{}", uuid::Uuid::new_v4()));
+        let store = PersistentEventStoreProjection::new(temp_dir.clone());
+
+        let loaded = store.load_events("never-written").await.unwrap();
+        assert!(loaded.is_empty());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_load_events_skips_blank_lines_and_sorts() {
+        let temp_dir = std::env::temp_dir().join(format!("fusion_store_test_{}", uuid::Uuid::new_v4()));
+        let store = PersistentEventStoreProjection::new(temp_dir.clone());
+
+        let env2 = ExecutionEventEnvelope::new(
+            "wf-1",
+            "exec-777",
+            None,
+            2,
+            None,
+            ExecutionEvent::WorkflowCompleted {
+                total_duration_ms: 100,
+                total_cost_usd: 0.001,
+            },
+        );
+        let env1 = ExecutionEventEnvelope::new(
+            "wf-1",
+            "exec-777",
+            None,
+            1,
+            None,
+            ExecutionEvent::WorkflowStarted {
+                intent: "Quality".into(),
+                input_tokens: 10,
+            },
+        );
+        let json2 = serde_json::to_string(&env2).unwrap();
+        let json1 = serde_json::to_string(&env1).unwrap();
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+        tokio::fs::write(
+            temp_dir.join("exec-777.jsonl"),
+            format!("{json2}\n\n{json1}\n"),
+        )
+        .await
+        .unwrap();
+
+        let loaded = store.load_events("exec-777").await.unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].sequence_number, 1, "must sort by sequence number");
         assert_eq!(loaded[1].sequence_number, 2);
 
         let _ = std::fs::remove_dir_all(temp_dir);

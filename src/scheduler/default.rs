@@ -115,6 +115,16 @@ impl DefaultScheduler {
 
         let mut queue = WorkQueue::new(instance.graph.clone());
 
+        // Frozen graph: node positions never change, so an id -> index map
+        // turns repeated linear scans into O(1) lookups.
+        let node_index: HashMap<Uuid, usize> = queue
+            .graph()
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id, i))
+            .collect();
+
         loop {
             if let Some(cancellation_token) = cancel {
                 if cancellation_token.is_cancelled() {
@@ -151,7 +161,7 @@ impl DefaultScheduler {
 
             let node_clones: Vec<_> = ready_ids
                 .iter()
-                .filter_map(|id| queue.graph().nodes.iter().find(|n| n.id == *id).cloned())
+                .map(|id| queue.graph().nodes[node_index[id]].clone())
                 .collect();
             let mut handles = Vec::new();
 
@@ -237,9 +247,7 @@ impl DefaultScheduler {
                             instance.final_output = Some(output_val);
                         }
 
-                        let node_kind = queue.graph().nodes.iter()
-                            .find(|n| n.id == node_id)
-                            .map(|n| n.kind.clone());
+                        let node_kind = Some(queue.graph().nodes[node_index[&node_id]].kind.clone());
 
                         let edges: Vec<_> = queue.graph().edges.iter()
                             .filter(|e| e.from == node_id || e.to == node_id)
@@ -300,9 +308,9 @@ impl DefaultScheduler {
                                 if has_loop_back {
                                     if let Some(loop_node_id) = loop_target {
                                         let iter_count = loop_iterations.entry(loop_node_id).or_insert(0);
-                                        let max_iters = queue.graph().nodes.iter()
-                                            .find(|n| n.id == loop_node_id)
-                                            .and_then(|n| n.config.get("max_iterations"))
+                                        let max_iters = queue.graph().nodes[node_index[&loop_node_id]]
+                                            .config
+                                            .get("max_iterations")
                                             .and_then(|v| v.as_u64())
                                             .unwrap_or(10) as u32;
                                         if *iter_count < max_iters {
@@ -338,8 +346,7 @@ impl DefaultScheduler {
                         info!(node_id = ?node_id, reason = %reason, latency_ms = latency, "Node failed");
                         let retries = retry_counts.entry(node_id).or_insert(0);
 
-                        let node_config =
-                            queue.graph().nodes.iter().find(|n| n.id == node_id).cloned();
+                        let node_config = Some(queue.graph().nodes[node_index[&node_id]].clone());
 
                         if let Some(node) = node_config {
                             if *retries < node.retry_policy.max_retries {

@@ -166,6 +166,13 @@ impl OptimizationPass for FanOutConsolidationPass {
             adjacency.entry(e.from.clone()).or_default().push(e.to.clone());
         }
 
+        // Frozen node list: an id -> index map turns repeated linear scans into O(1) lookups.
+        let node_index: std::collections::HashMap<String, usize> = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id.clone(), i))
+            .collect();
+
         let fanout_ids: Vec<String> = nodes.iter()
             .filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. }) && !remove_ids.contains(&n.id))
             .map(|n| n.id.clone())
@@ -180,21 +187,21 @@ impl OptimizationPass for FanOutConsolidationPass {
                 if remove_ids.contains(succ_id) {
                     continue;
                 }
-                if nodes.iter().any(|n| n.id == *succ_id && matches!(n.kind, PrimitiveNodeKind::FanOut { .. })) {
-                    let count1 = nodes.iter()
-                        .find(|n| n.id == *id)
-                        .map(|n| if let PrimitiveNodeKind::FanOut { count } = &n.kind { *count } else { 1 })
-                        .unwrap_or(1);
-                    let count2 = nodes.iter()
-                        .find(|n| n.id == *succ_id)
-                        .map(|n| if let PrimitiveNodeKind::FanOut { count } = &n.kind { *count } else { 1 })
-                        .unwrap_or(1);
+                if matches!(nodes[node_index[succ_id]].kind, PrimitiveNodeKind::FanOut { .. }) {
+                    let count1 = if let PrimitiveNodeKind::FanOut { count } = &nodes[node_index[id]].kind {
+                        *count
+                    } else {
+                        1
+                    };
+                    let count2 = if let PrimitiveNodeKind::FanOut { count } = &nodes[node_index[succ_id]].kind {
+                        *count
+                    } else {
+                        1
+                    };
                     let merged_count = count1.max(count2);
 
                     // Update the first FanOut's count
-                    if let Some(node) = nodes.iter_mut().find(|n| n.id == *id) {
-                        node.kind = PrimitiveNodeKind::FanOut { count: merged_count };
-                    }
+                    nodes[node_index[id]].kind = PrimitiveNodeKind::FanOut { count: merged_count };
 
                     // Reroute edges: everything that went to succ_id now comes from id
                     let succ_outgoing: Vec<(String, Option<String>)> = edges.iter()

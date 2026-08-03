@@ -242,7 +242,7 @@ async fn main() {
         Commands::Trace(cmd) => match cmd {
             TraceCmd::Timeline { execution_id, format } => {
                 let store = PersistentEventStoreProjection::new(workspace_root.join(".fusion/events"));
-                let events = store.load_events(&execution_id).unwrap_or_default();
+                let events = store.load_events(&execution_id).await.unwrap_or_default();
 
                 let mut proj = TimelineProjection::new(execution_id);
                 for env in &events {
@@ -256,7 +256,7 @@ async fn main() {
             }
             TraceCmd::Events { execution_id, format } => {
                 let store = PersistentEventStoreProjection::new(workspace_root.join(".fusion/events"));
-                let events = store.load_events(&execution_id).unwrap_or_default();
+                let events = store.load_events(&execution_id).await.unwrap_or_default();
 
                 match format {
                     OutputFormat::Text => {

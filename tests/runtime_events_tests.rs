@@ -65,7 +65,7 @@ async fn test_end_to_end_runtime_event_pipeline() {
     handle.abort();
 
     let store = PersistentEventStoreProjection::new(temp_dir.clone());
-    let loaded = store.load_events("exec-e2e-1").unwrap();
+    let loaded = store.load_events("exec-e2e-1").await.unwrap();
     assert_eq!(loaded.len(), 3);
     assert_eq!(loaded[0].sequence_number, 1);
     assert_eq!(loaded[1].sequence_number, 2);

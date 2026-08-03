@@ -49,6 +49,26 @@ use scheduler::connector_resolver::ConnectorResolver;
 use scheduler::connector_subscriber::ConnectorSubscriber;
 use telemetry::SqliteEvidenceRepository;
 
+/// Resolves an API key from the environment, failing fast in release builds
+/// instead of silently substituting placeholder credentials.
+fn resolve_api_key(env_var: &str, placeholder: &str) -> anyhow::Result<String> {
+    if let Ok(key) = std::env::var(env_var) {
+        if !key.trim().is_empty() {
+            return Ok(key);
+        }
+    }
+    if cfg!(debug_assertions) {
+        tracing::warn!(
+            env_var = %env_var,
+            "API key missing; using placeholder key (debug build only)"
+        );
+        return Ok(placeholder.to_string());
+    }
+    anyhow::bail!(
+        "API key environment variable '{env_var}' is required but missing or empty"
+    )
+}
+
 #[tokio::main]
 async fn main() {
     let _ = dotenv::dotenv();
@@ -93,21 +113,32 @@ async fn main() {
 
     tracing::info!("loaded config from {}", config_path);
 
+    let openrouter_key = resolve_api_key("OPENROUTER_API_KEY", "test-key")
+        .unwrap_or_else(|e| panic!("{e}"));
     let default_target = ProviderTarget::new(
         "default".to_string(),
         CircuitBreaker::new(5, 3, 30),
-        Box::new(|| -> Arc<dyn providers::ChatProvider + Send + Sync> {
-            Arc::new(OpenRouterProvider::new(
-                std::env::var("OPENROUTER_API_KEY").unwrap_or_else(|_| "test-key".to_string())
-            ))
+        Box::new(move || -> Arc<dyn providers::ChatProvider + Send + Sync> {
+            Arc::new(OpenRouterProvider::new(openrouter_key.clone()))
         }),
     );
     let provider_registry = Arc::new(ProviderRegistry::new(default_target));
 
     for (name, cfg) in &config.providers {
-        let api_key = cfg.api_key_env.as_ref()
-            .and_then(|var| std::env::var(var).ok())
-            .unwrap_or_else(|| format!("test-key-{name}"));
+        let api_key = match cfg.api_key_env.as_ref() {
+            Some(var) => resolve_api_key(var, &format!("test-key-{name}"))
+                .unwrap_or_else(|e| panic!("{e}")),
+            None if cfg!(debug_assertions) => {
+                tracing::warn!(
+                    provider = %name,
+                    "no api_key_env configured; using placeholder key (debug build only)"
+                );
+                format!("test-key-{name}")
+            }
+            None => panic!(
+                "provider '{name}' has no api_key_env configured; refusing to run without a credential"
+            ),
+        };
 
         let circuit_breaker = CircuitBreaker::new(
             cfg.failure_threshold,
