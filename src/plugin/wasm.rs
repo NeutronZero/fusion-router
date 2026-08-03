@@ -117,7 +117,7 @@ impl WasmStrategy {
 impl Strategy for WasmStrategy {
     fn descriptor(&self) -> StrategyDescriptor {
         {
-            let cached = self.descriptor.lock().unwrap();
+            let cached = self.descriptor.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(ref desc) = *cached {
                 return desc.clone();
             }
@@ -139,7 +139,7 @@ impl Strategy for WasmStrategy {
             },
         };
 
-        *self.descriptor.lock().unwrap() = Some(desc.clone());
+        *self.descriptor.lock().unwrap_or_else(|e| e.into_inner()) = Some(desc.clone());
         desc
     }
 
@@ -184,6 +184,12 @@ fn read_name(engine: &Engine, module: &Module) -> anyhow::Result<String> {
 fn read_string(store: &Store<()>, memory: &Memory, ptr: i32) -> anyhow::Result<String> {
     let data = memory.data(store);
     let start = ptr as usize;
+    if start >= data.len() {
+        return Err(anyhow::anyhow!(
+            "read_string: pointer {ptr} out of bounds (memory len {})",
+            data.len()
+        ));
+    }
     let mut end = start;
     while end < data.len() && data[end] != 0 {
         end += 1;
@@ -207,6 +213,7 @@ pub fn load_and_register_wasm_strategy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wasmtime::MemoryType;
 
     #[test]
     fn test_validate_exports_rejects_module_without_strategy_exports() {
@@ -246,5 +253,18 @@ mod tests {
     fn test_from_file_rejects_file_not_found() {
         let result = WasmStrategy::from_file("nonexistent.wasm");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_string_rejects_out_of_bounds_pointer() {
+        let engine = Engine::default();
+        let mut store = Store::new(&engine, ());
+        let memory = Memory::new(&mut store, MemoryType::new(1, Some(1))).unwrap();
+
+        let negative = read_string(&store, &memory, -1);
+        assert!(negative.is_err(), "negative pointer must error, not panic");
+
+        let past_end = read_string(&store, &memory, 65537);
+        assert!(past_end.is_err(), "pointer past memory end must error, not panic");
     }
 }

@@ -3,6 +3,7 @@ use crate::events::projection::EventProjection;
 use crate::events::ExecutionEventEnvelope;
 use crate::release::gate::GateError;
 
+#[allow(dead_code)]
 pub struct OpenTelemetryProjection;
 
 impl OpenTelemetryProjection {

@@ -103,6 +103,7 @@ impl SandboxRuntime for WasmtimeSandboxRuntime {
             invoke,
             fuel_initial,
             growth_rejected,
+            max_response_bytes: self.config.max_response_bytes,
         }))
     }
 }
@@ -114,6 +115,7 @@ pub struct WasmtimeSandboxInstance {
     invoke: TypedFunc<(i32, i32), (i32, i32)>,
     fuel_initial: u64,
     growth_rejected: Arc<AtomicBool>,
+    max_response_bytes: usize,
 }
 
 impl WasmtimeSandboxInstance {
@@ -148,6 +150,13 @@ impl SandboxInstance for WasmtimeSandboxInstance {
             .map_err(Self::map_trap_error)?;
 
         if self.growth_rejected.load(Ordering::SeqCst) {
+            return Err(RuntimeError::OutOfMemory);
+        }
+
+        // Reject guest-claimed output lengths that exceed the configured cap
+        // BEFORE allocating a host buffer: the guest controls `out_len`, so an
+        // unbounded allocation here is an OOM denial-of-service vector.
+        if out_len as usize > self.max_response_bytes {
             return Err(RuntimeError::OutOfMemory);
         }
 

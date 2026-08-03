@@ -37,6 +37,27 @@ pub struct FilesystemReplayBackend {
     loader: FixtureLoader,
 }
 
+/// JSON metadata header on the first line of a `.snap` file.
+/// Format: `<json header>\n<payload bytes>`.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SnapshotMetadataHeader {
+    version: semver::Version,
+    format_version: u32,
+    schema_version: u32,
+    producer_version: String,
+}
+
+impl SnapshotMetadataHeader {
+    fn to_snapshot_metadata(&self) -> SnapshotMetadata {
+        SnapshotMetadata {
+            version: self.version.clone(),
+            format_version: self.format_version,
+            schema_version: self.schema_version,
+            producer_version: self.producer_version.clone(),
+        }
+    }
+}
+
 impl FilesystemReplayBackend {
     pub fn new(fixture_root: PathBuf) -> Self {
         Self { loader: FixtureLoader::new(fixture_root) }
@@ -64,14 +85,24 @@ impl ReplayBackend for FilesystemReplayBackend {
     fn load_snapshot(&self, path: &std::path::Path) -> Result<SnapshotData, GateError> {
         let content = std::fs::read(path)
             .map_err(|e| GateError::ExecutionFailed(format!("read snapshot {}: {e}", path.display())))?;
+        let header_end = content
+            .iter()
+            .position(|&b| b == b'\n')
+            .ok_or_else(|| {
+                GateError::ExecutionFailed(format!(
+                    "snapshot {}: missing metadata header line",
+                    path.display()
+                ))
+            })?;
+        let header = std::str::from_utf8(&content[..header_end]).map_err(|e| {
+            GateError::ExecutionFailed(format!("snapshot {}: invalid header encoding: {e}", path.display()))
+        })?;
+        let header: SnapshotMetadataHeader = serde_json::from_str(header).map_err(|e| {
+            GateError::ExecutionFailed(format!("snapshot {}: invalid metadata header: {e}", path.display()))
+        })?;
         Ok(SnapshotData {
-            metadata: SnapshotMetadata {
-                version: semver::Version::new(0, 10, 0),
-                format_version: 1,
-                schema_version: 1,
-                producer_version: "fusion-router/0.10.0".into(),
-            },
-            payload: content,
+            metadata: header.to_snapshot_metadata(),
+            payload: content[header_end + 1..].to_vec(),
         })
     }
 }
@@ -286,5 +317,48 @@ mod tests {
             GateExecution::ExecutionError(GateError::ExecutionFailed(_)) => {},
             _ => panic!("expected ExecutionFailed inside GateExecution::ExecutionError"),
         }
+    }
+
+    fn write_snapshot(dir: &std::path::Path, name: &str, header: &str, payload: &[u8]) {
+        std::fs::create_dir_all(dir).unwrap();
+        let mut bytes = header.as_bytes().to_vec();
+        bytes.push(b'\n');
+        bytes.extend_from_slice(payload);
+        std::fs::write(dir.join(name), bytes).unwrap();
+    }
+
+    #[test]
+    fn test_filesystem_replay_backend_reads_real_metadata() {
+        let temp = std::env::temp_dir().join(format!("fusion_replay_real_{}", std::process::id()));
+        write_snapshot(
+            &temp,
+            "old.snap",
+            r#"{"version":"0.9.0","format_version":99,"schema_version":999,"producer_version":"legacy/0.9.0"}"#,
+            &[7, 8, 9],
+        );
+
+        let backend = FilesystemReplayBackend::new(temp.clone());
+        let snapshot = backend.load_snapshot(&temp.join("old.snap")).unwrap();
+
+        assert_eq!(snapshot.metadata.version, semver::Version::new(0, 9, 0));
+        assert_eq!(snapshot.metadata.format_version, 99);
+        assert_eq!(snapshot.metadata.schema_version, 999);
+        assert_eq!(snapshot.metadata.producer_version, "legacy/0.9.0");
+        assert_eq!(snapshot.payload, vec![7, 8, 9]);
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_replay_backend_rejects_headerless_snapshot() {
+        let temp = std::env::temp_dir().join(format!("fusion_replay_bare_{}", std::process::id()));
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(temp.join("bare.snap"), vec![1, 2, 3]).unwrap();
+
+        let backend = FilesystemReplayBackend::new(temp.clone());
+        let result = backend.load_snapshot(&temp.join("bare.snap"));
+        assert!(result.is_err(), "snapshot without metadata header must not fabricate metadata");
+
+        let _ = std::fs::remove_dir_all(temp);
     }
 }

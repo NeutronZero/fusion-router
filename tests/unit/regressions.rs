@@ -96,8 +96,8 @@ async fn test_scheduler_parity_and_budget_enforcement() {
         .unwrap();
 
     // Verify both fail due to budget breach and produce identical failure state
-    assert_eq!(res1.success, false);
-    assert_eq!(res2.success, false);
+    assert!(!res1.success);
+    assert!(!res2.success);
     assert_eq!(res1.success, res2.success);
 }
 

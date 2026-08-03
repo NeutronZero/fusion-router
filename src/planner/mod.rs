@@ -27,12 +27,14 @@ pub enum PlannerMode {
     Hybrid,
 }
 
-impl PlannerMode {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl std::str::FromStr for PlannerMode {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "dynamic" => PlannerMode::Dynamic,
             "hybrid" => PlannerMode::Hybrid,
             _ => PlannerMode::Static,
-        }
+        })
     }
 }

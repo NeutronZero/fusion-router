@@ -38,6 +38,7 @@ impl RuntimeInspector {
         Ok(details)
     }
 
+    #[allow(dead_code)]
     pub fn get_instance(&self, capability_id: &str) -> Result<Option<InstanceDetail>, OperationError> {
         let keys = self.module_cache.keys();
         for key in keys {

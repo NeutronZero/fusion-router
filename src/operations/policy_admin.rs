@@ -22,6 +22,7 @@ impl PolicyAdmin {
         Ok(store.clone())
     }
 
+    #[allow(dead_code)]
     pub fn get_policy(&self, name: &str) -> Result<Option<PolicyDeclaration>, OperationError> {
         let store = self.store.lock();
         Ok(store.iter().find(|d| d.name == name).cloned())
@@ -44,6 +45,7 @@ impl PolicyAdmin {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn update_policy(&self, name: &str, decl: PolicyDeclaration) -> Result<(), OperationError> {
         let mut store = self.store.lock();
         if let Some(existing) = store.iter_mut().find(|d| d.name == name) {

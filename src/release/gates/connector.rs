@@ -6,6 +6,7 @@ use crate::release::fixture::FixtureKind;
 use crate::release::fixture_loader::{discover_fixtures, load_fixture_manifest, FixtureLoader};
 use crate::release::gate::*;
 
+#[allow(dead_code)]
 pub struct ConnectorGateConfig {
     pub fixture_root: PathBuf,
 }
@@ -13,6 +14,7 @@ pub struct ConnectorGateConfig {
 #[derive(Debug, Clone)]
 pub struct ConnectorArtifact {
     pub name: String,
+    #[allow(dead_code)]
     pub version: semver::Version,
     pub protocol_version: u32,
     pub valid_health_endpoint_schema: bool,
@@ -79,6 +81,7 @@ pub trait ConnectorBackend: Send + Sync {
     fn load(&self, path: &std::path::Path) -> Result<ConnectorArtifact, GateError>;
 }
 
+#[allow(dead_code)]
 pub struct FilesystemConnectorBackend {
     loader: FixtureLoader,
 }

@@ -59,6 +59,16 @@ impl Model for ZenModel {
             .strip_prefix("zen/").or_else(|| req.model.strip_prefix("opencode/"))
             .unwrap_or(&req.model);
 
+        tracing::debug!(
+            model = %api_model,
+            message_count = req.messages.len(),
+            roles = ?req.messages.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(),
+            total_chars = req.messages.iter().map(|m| m.content.len()).sum::<usize>(),
+            last_message_preview = req.messages.last().map(|m| m.content.chars().take(120).collect::<String>()).unwrap_or_default(),
+            first_message_preview = req.messages.first().map(|m| m.content.chars().take(80).collect::<String>()).unwrap_or_default(),
+            "zen request"
+        );
+
         let body = serde_json::json!({
             "model": api_model,
             "messages": req.messages,
@@ -77,6 +87,12 @@ impl Model for ZenModel {
 
     fn normalize_response(&self, resp: TransportResponse) -> anyhow::Result<ChatCompletionResponse> {
         let body = resp.body;
+        tracing::debug!(
+            response_keys = ?body.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()),
+            choices_len = body["choices"].as_array().map(|a| a.len()).unwrap_or(0),
+            content_type = body["choices"].as_array().and_then(|a| a.first()).map(|c| format!("{:?}", c["message"]["content"])).unwrap_or_default(),
+            "zen raw response"
+        );
         let id = body["id"].as_str().unwrap_or("zen-id").to_string();
         let model = body["model"].as_str().unwrap_or(&self.model_id).to_string();
         let created = body["created"].as_i64().unwrap_or_else(|| chrono::Utc::now().timestamp());
@@ -86,16 +102,23 @@ impl Model for ZenModel {
             .map(|arr| {
                 arr.iter()
                     .enumerate()
-                    .map(|(i, c)| Choice {
-                        index: i as u32,
-                        message: ChatMessage {
-                            role: c["message"]["role"].as_str().unwrap_or("assistant").to_string(),
-                            content: c["message"]["content"].as_str().unwrap_or("").to_string(),
-                        },
-                        finish_reason: c["finish_reason"].as_str().unwrap_or("stop").to_string(),
+                    .map(|(i, c)| {
+                        let content = super::message_content(c);
+                        let finish_reason =
+                            c["finish_reason"].as_str().unwrap_or("stop").to_string();
+                        super::ensure_non_truncated(c, &content)?;
+                        Ok(Choice {
+                            index: i as u32,
+                            message: ChatMessage {
+                                role: c["message"]["role"].as_str().unwrap_or("assistant").to_string(),
+                                content,
+                            },
+                            finish_reason,
+                        })
                     })
-                    .collect()
+                    .collect::<anyhow::Result<Vec<Choice>>>()
             })
+            .transpose()?
             .unwrap_or_default();
 
         let usage = body["usage"].as_object().map(|u| Usage {
@@ -112,5 +135,77 @@ impl Model for ZenModel {
             choices,
             usage,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::TransportResponse;
+
+    fn choice_with(content: serde_json::Value, finish_reason: &str) -> serde_json::Value {
+        serde_json::json!({
+            "index": 0,
+            "message": { "role": "assistant", "content": content },
+            "finish_reason": finish_reason,
+        })
+    }
+
+    #[test]
+    fn test_normalize_joins_array_content() {
+        let model = ZenModel::new("t".into());
+        let resp = TransportResponse {
+            status: 200,
+            body: serde_json::json!({
+                "id": "1", "model": "t", "created": 0, "object": "chat.completion",
+                "choices": [choice_with(serde_json::json!(["Hello", " ", "world"]), "stop")],
+            }),
+        };
+        let out = model.normalize_response(resp).unwrap();
+        assert_eq!(out.choices[0].message.content, "Hello world");
+    }
+
+    #[test]
+    fn test_normalize_plain_string_content() {
+        let model = ZenModel::new("t".into());
+        let resp = TransportResponse {
+            status: 200,
+            body: serde_json::json!({
+                "id": "1", "model": "t", "created": 0, "object": "chat.completion",
+                "choices": [choice_with(serde_json::Value::String("answer".into()), "stop")],
+            }),
+        };
+        let out = model.normalize_response(resp).unwrap();
+        assert_eq!(out.choices[0].message.content, "answer");
+    }
+
+    #[test]
+    fn test_normalize_rejects_truncated_empty_content() {
+        let model = ZenModel::new("t".into());
+        let resp = TransportResponse {
+            status: 200,
+            body: serde_json::json!({
+                "id": "1", "model": "t", "created": 0, "object": "chat.completion",
+                // Some providers return `content: []` when the completion was
+                // cut off by max_tokens (finish_reason=length).
+                "choices": [choice_with(serde_json::json!([]), "length")],
+            }),
+        };
+        let err = model.normalize_response(resp).unwrap_err().to_string();
+        assert!(err.contains("truncated"), "expected truncation error, got: {err}");
+    }
+
+    #[test]
+    fn test_normalize_allows_empty_content_when_not_truncated() {
+        let model = ZenModel::new("t".into());
+        let resp = TransportResponse {
+            status: 200,
+            body: serde_json::json!({
+                "id": "1", "model": "t", "created": 0, "object": "chat.completion",
+                "choices": [choice_with(serde_json::Value::String("".into()), "stop")],
+            }),
+        };
+        let out = model.normalize_response(resp).unwrap();
+        assert_eq!(out.choices[0].message.content, "");
     }
 }

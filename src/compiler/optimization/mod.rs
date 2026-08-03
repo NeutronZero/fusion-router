@@ -43,6 +43,12 @@ impl DeadNodeEliminationPass {
     }
 }
 
+impl Default for DeadNodeEliminationPass {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OptimizationPass for DeadNodeEliminationPass {
     fn name(&self) -> &str {
         "dead_node_elimination"
@@ -98,6 +104,12 @@ pub struct FanOutConsolidationPass {
 impl FanOutConsolidationPass {
     pub const fn new() -> Self {
         Self { version: 1 }
+    }
+}
+
+impl Default for FanOutConsolidationPass {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -7,9 +7,40 @@ use std::time::Duration;
 use async_trait::async_trait;
 use fusion_router::feature_gate::*;
 use fusion_router::release::gate::*;
-use fusion_router::release::gates::semver::{MockBackend, SemVerGate};
+use fusion_router::release::gates::semver::{SemVerBackend, SemVerGate};
 use fusion_router::release::report::GateReport;
 use fusion_router::release::runner::GateRunner;
+
+struct LocalMockSemVerBackend {
+    should_pass: bool,
+}
+
+#[async_trait]
+impl SemVerBackend for LocalMockSemVerBackend {
+    fn name(&self) -> &str {
+        "local-mock"
+    }
+
+    async fn check_release(
+        &self,
+        _crate_path: &std::path::Path,
+        _baseline_ref: &str,
+    ) -> Result<Vec<GateCheck>, GateError> {
+        if self.should_pass {
+            Ok(vec![GateCheck {
+                name: "compatibility".into(),
+                passed: true,
+                message: "All compatible".into(),
+            }])
+        } else {
+            Ok(vec![GateCheck {
+                name: "compatibility".into(),
+                passed: false,
+                message: "Breaking change detected".into(),
+            }])
+        }
+    }
+}
 
 fn test_context() -> GateContext {
     GateContext {
@@ -21,7 +52,7 @@ fn test_context() -> GateContext {
 #[tokio::test]
 async fn test_gate_runner_with_mock_semver_passing() {
     let gate = SemVerGate::with_backend(
-        Box::new(MockBackend { should_pass: true }),
+        Box::new(LocalMockSemVerBackend { should_pass: true }),
         "v0.9.0",
         PathBuf::from("/tmp"),
     );
@@ -46,7 +77,7 @@ async fn test_gate_runner_with_mock_semver_passing() {
 #[tokio::test]
 async fn test_gate_runner_with_mock_semver_failing() {
     let gate = SemVerGate::with_backend(
-        Box::new(MockBackend { should_pass: false }),
+        Box::new(LocalMockSemVerBackend { should_pass: false }),
         "v0.9.0",
         PathBuf::from("/tmp"),
     );
@@ -71,7 +102,7 @@ async fn test_gate_runner_with_mock_semver_failing() {
 #[tokio::test]
 async fn test_report_json_round_trip() {
     let gate = SemVerGate::with_backend(
-        Box::new(MockBackend { should_pass: true }),
+        Box::new(LocalMockSemVerBackend { should_pass: true }),
         "v0.9.0",
         PathBuf::from("/tmp"),
     );

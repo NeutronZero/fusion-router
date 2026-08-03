@@ -13,6 +13,41 @@ impl ShellCommandTool {
     pub fn new(allowed_commands: Vec<String>, timeout_secs: u64) -> Self {
         Self { allowed_commands, timeout_secs }
     }
+
+    pub fn validate_command(&self, cmd: &str) -> Result<(), String> {
+        let cmd_clean = cmd.trim().to_lowercase();
+        let file_name = std::path::Path::new(&cmd_clean)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&cmd_clean);
+        let file_stem = std::path::Path::new(&cmd_clean)
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&cmd_clean);
+
+        const REJECTED_SHELLS: &[&str] = &[
+            "cmd", "cmd.exe", "sh", "bash", "powershell", "powershell.exe", "pwsh", "zsh",
+        ];
+
+        if REJECTED_SHELLS.contains(&cmd_clean.as_str())
+            || REJECTED_SHELLS.contains(&file_name)
+            || REJECTED_SHELLS.contains(&file_stem)
+        {
+            return Err(format!(
+                "Execution of shell interpreter binary '{}' is strictly prohibited",
+                cmd
+            ));
+        }
+
+        if !self.allowed_commands.iter().any(|a| a == cmd) {
+            return Err(format!(
+                "Command '{}' is not in allowed list: {:?}",
+                cmd, self.allowed_commands
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -48,12 +83,7 @@ impl Tool for ShellCommandTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing 'command' argument".to_string())?;
 
-        if !self.allowed_commands.iter().any(|a| a == cmd) {
-            return Err(format!(
-                "Command '{}' is not in allowed list: {:?}",
-                cmd, self.allowed_commands
-            ));
-        }
+        self.validate_command(cmd)?;
 
         let cmd_args: Vec<String> = args.get("args")
             .and_then(|v| v.as_array())
@@ -96,22 +126,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_shell_tool_allowed_command() {
+    async fn test_shell_tool_rejected_shell_interpreter_binaries() {
         let tool = ShellCommandTool::new(
-            vec!["echo".to_string(), "cmd".to_string()],
+            vec!["cmd".to_string(), "sh".to_string(), "bash".to_string(), "powershell".to_string(), "powershell.exe".to_string(), "pwsh".to_string(), "zsh".to_string()],
             5,
         );
-        #[cfg(windows)]
-        let (cmd, args): (&str, Vec<&str>) = ("cmd", vec!["/c", "echo", "hello world"]);
+
+        for bin in &["cmd", "cmd.exe", "sh", "bash", "powershell", "powershell.exe", "pwsh", "zsh"] {
+            let res = tool.validate_command(bin);
+            assert!(res.is_err(), "binary '{}' should be rejected", bin);
+            assert!(res.unwrap_err().contains("strictly prohibited"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_shell_tool_allowed_command() {
+        let tool = ShellCommandTool::new(
+            vec!["echo".to_string()],
+            5,
+        );
         #[cfg(not(windows))]
         let (cmd, args): (&str, Vec<&str>) = ("echo", vec!["hello world"]);
+        #[cfg(windows)]
+        let (cmd, args): (&str, Vec<&str>) = ("echo", vec!["hello world"]);
+
+        assert!(tool.validate_command(cmd).is_ok());
+
         let result = tool.execute(serde_json::json!({
             "command": cmd,
             "args": args
         })).await;
-        assert!(result.is_ok());
-        let val = result.unwrap();
-        assert!(val["stdout"].as_str().unwrap_or("").contains("hello"));
+
+        // Even if OS cannot find echo binary directly without shell on Windows, validation must pass.
+        // On non-windows, command execution completes successfully.
+        #[cfg(not(windows))]
+        {
+            assert!(result.is_ok());
+            let val = result.unwrap();
+            assert!(val["stdout"].as_str().unwrap_or("").contains("hello"));
+        }
     }
 
     #[tokio::test]

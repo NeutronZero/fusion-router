@@ -69,6 +69,31 @@ impl ModelRequirements {
     }
 }
 
+/// Extracts the assistant message content from a completion choice. Some
+/// providers return `content` as an array of parts instead of a plain string;
+/// non-string content must never silently collapse to an empty answer.
+pub fn message_content(choice: &serde_json::Value) -> String {
+    match &choice["message"]["content"] {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(parts) => {
+            parts.iter().filter_map(|p| p.as_str()).collect::<String>()
+        }
+        _ => String::new(),
+    }
+}
+
+/// Returns an error when the provider finished with `length` (truncation) and
+/// produced no usable content — silently surfacing an empty completion is
+/// worse than a retriable failure.
+pub fn ensure_non_truncated(choice: &serde_json::Value, content: &str) -> anyhow::Result<()> {
+    if content.is_empty() && choice["finish_reason"].as_str() == Some("length") {
+        anyhow::bail!(
+            "completion truncated (finish_reason=length) with empty content; increase max_tokens"
+        );
+    }
+    Ok(())
+}
+
 #[async_trait]
 pub trait Model: Send + Sync {
     fn id(&self) -> &str;
@@ -155,11 +180,7 @@ impl ChatProvider for Provider {
                 Ok(event) => {
                     buf.push_str(&event.data);
                     let mut chunks = Vec::new();
-                    loop {
-                        let pos = match buf.find("\n\n") {
-                            Some(p) => p,
-                            None => break,
-                        };
+                    while let Some(pos) = buf.find("\n\n") {
                         let raw = buf[..pos].trim().to_string();
                         buf.drain(..=pos + 1);
                         if raw.is_empty() {
@@ -185,7 +206,7 @@ impl ChatProvider for Provider {
             async move { Some(chunks) }
         });
 
-        Ok(Box::pin(framed.flat_map(|chunks| stream::iter(chunks))))
+        Ok(Box::pin(framed.flat_map(stream::iter)))
     }
 }
 

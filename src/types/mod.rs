@@ -6,9 +6,11 @@ pub mod error;
 pub mod execution;
 pub mod artifact;
 pub mod execution_context;
+pub mod anthropic;
 
 pub use error::{PipelineStage, RouterError};
 pub use artifact::{Artifact, ArtifactKind};
+pub use anthropic::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

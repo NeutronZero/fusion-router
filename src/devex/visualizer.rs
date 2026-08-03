@@ -17,7 +17,7 @@ impl GraphVisualizer {
         let mut mermaid = String::from("graph TD;\n");
         let nodes = graph.nodes();
         
-        for (id, _node) in nodes {
+        for id in nodes.keys() {
             mermaid.push_str(&format!(
                 "    {}[{}]\n",
                 id.as_str().replace('.', "_"),
@@ -48,7 +48,7 @@ impl GraphVisualizer {
         let mut ascii = String::from("ASCII Graph:\n");
         
         ascii.push_str("Nodes:\n");
-        for (id, _node) in graph.nodes() {
+        for id in graph.nodes().keys() {
             ascii.push_str(&format!(" - {}\n", id.as_str()));
         }
         

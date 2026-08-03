@@ -9,12 +9,9 @@ pub struct PolicyPrecedenceEngine;
 impl PolicyPrecedenceEngine {
     /// Matches a target symbol string against an immutable `PolicyIR` and returns the highest precedence matching rule.
     pub fn evaluate_matching_rule<'a>(ir: &'a PolicyIR, target_symbol: &str) -> Option<&'a PolicyRule> {
-        for rule in &ir.rules {
-            if rule.target_pattern == target_symbol || rule.target_pattern == "*" {
-                return Some(rule);
-            }
-        }
-        None
+        ir.rules
+            .iter()
+            .find(|rule| rule.target_pattern == target_symbol || rule.target_pattern == "*")
     }
 }
 

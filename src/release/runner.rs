@@ -1,4 +1,5 @@
-use super::gate::{GateContext, GateExecution, GateId, ReleaseGate};
+use super::gate::{GateContext, GateExecution, GateId, GateResult, ReleaseGate};
+use std::time::Duration;
 
 #[derive(Default)]
 pub struct GateRunner {
@@ -14,6 +15,7 @@ impl GateRunner {
         self.gates.push(gate);
     }
 
+    #[allow(dead_code)]
     pub fn gates(&self) -> &[Box<dyn ReleaseGate>] {
         &self.gates
     }
@@ -21,8 +23,7 @@ impl GateRunner {
     pub async fn run_all(&self, context: &GateContext) -> Vec<GateExecution> {
         let mut results = Vec::with_capacity(self.gates.len());
         for gate in &self.gates {
-            let execution = gate.run(context).await;
-            results.push(execution);
+            results.push(Self::normalize(gate.id(), gate.run(context).await));
         }
         results
     }
@@ -30,10 +31,26 @@ impl GateRunner {
     pub async fn run_one(&self, id: GateId, context: &GateContext) -> Option<GateExecution> {
         for gate in &self.gates {
             if gate.id() == id {
-                return Some(gate.run(context).await);
+                return Some(Self::normalize(gate.id(), gate.run(context).await));
             }
         }
         None
+    }
+
+    /// Converts a gate execution error into a failed `GateResult` carrying the
+    /// gate's identity, so consumers (e.g. `PolicyEvaluator`) can classify
+    /// errors as failed evidence instead of silently dropping them.
+    fn normalize(id: GateId, execution: GateExecution) -> GateExecution {
+        match execution {
+            GateExecution::ExecutionError(error) => GateExecution::Success(GateResult {
+                gate_id: id,
+                passed: false,
+                summary: error.to_string(),
+                details: vec![],
+                duration: Duration::ZERO,
+            }),
+            other => other,
+        }
     }
 }
 
@@ -197,7 +214,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_runner_execution_error_preserved() {
+    async fn test_runner_execution_error_converted_to_failed_result() {
         let failing = FailingGate { id: GateId::Replay1 };
         let mut runner = GateRunner::new();
         runner.register(Box::new(failing));
@@ -205,7 +222,46 @@ mod tests {
         let results = runner.run_all(&test_context()).await;
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed());
-        assert!(results[0].is_error());
+        assert!(!results[0].is_error());
+    }
+
+    #[tokio::test]
+    async fn test_runner_error_becomes_failed_result_with_identity() {
+        let failing = FailingGate { id: GateId::Replay1 };
+        let mut runner = GateRunner::new();
+        runner.register(Box::new(failing));
+
+        let results = runner.run_all(&test_context()).await;
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            GateExecution::Success(result) => {
+                assert_eq!(result.gate_id, GateId::Replay1);
+                assert!(!result.passed);
+                assert!(result.summary.contains("something broke"));
+            }
+            GateExecution::ExecutionError(_) => {
+                panic!("expected execution error to be converted to a failed GateResult, got ExecutionError");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_runner_run_one_error_becomes_failed_result() {
+        let failing = FailingGate { id: GateId::Upgrade1 };
+        let mut runner = GateRunner::new();
+        runner.register(Box::new(failing));
+
+        let result = runner.run_one(GateId::Upgrade1, &test_context()).await;
+        let execution = result.expect("gate should be found");
+        match execution {
+            GateExecution::Success(res) => {
+                assert_eq!(res.gate_id, GateId::Upgrade1);
+                assert!(!res.passed);
+            }
+            GateExecution::ExecutionError(_) => {
+                panic!("expected error to be converted to a failed GateResult");
+            }
+        }
     }
 
     #[tokio::test]

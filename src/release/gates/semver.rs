@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::release::gate::{
@@ -13,7 +13,7 @@ pub trait SemVerBackend: Send + Sync {
     fn name(&self) -> &str;
     async fn check_release(
         &self,
-        crate_path: &PathBuf,
+        crate_path: &Path,
         baseline_ref: &str,
     ) -> Result<Vec<GateCheck>, GateError>;
 }
@@ -28,7 +28,7 @@ impl SemVerBackend for CargoSemVerChecksBackend {
 
     async fn check_release(
         &self,
-        crate_path: &PathBuf,
+        crate_path: &Path,
         baseline_ref: &str,
     ) -> Result<Vec<GateCheck>, GateError> {
         let output = tokio::process::Command::new("cargo")
@@ -184,11 +184,12 @@ impl ReleaseGate for SemVerGate {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub struct MockBackend {
     pub should_pass: bool,
 }
 
+#[cfg(test)]
 #[async_trait]
 impl SemVerBackend for MockBackend {
         fn name(&self) -> &str {
@@ -197,7 +198,7 @@ impl SemVerBackend for MockBackend {
 
         async fn check_release(
             &self,
-            _crate_path: &PathBuf,
+            _crate_path: &Path,
             _baseline_ref: &str,
         ) -> Result<Vec<GateCheck>, GateError> {
             if self.should_pass {

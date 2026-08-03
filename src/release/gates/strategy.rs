@@ -6,6 +6,7 @@ use crate::release::fixture::FixtureKind;
 use crate::release::fixture_loader::{discover_fixtures, load_fixture_manifest, FixtureLoader};
 use crate::release::gate::*;
 
+#[allow(dead_code)]
 pub struct StrategyGateConfig {
     pub fixture_root: PathBuf,
 }
@@ -82,6 +83,19 @@ pub trait StrategyBackend: Send + Sync {
     fn load(&self, path: &std::path::Path) -> Result<StrategyArtifact, GateError>;
 }
 
+/// On-disk strategy manifest. Unknown or absent fields fail closed instead of
+/// fabricating a pass.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct StrategyManifest {
+    name: String,
+    version: semver::Version,
+    pattern: String,
+    #[serde(default)]
+    compiles_to_execution_graph: bool,
+    #[serde(default)]
+    valid_policy: bool,
+}
+
 pub struct FilesystemStrategyBackend {
     loader: FixtureLoader,
 }
@@ -110,13 +124,25 @@ impl StrategyBackend for FilesystemStrategyBackend {
         if !path.exists() {
             return Err(GateError::ExecutionFailed(format!("strategy path not found: {}", path.display())));
         }
-        Ok(StrategyArtifact::new(
-            "single",
-            semver::Version::new(0, 10, 0),
-            "single/*",
-            true,
-            true,
-        ))
+        let files = if path.is_dir() {
+            self.loader.find_files(path, "json")?
+        } else {
+            vec![path.to_path_buf()]
+        };
+        let file = files.first().ok_or_else(|| {
+            GateError::ExecutionFailed(format!("no strategy manifest (*.json) found in {}", path.display()))
+        })?;
+        let content = self.loader.read_to_string(file)?;
+        let manifest: StrategyManifest = serde_json::from_str(&content).map_err(|e| {
+            GateError::ExecutionFailed(format!("invalid strategy manifest {}: {e}", file.display()))
+        })?;
+        Ok(StrategyArtifact {
+            name: manifest.name,
+            version: manifest.version,
+            pattern: manifest.pattern,
+            compiles_to_execution_graph: manifest.compiles_to_execution_graph,
+            valid_policy: manifest.valid_policy,
+        })
     }
 }
 
@@ -277,5 +303,50 @@ mod tests {
         };
         let result = gate.run(&ctx).await;
         assert!(!result.passed());
+    }
+
+    #[test]
+    fn test_filesystem_strategy_backend_load_reads_real_content() {
+        let temp = std::env::temp_dir().join(format!("fusion_strategy_gate_{}", std::process::id()));
+        std::fs::create_dir_all(temp.join("strategies/single")).unwrap();
+        std::fs::write(
+            temp.join("strategies/single/strategy.json"),
+            r#"{
+                "name": "real-single",
+                "version": "1.2.3",
+                "pattern": "real/single/*",
+                "compiles_to_execution_graph": false,
+                "valid_policy": false
+            }"#,
+        )
+        .unwrap();
+
+        let backend = FilesystemStrategyBackend::new(temp.clone());
+        let artifact = backend.load(&temp.join("strategies/single")).unwrap();
+
+        assert_eq!(artifact.name, "real-single");
+        assert_eq!(artifact.version, semver::Version::new(1, 2, 3));
+        assert_eq!(artifact.pattern, "real/single/*");
+        assert!(!artifact.compiles_to_execution_graph);
+        assert!(!artifact.valid_policy);
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_strategy_backend_load_rejects_malformed_content() {
+        let temp = std::env::temp_dir().join(format!("fusion_strategy_malformed_{}", std::process::id()));
+        std::fs::create_dir_all(temp.join("strategies/single")).unwrap();
+        std::fs::write(
+            temp.join("strategies/single/strategy.json"),
+            "this is not json {",
+        )
+        .unwrap();
+
+        let backend = FilesystemStrategyBackend::new(temp.clone());
+        let result = backend.load(&temp.join("strategies/single"));
+        assert!(result.is_err(), "malformed manifest must not fabricate a pass");
+
+        let _ = std::fs::remove_dir_all(temp);
     }
 }

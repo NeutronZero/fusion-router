@@ -25,7 +25,15 @@ impl StreamMeter {
             finalized: false,
         }
     }
+}
 
+impl Default for StreamMeter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StreamMeter {
     pub fn record_chunk(&mut self, chunk: &ChatStreamChunk, pricing: Option<&ModelPricing>) {
         if let Some(ref usage) = chunk.usage {
             self.prompt_tokens = usage.prompt_tokens as u64;

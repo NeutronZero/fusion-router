@@ -15,6 +15,7 @@ impl Backoff {
         self.attempt = 0;
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Duration {
         let clamped = self.attempt.min(30);
         let exp = self.base_ms.saturating_mul(1 << clamped);

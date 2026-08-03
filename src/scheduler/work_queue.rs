@@ -79,11 +79,11 @@ impl WorkQueue {
                 && !self.in_progress.contains(&node.id)
                 && !self.failed.contains(&node.id)
             {
-                if let Some(state) = node_states.get(&node.id) {
-                    match state {
-                        NodeState::Succeeded | NodeState::Failed(_) | NodeState::Skipped => continue,
-                        _ => {}
-                    }
+                if matches!(
+                    node_states.get(&node.id),
+                    Some(NodeState::Succeeded | NodeState::Failed(_) | NodeState::Skipped)
+                ) {
+                    continue;
                 }
                 result.push(node);
             }

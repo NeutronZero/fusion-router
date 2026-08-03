@@ -230,7 +230,7 @@ pub struct ToolsConfig {
 }
 
 fn default_allowed_shell_commands() -> Vec<String> {
-    vec!["ls".into(), "echo".into(), "cat".into(), "cmd".into()]
+    vec!["ls".into(), "echo".into(), "cat".into()]
 }
 
 fn default_shell_timeout_secs() -> u64 { 10 }

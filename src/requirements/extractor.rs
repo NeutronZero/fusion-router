@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(extractor.extract(&ctx).complexity, ComplexityLevel::Low);
 
         let ctx = crate::types::ContextSnapshot {
-            messages: vec![ChatMessage { role: "user".into(), content: "x".repeat(10001).into() }],
+            messages: vec![ChatMessage { role: "user".into(), content: "x".repeat(10001) }],
             files: vec![],
             tools: vec![],
             max_tokens: 4096,
@@ -206,7 +206,7 @@ mod tests {
         assert_eq!(extractor.extract(&ctx).complexity, ComplexityLevel::Critical);
 
         let ctx = crate::types::ContextSnapshot {
-            messages: vec![ChatMessage { role: "user".into(), content: "x".repeat(6000).into() }],
+            messages: vec![ChatMessage { role: "user".into(), content: "x".repeat(6000) }],
             files: vec![],
             tools: vec![],
             max_tokens: 4096,
@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(extractor.extract(&ctx).complexity, ComplexityLevel::High);
 
         let ctx = crate::types::ContextSnapshot {
-            messages: vec![ChatMessage { role: "user".into(), content: "x".repeat(2000).into() }],
+            messages: vec![ChatMessage { role: "user".into(), content: "x".repeat(2000) }],
             files: vec![],
             tools: vec![],
             max_tokens: 4096,

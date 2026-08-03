@@ -110,7 +110,7 @@ impl DefaultScheduler {
 
             // Enforce per-request budget iteration limit
             if let Some(ref envelope) = instance.budget_envelope {
-                if let Err(_) = envelope.increment_iteration() {
+                if envelope.increment_iteration().is_err() {
                     info!("Budget iteration limit reached; stopping scheduler loop");
                     break;
                 }

@@ -199,6 +199,15 @@ pub async fn chat_completions(
 
     let _enter = _span.enter();
 
+    if request.model.trim().is_empty() {
+        tracing::warn!(request_id = %request_id, "request rejected: empty model");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_response(request_id, "", "model is required")),
+        )
+            .into_response();
+    }
+
     if request.stream {
         tracing::info!(request_id = %request_id, "streaming request");
         return stream_response(state, request, request_id).await;
@@ -341,7 +350,15 @@ async fn process_request(
         planner: state.planner.clone(),
         policies,
     };
-    let ir = step_plan.execute((reqs.clone(), evidence), &mut pctx).await?;
+    let mut ir = step_plan.execute((reqs.clone(), evidence), &mut pctx).await?;
+    // The caller's explicit model wins over the planner's catalog defaults;
+    // otherwise requests for e.g. "openrouter/auto" silently execute on a
+    // catalog model the provider may not offer.
+    if !request.model.trim().is_empty() {
+        for node in &mut ir.nodes {
+            node.model = Some(request.model.trim().to_string());
+        }
+    }
     tracing::debug!(plan_id = %ir.plan_id, nodes = ir.nodes.len(), request_id = %request_id, "plan created");
 
     // 5. Compilation
@@ -442,6 +459,204 @@ fn error_response(request_id: Uuid, model: &str, error: &str) -> ChatCompletionR
     }
 }
 
+pub async fn anthropic_messages(
+    State(state): State<AppState>,
+    Json(anthropic_req): Json<AnthropicMessagesRequest>,
+) -> impl IntoResponse {
+    let request_id = Uuid::new_v4();
+    let model_name = anthropic_req.model.clone();
+    let is_stream = anthropic_req.stream;
+
+    let _span = tracing::info_span!(
+        "anthropic_messages",
+        request_id = %request_id,
+        model = %model_name,
+        stream = %is_stream
+    );
+    let _enter = _span.enter();
+
+    if model_name.trim().is_empty() {
+        tracing::warn!(request_id = %request_id, "request rejected: empty model");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "model is required"
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    let request = anthropic_req.into_chat_completion_request();
+
+    if is_stream {
+        tracing::info!(request_id = %request_id, "anthropic streaming request");
+        return anthropic_stream_response(state, request, request_id, model_name).await;
+    }
+
+    tracing::info!("processing anthropic request through full pipeline");
+
+    let result = process_request(&state, &request, request_id).await;
+
+    match result {
+        Ok(response) => {
+            tracing::info!(request_id = %request_id, status = "success");
+            let anthropic_resp = AnthropicMessagesResponse::from((response, model_name));
+            Json(anthropic_resp).into_response()
+        }
+        Err(e) => {
+            let status = e.status_code();
+            tracing::error!(request_id = %request_id, stage = ?e.stage(), error = %e, "anthropic pipeline failed");
+            (
+                status,
+                Json(serde_json::json!({
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": e.to_string()
+                    }
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn anthropic_stream_response(
+    state: AppState,
+    request: ChatCompletionRequest,
+    request_id: Uuid,
+    model_name: String,
+) -> axum::response::Response {
+    let msg_id = format!("msg_{}", request_id);
+    let resource_manager = state.resource_manager.clone();
+    let provider = state.provider.clone();
+    let inner = provider.chat_stream(&request).await;
+    drop(request);
+    drop(state);
+
+    let stream: BoxStream<'static, Result<Event, std::convert::Infallible>> = match inner {
+        Ok(inner_stream) => {
+            let cancel = CancellationToken::new();
+            let dummy_graph = ExecutionGraph {
+                graph_id: request_id,
+                nodes: vec![],
+                edges: vec![],
+                metadata: GraphMetadata {
+                    estimated_cost: 0.0,
+                    estimated_tokens: 0,
+                    max_depth: 0,
+                    node_count: 0,
+                },
+                total_tokens: 0,
+                total_cost: 0,
+                primitive_graph_hash: 0,
+            };
+            let guard = ResourceGuard::new(request_id, dummy_graph, resource_manager);
+            let (metered, _meter) = metered_stream(inner_stream, guard, cancel, None);
+
+            let id_clone = msg_id.clone();
+            let model_clone = model_name.clone();
+
+            let message_start = Event::default()
+                .event("message_start")
+                .data(serde_json::to_string(&serde_json::json!({
+                    "type": "message_start",
+                    "message": {
+                        "id": id_clone,
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model_clone,
+                        "content": [],
+                        "stop_reason": null,
+                        "stop_sequence": null,
+                        "usage": { "input_tokens": 0, "output_tokens": 0 }
+                    }
+                })).unwrap());
+
+            let content_block_start = Event::default()
+                .event("content_block_start")
+                .data(serde_json::to_string(&serde_json::json!({
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": { "type": "text", "text": "" }
+                })).unwrap());
+
+            let ping = Event::default()
+                .event("ping")
+                .data(serde_json::to_string(&serde_json::json!({ "type": "ping" })).unwrap());
+
+            let header_stream = stream::iter(vec![Ok(message_start), Ok(content_block_start), Ok(ping)]);
+
+            let delta_stream = metered.map(move |chunk_result| {
+                match chunk_result {
+                    Ok(chunk) => {
+                        let text = chunk.content.unwrap_or_default();
+                        Ok(Event::default()
+                            .event("content_block_delta")
+                            .data(serde_json::to_string(&serde_json::json!({
+                                "type": "content_block_delta",
+                                "index": 0,
+                                "delta": { "type": "text_delta", "text": text }
+                            })).unwrap()))
+                    }
+                    Err(e) => {
+                        Ok(Event::default()
+                            .event("error")
+                            .data(serde_json::to_string(&serde_json::json!({
+                                "type": "error",
+                                "error": { "type": "api_error", "message": e.to_string() }
+                            })).unwrap()))
+                    }
+                }
+            });
+
+            let content_block_stop = Event::default()
+                .event("content_block_stop")
+                .data(serde_json::to_string(&serde_json::json!({
+                    "type": "content_block_stop",
+                    "index": 0
+                })).unwrap());
+
+            let message_delta = Event::default()
+                .event("message_delta")
+                .data(serde_json::to_string(&serde_json::json!({
+                    "type": "message_delta",
+                    "delta": { "stop_reason": "end_turn", "stop_sequence": null },
+                    "usage": { "output_tokens": 0 }
+                })).unwrap());
+
+            let message_stop = Event::default()
+                .event("message_stop")
+                .data(serde_json::to_string(&serde_json::json!({
+                    "type": "message_stop"
+                })).unwrap());
+
+            let footer_stream = stream::iter(vec![
+                Ok(content_block_stop),
+                Ok(message_delta),
+                Ok(message_stop),
+            ]);
+
+            Box::pin(header_stream.chain(delta_stream).chain(footer_stream))
+        }
+        Err(e) => {
+            let error_evt = Event::default()
+                .event("error")
+                .data(serde_json::to_string(&serde_json::json!({
+                    "type": "error",
+                    "error": { "type": "api_error", "message": e.to_string() }
+                })).unwrap());
+            Box::pin(stream::once(async move { Ok(error_evt) }))
+        }
+    };
+
+    Sse::new(stream).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,5 +737,61 @@ mod tests {
                 .contains("something went wrong")
         );
         assert_eq!(response.object, "chat.completion");
+    }
+
+    #[test]
+    fn test_anthropic_request_deserialization_and_conversion() {
+        let json_body = serde_json::json!({
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "You are a helpful assistant.",
+            "messages": [
+                {"role": "user", "content": "Hello Anthropic!"}
+            ],
+            "max_tokens": 512,
+            "temperature": 0.7
+        });
+
+        let anthropic_req: AnthropicMessagesRequest = serde_json::from_value(json_body).unwrap();
+        assert_eq!(anthropic_req.model, "claude-3-5-sonnet-20241022");
+
+        let chat_req = anthropic_req.into_chat_completion_request();
+        assert_eq!(chat_req.model, "claude-3-5-sonnet-20241022");
+        assert_eq!(chat_req.messages.len(), 2);
+        assert_eq!(chat_req.messages[0].role, "system");
+        assert_eq!(chat_req.messages[0].content, "You are a helpful assistant.");
+        assert_eq!(chat_req.messages[1].role, "user");
+        assert_eq!(chat_req.messages[1].content, "Hello Anthropic!");
+        assert_eq!(chat_req.max_tokens, Some(512));
+    }
+
+    #[test]
+    fn test_anthropic_response_conversion() {
+        let completion_resp = ChatCompletionResponse {
+            id: "resp-123".into(),
+            object: "chat.completion".into(),
+            created: 1700000000,
+            model: "claude-3-5-sonnet".into(),
+            choices: vec![Choice {
+                index: 0,
+                message: ChatMessage {
+                    role: "assistant".into(),
+                    content: "Hi from Anthropic response!".into(),
+                },
+                finish_reason: "stop".into(),
+            }],
+            usage: Some(Usage {
+                prompt_tokens: 15,
+                completion_tokens: 8,
+                total_tokens: 23,
+            }),
+        };
+
+        let anthropic_resp = AnthropicMessagesResponse::from((completion_resp, "claude-3-5-sonnet".to_string()));
+        assert_eq!(anthropic_resp.id, "msg_resp-123");
+        assert_eq!(anthropic_resp.r#type, "message");
+        assert_eq!(anthropic_resp.role, "assistant");
+        assert_eq!(anthropic_resp.stop_reason, Some("end_turn".into()));
+        assert_eq!(anthropic_resp.usage.input_tokens, 15);
+        assert_eq!(anthropic_resp.usage.output_tokens, 8);
     }
 }

@@ -196,7 +196,7 @@ mod tests {
         let request: ChatCompletionRequest = serde_json::from_str(json).unwrap();
         assert!(matches!(request.execution, Some(ExecutionIntent::Speed)));
         assert!(request.output.is_some());
-        assert_eq!(request.output.unwrap().include_report, true);
+        assert!(request.output.unwrap().include_report);
     }
 
     #[test]

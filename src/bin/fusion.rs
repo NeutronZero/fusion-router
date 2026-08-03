@@ -13,7 +13,7 @@ use fusion_router::release::envelope::AttestationEnvelope;
 use fusion_router::release::evaluator::{EvaluationContext, PolicyEvaluation, PolicyEvaluator, ReleaseDecision};
 use fusion_router::release::gate::{GateContext, GateId};
 use fusion_router::release::policy::{load_policy_from_yaml, PolicyDefinition, ReleaseEnvironment};
-use fusion_router::release::signing::{MockSigner, Signer};
+use fusion_router::release::signing::{HmacSha256Signer, Signer};
 use fusion_router::release::verifier::AttestationVerifier;
 use fusion_router::release::waiver::{load_waivers_from_yaml, WaiverSet};
 
@@ -198,7 +198,7 @@ async fn main() {
                 let attestation = ReleaseAttestation::new(assessment);
                 let canonical_bytes = AttestationBuilder::to_canonical_bytes(&attestation).unwrap();
 
-                let signer = MockSigner::default();
+                let signer = HmacSha256Signer::new("fusion-cli", &resolve_signing_key());
                 let sig = signer.sign(&canonical_bytes).unwrap();
                 let signed = fusion_router::release::signing::SignedAttestation { attestation, signature: sig };
                 let envelope = AttestationEnvelope::new(signed);
@@ -222,7 +222,7 @@ async fn main() {
                     archive.load(&target).unwrap_or_else(|e| panic!("{e}"))
                 };
 
-                let signer = MockSigner::default();
+                let signer = HmacSha256Signer::new("fusion-cli", &resolve_signing_key());
                 let report = AttestationVerifier::verify(&envelope, &signer).unwrap_or_else(|e| panic!("{e}"));
 
                 println!("Attestation Verification Report");
@@ -309,6 +309,18 @@ async fn main() {
             CapabilityCmd::Config => commands::config_cmd::execute_config(),
         },
     }
+}
+
+/// Attestation signing is keyed HMAC-SHA256; the key comes from the
+/// `FUSION_SIGNING_KEY` environment variable. Refuses to run without it
+/// rather than silently falling back to a fabricated key.
+fn resolve_signing_key() -> Vec<u8> {
+    std::env::var("FUSION_SIGNING_KEY")
+        .map(|k| k.into_bytes())
+        .unwrap_or_else(|_| {
+            eprintln!("error: FUSION_SIGNING_KEY must be set to sign or verify attestations");
+            std::process::exit(1);
+        })
 }
 
 pub fn render_policy_evaluation(eval: &PolicyEvaluation) -> String {

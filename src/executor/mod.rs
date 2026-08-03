@@ -9,7 +9,7 @@ pub mod capability_executor;
 #[cfg(feature = "semantic-cache")]
 use crate::cache::SemanticCache;
 use crate::compiler::context::CompilationContext;
-use crate::compiler::ir::StrategyIR;
+use crate::compiler::ir::{DebateRole, StrategyIR};
 use crate::providers::ChatProvider;
 use crate::strategies::Strategy;
 use crate::tools::ToolRegistry;
@@ -130,12 +130,66 @@ impl Executor for DefaultExecutor {
             "strategy execution started"
         );
 
-        for sub_node in &subgraph.nodes {
+        // Topologically order nodes by their edges so every node executes
+        // after its dependencies. Cycles or disconnected nodes fall back to
+        // insertion order.
+        let mut incoming: HashMap<uuid::Uuid, Vec<uuid::Uuid>> = HashMap::new();
+        for edge in &subgraph.edges {
+            incoming.entry(edge.to).or_default().push(edge.from);
+        }
+        let mut remaining: Vec<&ExecutionNode> = subgraph.nodes.iter().collect();
+        let mut completed: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
+        let mut order: Vec<&ExecutionNode> = Vec::with_capacity(subgraph.nodes.len());
+        while !remaining.is_empty() {
+            let ready: Vec<&ExecutionNode> = remaining
+                .iter()
+                .filter(|n| {
+                    incoming
+                        .get(&n.id)
+                        .is_none_or(|froms| froms.iter().all(|f| completed.contains(f)))
+                })
+                .copied()
+                .collect();
+            if ready.is_empty() {
+                order.extend(remaining.iter().copied());
+                break;
+            }
+            for n in &ready {
+                completed.insert(n.id);
+                order.push(n);
+            }
+            remaining.retain(|n| !completed.contains(&n.id));
+        }
+
+        // Per-node outputs, keyed by node id, so judge/reducer nodes can
+        // consume the outputs of their upstream members.
+        let mut node_outputs: HashMap<uuid::Uuid, serde_json::Value> = HashMap::new();
+
+        for sub_node in order {
             match sub_node.kind {
                 ExecutionNodeKind::LLMGenerate
                 | ExecutionNodeKind::LLMReview
                 | ExecutionNodeKind::LLMJudge => {
-                    let request = Self::build_request(sub_node);
+                    let mut request = Self::build_request(sub_node);
+                    // Judges must see the output of every upstream member.
+                    if sub_node.kind == ExecutionNodeKind::LLMJudge {
+                        if let Some(froms) = incoming.get(&sub_node.id) {
+                            for from in froms {
+                                if let Some(out) = node_outputs.get(from) {
+                                    request.messages.push(ChatMessage {
+                                        role: "user".to_string(),
+                                        content: format!("Member output:\n{}", out),
+                                    });
+                                }
+                            }
+                        }
+                        tracing::debug!(
+                            node_id = %sub_node.id,
+                            message_count = request.messages.len(),
+                            roles = ?request.messages.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(),
+                            "judge request assembled"
+                        );
+                    }
                     #[cfg(feature = "semantic-cache")]
                     let cache_key = Self::cache_key(&request);
 
@@ -166,6 +220,10 @@ impl Executor for DefaultExecutor {
                             info!(
                                 node_id = %sub_node.id,
                                 model = %response.model,
+                                request_messages = request.messages.len(),
+                                response_content_len = response.choices.first()
+                                    .map(|c| c.message.content.len())
+                                    .unwrap_or(0),
                                 "LLM node completed"
                             );
 
@@ -211,6 +269,7 @@ impl Executor for DefaultExecutor {
                                 }
                             }
 
+
                             if let Some(usage) = response.usage {
                                 accumulated_usage = Some(match accumulated_usage {
                                     Some(acc) => Usage {
@@ -220,6 +279,10 @@ impl Executor for DefaultExecutor {
                                     },
                                     None => usage,
                                 });
+                            }
+
+                            if let Some(current) = output_value.clone() {
+                                node_outputs.insert(sub_node.id, current);
                             }
                         }
                         Err(e) => {
@@ -256,6 +319,15 @@ impl Executor for DefaultExecutor {
             }
         }
 
+        // The strategy result is the exit node's output (e.g. the judge in a
+        // consensus subgraph), not necessarily the last node that happened to
+        // run.
+        if subgraph.exit_node_id != node.id {
+            if let Some(exit_output) = node_outputs.get(&subgraph.exit_node_id) {
+                output_value = Some(exit_output.clone());
+            }
+        }
+
         let latency = start.elapsed().as_millis() as u64;
         tracing::debug!(
             strategy = %strategy_label,
@@ -279,16 +351,29 @@ impl Executor for DefaultExecutor {
     async fn resolve_strategy(&self, node: &ExecutionNode) -> ExecutionSubgraph {
         let strategy = self.strategies.get(&node.strategy);
         if let Some(s) = strategy {
-            let ctx = CompilationContext::new();
+            let mut ctx = CompilationContext::new();
+            if !node.model.is_empty() {
+                ctx.available_models.push(node.model.clone());
+            }
             let ir = strategy_ir_from_node(node);
-            if let Ok(pg) = s.lower(&ir, &ctx) {
-                let eg = pg.to_execution_graph(
-                    node.strategy.clone(),
-                    &node.retry_policy,
-                    &node.fallback,
-                    &node.config,
-                );
-                return execution_graph_to_subgraph(&eg, node);
+            match s.lower(&ir, &ctx) {
+                Ok(pg) => {
+                    let eg = pg.to_execution_graph(
+                        node.strategy.clone(),
+                        &node.retry_policy,
+                        &node.fallback,
+                        &node.config,
+                    );
+                    return execution_graph_to_subgraph(&eg, node);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        node_id = %node.id,
+                        strategy = ?node.strategy,
+                        error = %e,
+                        "strategy lowering failed, falling back to passthrough"
+                    );
+                }
             }
             ExecutionSubgraph {
                 nodes: vec![node.clone()],
@@ -319,8 +404,30 @@ fn strategy_ir_from_node(node: &ExecutionNode) -> StrategyIR {
             count: node.config.get("count").and_then(|v| v.as_u64()).unwrap_or(3) as u32,
         },
         StrategyKind::Debate => StrategyIR::Debate {
-            roles: node.config.get("roles")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
+            roles: node
+                .config
+                .get("roles")
+                .and_then(|v| {
+                    v.as_array().map(|items| {
+                        items
+                            .iter()
+                            .map(|item| {
+                                serde_json::from_value::<DebateRole>(item.clone()).or_else(|_| {
+                                    item.as_str().map(|s| DebateRole {
+                                        name: s.to_string(),
+                                        model: node.model.clone(),
+                                        stance: s.to_string(),
+                                    })
+                                    .ok_or(serde_json::Error::io(std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        "roles must be role objects or strings",
+                                    )))
+                                })
+                            })
+                            .filter_map(Result::ok)
+                            .collect()
+                    })
+                })
                 .unwrap_or_default(),
         },
         StrategyKind::Reflection => StrategyIR::Reflection {
@@ -468,6 +575,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_debate_string_roles_lower_to_real_subgraph() {
+        let provider = Arc::new(MockChatProvider);
+        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        strategies.insert(
+            StrategyKind::Debate,
+            Box::new(crate::strategies::debate::DebateStrategy {
+                debaters: vec![Box::new(SingleStrategy), Box::new(SingleStrategy)],
+                judge: Box::new(SingleStrategy),
+            }),
+        );
+        let executor = DefaultExecutor::new(provider, strategies);
+        let mut node = make_llm_node(StrategyKind::Debate);
+        node.config.insert(
+            "roles".into(),
+            serde_json::json!(["Engineer A", "Engineer B"]),
+        );
+
+        let subgraph = executor.resolve_strategy(&node).await;
+
+        assert_eq!(
+            subgraph.nodes.len(),
+            3,
+            "2 string roles + judge must lower to 3 nodes, not passthrough"
+        );
+        assert!(
+            subgraph.nodes.iter().all(|n| n.model == "gpt-4"),
+            "string roles must inherit the workflow node's model"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_strategy_consensus_subgraph_inherits_node_model() {
+        let provider = Arc::new(MockChatProvider);
+        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        strategies.insert(StrategyKind::Consensus, Box::new(ConsensusStrategy::default()));
+        let executor = DefaultExecutor::new(provider, strategies);
+        let mut node = make_llm_node(StrategyKind::Consensus);
+        node.model = "gpt-4-turbo".into();
+
+        let subgraph = executor.resolve_strategy(&node).await;
+
+        assert_eq!(subgraph.nodes.len(), 4);
+        assert!(
+            subgraph.nodes.iter().all(|n| n.model == "gpt-4-turbo"),
+            "subgraph nodes must inherit the workflow node's model, got: {:?}",
+            subgraph.nodes.iter().map(|n| &n.model).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
     async fn test_execute_node_single_strategy() {
         let provider = Arc::new(MockChatProvider);
         let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
@@ -550,6 +707,95 @@ mod tests {
         assert!(
             request.messages[0].content.contains("judge"),
             "system prompt should reference 'judge' role"
+        );
+    }
+
+    /// Captures ALL requests (not just the last) so we can verify
+    /// which node received what input.
+    struct CapturingAllProvider(Arc<std::sync::Mutex<Vec<ChatCompletionRequest>>>);
+
+    #[async_trait]
+    impl ChatProvider for CapturingAllProvider {
+        async fn chat_completion(
+            &self,
+            request: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
+            let mut seen = self.0.lock().unwrap();
+            seen.push(request.clone());
+            let idx = seen.len();
+            Ok(ChatCompletionResponse {
+                id: "mock".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: request.model.clone(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: format!("response-{}", idx),
+                    },
+                    finish_reason: "stop".into(),
+                }],
+                usage: Some(Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 20,
+                    total_tokens: 30,
+                }),
+            })
+        }
+
+        fn name(&self) -> &str {
+            "capturing-all"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_consensus_judge_sees_member_outputs() {
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(CapturingAllProvider(captured.clone()));
+        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        strategies.insert(StrategyKind::Consensus, Box::new(ConsensusStrategy { count: 2 }));
+        let executor = DefaultExecutor::new(provider, strategies);
+
+        let mut node = make_llm_node(StrategyKind::Consensus);
+        node.config.insert(
+            "messages".into(),
+            serde_json::json!([{"role": "user", "content": "original prompt"}]),
+        );
+
+        let result = executor.execute_node(&node).await;
+        assert_eq!(result.state, NodeState::Succeeded);
+
+        let requests = captured.lock().unwrap();
+        // 2 members + 1 judge
+        assert!(requests.len() >= 2, "expected at least member + judge calls");
+
+        // The judge request (last one, since judge runs last in topo order)
+        let judge_request = requests.last().expect("should have judge request");
+        let judge_messages = judge_request
+            .messages
+            .iter()
+            .map(|m| (&m.role, m.content.as_str()))
+            .collect::<Vec<_>>();
+
+        // Judge should have a system prompt mentioning judging
+        let has_judge_system = judge_messages
+            .iter()
+            .any(|(r, c)| *r == "system" && c.contains("judge"));
+        assert!(has_judge_system, "judge request should have system prompt");
+
+        // CRITICAL: judge should see member outputs in its context
+        // (currently broken — judge sees only the original prompt)
+        let judge_user_content = judge_messages
+            .iter()
+            .filter(|(r, _)| *r == "user")
+            .map(|(_, c)| *c)
+            .collect::<Vec<_>>();
+        let sees_member_outputs = judge_user_content.iter().any(|c| c.contains("response-"));
+        assert!(
+            sees_member_outputs,
+            "judge must see member outputs, not just the original prompt. Judge user messages: {:?}",
+            judge_user_content
         );
     }
 }

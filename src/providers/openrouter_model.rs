@@ -84,16 +84,23 @@ impl Model for OpenRouterModel {
             .map(|arr| {
                 arr.iter()
                     .enumerate()
-                    .map(|(i, c)| Choice {
-                        index: i as u32,
-                        message: ChatMessage {
-                            role: c["message"]["role"].as_str().unwrap_or("assistant").to_string(),
-                            content: c["message"]["content"].as_str().unwrap_or("").to_string(),
-                        },
-                        finish_reason: c["finish_reason"].as_str().unwrap_or("stop").to_string(),
+                    .map(|(i, c)| {
+                        let content = super::message_content(c);
+                        let finish_reason =
+                            c["finish_reason"].as_str().unwrap_or("stop").to_string();
+                        super::ensure_non_truncated(c, &content)?;
+                        Ok(Choice {
+                            index: i as u32,
+                            message: ChatMessage {
+                                role: c["message"]["role"].as_str().unwrap_or("assistant").to_string(),
+                                content,
+                            },
+                            finish_reason,
+                        })
                     })
-                    .collect()
+                    .collect::<anyhow::Result<Vec<Choice>>>()
             })
+            .transpose()?
             .unwrap_or_default();
 
         let usage = body["usage"].as_object().map(|u| Usage {

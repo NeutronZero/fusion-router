@@ -24,6 +24,7 @@ impl ReleaseEnvironment {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "production" | "prod" => ReleaseEnvironment::Production,
@@ -31,6 +32,14 @@ impl ReleaseEnvironment {
             "development" | "dev" => ReleaseEnvironment::Development,
             custom => ReleaseEnvironment::Custom(custom.to_string()),
         }
+    }
+}
+
+impl std::str::FromStr for ReleaseEnvironment {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::from_str(s))
     }
 }
 
@@ -115,6 +124,7 @@ impl PolicyDefinition {
     }
 }
 
+#[allow(dead_code)]
 pub fn load_policy_from_yaml(path: &Path) -> Result<PolicyDefinition, GateError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| GateError::ExecutionFailed(format!("read policy file {}: {e}", path.display())))?;

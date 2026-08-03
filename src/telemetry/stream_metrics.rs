@@ -174,7 +174,7 @@ mod tests {
             total_duration_ms: None,
         };
         m.record_report(&report);
-        assert_eq!(m.streaming_tokens_total.get() >= 5, true);
+        assert!(m.streaming_tokens_total.get() >= 5);
     }
 
     #[test]

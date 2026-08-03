@@ -61,7 +61,7 @@ impl FeatureRegistry {
         let lookup_map: HashMap<String, FeatureFlag> = definitions
             .iter()
             .map(|d| {
-                let key = serde_json::to_value(&d.id)
+                let key = serde_json::to_value(d.id)
                     .ok()
                     .and_then(|v| v.as_str().map(String::from))
                     .unwrap_or_default();

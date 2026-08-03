@@ -33,6 +33,7 @@ mod cache;
 mod middleware;
 mod release;
 mod feature_gate;
+mod events;
 
 #[cfg(feature = "wasm-plugins")]
 mod wasm;
@@ -184,26 +185,6 @@ async fn main() {
         hc_checker.run(hc_resolver).await;
     });
 
-    let mut app = Router::new()
-        .route("/v1/chat/completions", post(server::handlers::chat_completions))
-        .route("/metrics", get(server::handlers::metrics_handler))
-        .route("/health", get(server::health::health_handler))
-        .route("/ready", get(server::health::ready_handler))
-        .layer(TraceLayer::new_for_http())
-        .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
-        .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
-        .layer(axum::Extension(auth_config))
-        .layer(crate::middleware::cors::cors_layer_from_config(&cors_config))
-        .with_state(state);
-
-    if rate_limiting_enabled {
-        let limiter = middleware::rate_limit::RateLimiter::new(rate_limiting_config);
-        limiter.start_cleanup();
-        app = app
-            .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
-            .layer(axum::Extension(limiter));
-    }
-
     let ops_registry = Arc::new(parking_lot::RwLock::new(crate::capability::InMemoryCapabilityRegistry::new()));
     let ops_cache = Arc::new(crate::operations::RuntimeModuleCache::new());
     let ops_dashboard = Arc::new(crate::operations::dashboard::DefaultDashboardDataProvider::new(
@@ -233,7 +214,34 @@ async fn main() {
         .route("/v1/operations/attestations", axum::routing::get(crate::operations::handlers::attestations_handler))
         .with_state(ops_state);
 
-    app = app.merge(operations_routes);
+    let event_bus = Arc::new(crate::events::BroadcastEventBus::new(1024));
+    let exec_plane = crate::server::execution::build_execution_plane(event_bus, state.executor.clone());
+    let execution_routes = axum::Router::new()
+        .route("/v1/executions", axum::routing::post(crate::server::execution::execute_workflow_handler))
+        .with_state(exec_plane);
+
+    let mut app = Router::new()
+        .route("/v1/chat/completions", post(server::handlers::chat_completions))
+        .route("/v1/messages", post(server::handlers::anthropic_messages))
+        .route("/metrics", get(server::handlers::metrics_handler))
+        .route("/health", get(server::health::health_handler))
+        .route("/ready", get(server::health::ready_handler))
+        .with_state(state.clone())
+        .merge(operations_routes)
+        .merge(execution_routes)
+        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
+        .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
+        .layer(axum::Extension(auth_config))
+        .layer(crate::middleware::cors::cors_layer_from_config(&cors_config));
+
+    if rate_limiting_enabled {
+        let limiter = middleware::rate_limit::RateLimiter::new(rate_limiting_config);
+        limiter.start_cleanup();
+        app = app
+            .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
+            .layer(axum::Extension(limiter));
+    }
 
     let addr = format!("{}:{}", host, port)
         .parse::<std::net::SocketAddr>()

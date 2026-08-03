@@ -12,6 +12,7 @@ pub fn new_zen_provider(api_key: String) -> Provider {
 pub struct ZenProvider;
 
 impl ZenProvider {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(api_key: String) -> Provider {
         new_zen_provider(api_key)
     }

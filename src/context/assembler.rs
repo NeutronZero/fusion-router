@@ -161,8 +161,8 @@ mod tests {
         let assembler = DefaultContextAssembler::new();
         let messages = vec![
             ChatMessage { role: "system".into(), content: "sys".into() },
-            ChatMessage { role: "user".into(), content: "A".repeat(100).into() },
-            ChatMessage { role: "user".into(), content: "B".repeat(10).into() },
+            ChatMessage { role: "user".into(), content: "A".repeat(100) },
+            ChatMessage { role: "user".into(), content: "B".repeat(10) },
         ];
         let result = assembler.trim_messages(&messages, 15);
         assert_eq!(result.len(), 2);

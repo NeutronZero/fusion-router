@@ -442,3 +442,117 @@ async fn test_health_ready_endpoints() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["status"], "ok");
 }
+
+#[tokio::test]
+async fn test_executions_and_operations_auth_enforcement() {
+    use std::collections::HashMap;
+    use fusion_router::capability::InMemoryCapabilityRegistry;
+    use fusion_router::events::BroadcastEventBus;
+    use fusion_router::executor::DefaultExecutor;
+    use fusion_router::operations::{
+        attestation_viewer::AttestationViewer, dashboard::DefaultDashboardDataProvider,
+        handlers::OperationsState, policy_admin::PolicyAdmin, runtime_inspector::RuntimeInspector,
+        MockPackageVerifier, RuntimeModuleCache,
+    };
+    use fusion_router::server::execution::{build_execution_plane, execute_workflow_handler};
+    use fusion_router::telemetry::audit::AuditLog;
+
+    let provider = Arc::new(MidMockProvider);
+    let resource_manager = DefaultResourceManager::new(Quota {
+        max_daily_cost: 100.0,
+        max_daily_tokens: 100000,
+        max_concurrent: 10,
+        provider_limits: Default::default(),
+    });
+    let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
+    let config = test_config();
+
+    let state = fusion_router::server::handlers::AppState::new(
+        provider.clone(),
+        resource_manager,
+        evidence,
+        config.clone(),
+        PathBuf::from("config/default.yaml"),
+        Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()),
+    );
+
+    let ops_registry = Arc::new(parking_lot::RwLock::new(InMemoryCapabilityRegistry::new()));
+    let ops_cache = Arc::new(RuntimeModuleCache::new());
+    let ops_dashboard = Arc::new(DefaultDashboardDataProvider::new(ops_registry, ops_cache.clone()));
+    let ops_inspector = Arc::new(RuntimeInspector::new(ops_cache));
+    let ops_store = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let ops_audit = Arc::new(AuditLog::new(1000));
+    let ops_policy_admin = Arc::new(PolicyAdmin::new(ops_store, ops_audit.clone()));
+    let ops_verifier = Arc::new(MockPackageVerifier);
+    let ops_attestation_viewer = Arc::new(AttestationViewer::new(ops_verifier, ops_audit));
+
+    let ops_state = OperationsState {
+        dashboard: ops_dashboard,
+        inspector: ops_inspector,
+        policy_admin: ops_policy_admin,
+        attestation_viewer: ops_attestation_viewer,
+    };
+
+    let operations_routes = Router::new()
+        .route("/v1/operations/registry", get(fusion_router::operations::handlers::registry_handler))
+        .with_state(ops_state);
+
+    let event_bus = Arc::new(BroadcastEventBus::new(64));
+    let executor = Arc::new(DefaultExecutor::new(provider, HashMap::new()));
+    let exec_plane = build_execution_plane(event_bus, executor);
+    let execution_routes = Router::new()
+        .route("/v1/executions", post(execute_workflow_handler))
+        .with_state(exec_plane);
+
+    let app = Router::new()
+        .route("/v1/chat/completions", post(fusion_router::server::handlers::chat_completions))
+        .with_state(state)
+        .merge(operations_routes)
+        .merge(execution_routes)
+        .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
+        .layer(axum::Extension(config.auth));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = reqwest::Client::new();
+
+    // 1. Unauthenticated POST /v1/executions -> 401 Unauthorized
+    let res = client
+        .post(format!("http://{}/v1/executions", addr))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // 2. Unauthenticated GET /v1/operations/registry -> 401 Unauthorized
+    let res = client
+        .get(format!("http://{}/v1/operations/registry", addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // 3. Valid API key POST /v1/executions -> passes auth middleware
+    let res = client
+        .post(format!("http://{}/v1/executions", addr))
+        .header("x-api-key", "test-key")
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(res.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // 4. Valid API key GET /v1/operations/registry -> 200 OK
+    let res = client
+        .get(format!("http://{}/v1/operations/registry", addr))
+        .header("x-api-key", "test-key")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+}

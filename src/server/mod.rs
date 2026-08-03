@@ -1,3 +1,4 @@
+pub mod execution;
 pub mod handlers;
 pub mod health;
 pub mod pipeline;

@@ -12,11 +12,18 @@ pub async fn auth_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, String)> {
-    let auth_config = req
-        .extensions()
-        .get::<AuthConfig>()
-        .cloned()
-        .unwrap_or_default();
+    let Some(auth_config) = req.extensions().get::<AuthConfig>().cloned() else {
+        // Fail closed: a router wiring this middleware without providing the
+        // AuthConfig extension must not silently become unauthenticated.
+        tracing::warn!(
+            path = %req.uri().path(),
+            "auth middleware invoked without AuthConfig extension, rejecting request"
+        );
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            json!({"error": "unauthorized"}).to_string(),
+        ));
+    };
 
     if !auth_config.enabled {
         return Ok(next.run(req).await);
@@ -137,5 +144,26 @@ mod tests {
         let client = reqwest::Client::new();
         let res = client.get(format!("http://{}/health", addr)).send().await.unwrap();
         assert_eq!(res.status(), reqwest::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_auth_missing_config_fails_closed() {
+        let app = Router::new()
+            .route("/", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(auth_middleware));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let res = client.get(format!("http://{}/", addr)).send().await.unwrap();
+        assert_eq!(
+            res.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "missing AuthConfig extension must fail closed, not open"
+        );
     }
 }

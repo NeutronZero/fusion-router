@@ -6,6 +6,7 @@ use crate::release::fixture::FixtureKind;
 use crate::release::fixture_loader::{discover_fixtures, load_fixture_manifest, FixtureLoader};
 use crate::release::gate::*;
 
+#[allow(dead_code)]
 pub struct ProviderGateConfig {
     pub fixture_root: PathBuf,
 }
@@ -13,6 +14,7 @@ pub struct ProviderGateConfig {
 #[derive(Debug, Clone)]
 pub struct ProviderArtifact {
     pub name: String,
+    #[allow(dead_code)]
     pub version: semver::Version,
     pub models: Vec<String>,
     pub valid_pricing_metadata: bool,
@@ -78,6 +80,7 @@ pub trait ProviderBackend: Send + Sync {
     fn load(&self, path: &std::path::Path) -> Result<ProviderArtifact, GateError>;
 }
 
+#[allow(dead_code)]
 pub struct FilesystemProviderBackend {
     loader: FixtureLoader,
 }

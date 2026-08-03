@@ -122,7 +122,7 @@ fn find_wasm_file(project_dir: &Path) -> Result<String, String> {
     for entry in fs::read_dir(&release_dir).map_err(|e| format!("Cannot read release dir: {e}"))? {
         let entry = entry.map_err(|e| format!("Cannot read entry: {e}"))?;
         let path = entry.path();
-        if path.extension().map_or(false, |e| e == "wasm") {
+        if path.extension().is_some_and(|e| e == "wasm") {
             return Ok(entry.file_name().to_string_lossy().to_string());
         }
     }

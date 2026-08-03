@@ -151,6 +151,106 @@ async fn trap_handling_returns_proper_error() {
 }
 
 #[tokio::test]
+async fn oversized_response_len_rejected_without_allocation() {
+    let config = SandboxConfig {
+        max_response_bytes: 32 * 1024,
+        ..Default::default()
+    };
+    let cache = Arc::new(RuntimeModuleCache::new());
+    let runtime = WasmtimeSandboxRuntime::new(config, cache).unwrap();
+
+    let wat = r#"
+        (module
+            (memory (export "memory") 2)
+            (func (export "allocate") (param i32) (result i32)
+                i32.const 0
+            )
+            (func (export "capability_invoke") (param i32 i32) (result i32 i32)
+                i32.const 0
+                i32.const 65536
+            )
+        )
+    "#;
+
+    let mut instance = runtime
+        .instantiate(wat.as_bytes(), test_context())
+        .await
+        .unwrap();
+
+    let result = instance.invoke(b"x").await;
+    assert!(
+        matches!(result, Err(RuntimeError::OutOfMemory)),
+        "expected oversized response length to be rejected, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn max_u32_response_len_rejected_without_allocation() {
+    let config = SandboxConfig {
+        max_response_bytes: 32 * 1024,
+        ..Default::default()
+    };
+    let cache = Arc::new(RuntimeModuleCache::new());
+    let runtime = WasmtimeSandboxRuntime::new(config, cache).unwrap();
+
+    let wat = r#"
+        (module
+            (memory (export "memory") 2)
+            (func (export "allocate") (param i32) (result i32)
+                i32.const 0
+            )
+            (func (export "capability_invoke") (param i32 i32) (result i32 i32)
+                i32.const 0
+                i32.const -1
+            )
+        )
+    "#;
+
+    let mut instance = runtime
+        .instantiate(wat.as_bytes(), test_context())
+        .await
+        .unwrap();
+
+    let result = instance.invoke(b"x").await;
+    assert!(
+        matches!(result, Err(RuntimeError::OutOfMemory)),
+        "expected 0xFFFFFFFF response length to be rejected, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn response_within_cap_passes_through() {
+    let config = SandboxConfig {
+        max_response_bytes: 64 * 1024,
+        ..Default::default()
+    };
+    let cache = Arc::new(RuntimeModuleCache::new());
+    let runtime = WasmtimeSandboxRuntime::new(config, cache).unwrap();
+
+    let wat = r#"
+        (module
+            (memory (export "memory") 2)
+            (func (export "allocate") (param i32) (result i32)
+                i32.const 0
+            )
+            (func (export "capability_invoke") (param i32 i32) (result i32 i32)
+                i32.const 0
+                i32.const 4
+            )
+        )
+    "#;
+
+    let mut instance = runtime
+        .instantiate(wat.as_bytes(), test_context())
+        .await
+        .unwrap();
+
+    let result = instance.invoke(b"x").await;
+    assert!(result.is_ok(), "expected in-cap response to succeed, got {result:?}");
+    assert_eq!(result.unwrap().len(), 4);
+}
+
+#[tokio::test]
 async fn module_without_memory_export_fails_on_instantiate() {
     let config = SandboxConfig::default();
     let cache = Arc::new(RuntimeModuleCache::new());

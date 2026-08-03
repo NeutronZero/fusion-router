@@ -29,9 +29,12 @@ impl Default for BroadcastEventBus {
 #[async_trait]
 impl EventBus for BroadcastEventBus {
     async fn publish(&self, envelope: ExecutionEventEnvelope) -> Result<(), GateError> {
-        // Send to broadcast channel (ignores error if no subscribers active)
-        let _ = self.sender.send(envelope);
-        Ok(())
+        self.sender
+            .send(envelope)
+            .map(|_| ())
+            .map_err(|_| GateError::ExecutionFailed(
+                "event bus publish failed: no subscribers listening (event would be lost)".into(),
+            ))
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ExecutionEventEnvelope> {
@@ -67,5 +70,25 @@ mod tests {
         assert_eq!(received.event_id, env.event_id);
         assert_eq!(received.sequence_number, 1);
         assert_eq!(received.correlation_id, Some("corr-1".into()));
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_event_bus_publish_without_subscribers_reports_error() {
+        let bus = BroadcastEventBus::default();
+
+        let env = ExecutionEventEnvelope::new(
+            "wf-1",
+            "exec-1",
+            None,
+            1,
+            None,
+            ExecutionEvent::WorkflowStarted {
+                intent: "Quality".into(),
+                input_tokens: 100,
+            },
+        );
+
+        let result = bus.publish(env).await;
+        assert!(result.is_err(), "publish with no receivers must not be silent");
     }
 }

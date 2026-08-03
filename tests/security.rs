@@ -46,6 +46,171 @@ async fn test_api_key_bruteforce() {
 }
 
 #[tokio::test]
+async fn test_v1_executions_auth_enforcement() {
+    use fusion_router::events::BroadcastEventBus;
+    use fusion_router::executor::DefaultExecutor;
+    use fusion_router::providers::ChatProvider;
+    use fusion_router::server::execution::{build_execution_plane, execute_workflow_handler};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    struct DummyProvider;
+    #[async_trait::async_trait]
+    impl ChatProvider for DummyProvider {
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        async fn chat_completion(
+            &self,
+            _req: &fusion_router::types::ChatCompletionRequest,
+        ) -> anyhow::Result<fusion_router::types::ChatCompletionResponse> {
+            anyhow::bail!("not implemented")
+        }
+    }
+
+    let event_bus = Arc::new(BroadcastEventBus::new(64));
+    let executor = Arc::new(DefaultExecutor::new(Arc::new(DummyProvider), HashMap::new()));
+    let exec_plane = build_execution_plane(event_bus, executor);
+    let execution_routes = Router::new()
+        .route("/v1/executions", post(execute_workflow_handler))
+        .with_state(exec_plane);
+
+    let app = Router::new()
+        .merge(execution_routes)
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .layer(axum::Extension(AuthConfig {
+            enabled: true,
+            api_keys: vec!["valid-key".into()],
+        }));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = reqwest::Client::new();
+
+    // Unauthenticated request to POST /v1/executions -> 401 Unauthorized
+    let res = client
+        .post(format!("http://{}/v1/executions", addr))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // Invalid API key -> 401 Unauthorized
+    let res = client
+        .post(format!("http://{}/v1/executions", addr))
+        .header("x-api-key", "wrong-key")
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // Valid API key -> Passes auth middleware (returns HTTP 400 Bad Request due to invalid workflow payload, not 401)
+    let res = client
+        .post(format!("http://{}/v1/executions", addr))
+        .header("x-api-key", "valid-key")
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(res.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_v1_operations_auth_enforcement() {
+    use fusion_router::capability::InMemoryCapabilityRegistry;
+    use fusion_router::operations::{
+        attestation_viewer::AttestationViewer, dashboard::DefaultDashboardDataProvider,
+        handlers::OperationsState, policy_admin::PolicyAdmin, runtime_inspector::RuntimeInspector,
+        MockPackageVerifier, RuntimeModuleCache,
+    };
+    use fusion_router::telemetry::audit::AuditLog;
+    use std::sync::Arc;
+
+    let ops_registry = Arc::new(parking_lot::RwLock::new(InMemoryCapabilityRegistry::new()));
+    let ops_cache = Arc::new(RuntimeModuleCache::new());
+    let ops_dashboard = Arc::new(DefaultDashboardDataProvider::new(
+        ops_registry.clone(),
+        ops_cache.clone(),
+    ));
+    let ops_inspector = Arc::new(RuntimeInspector::new(ops_cache.clone()));
+    let ops_store = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let ops_audit = Arc::new(AuditLog::new(1000));
+    let ops_policy_admin = Arc::new(PolicyAdmin::new(ops_store, ops_audit.clone()));
+    let ops_verifier = Arc::new(MockPackageVerifier);
+    let ops_attestation_viewer = Arc::new(AttestationViewer::new(ops_verifier, ops_audit));
+
+    let ops_state = OperationsState {
+        dashboard: ops_dashboard,
+        inspector: ops_inspector,
+        policy_admin: ops_policy_admin,
+        attestation_viewer: ops_attestation_viewer,
+    };
+
+    let operations_routes = Router::new()
+        .route("/v1/operations/registry", get(fusion_router::operations::handlers::registry_handler))
+        .route("/v1/operations/runtime", get(fusion_router::operations::handlers::runtime_handler))
+        .route("/v1/operations/metrics", get(fusion_router::operations::handlers::metrics_handler))
+        .route("/v1/operations/policies", get(fusion_router::operations::handlers::policies_list_handler))
+        .route("/v1/operations/policies", post(fusion_router::operations::handlers::policies_create_handler))
+        .route("/v1/operations/attestations", get(fusion_router::operations::handlers::attestations_handler))
+        .with_state(ops_state);
+
+    let app = Router::new()
+        .merge(operations_routes)
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .layer(axum::Extension(AuthConfig {
+            enabled: true,
+            api_keys: vec!["valid-key".into()],
+        }));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = reqwest::Client::new();
+
+    let ops_endpoints = [
+        "/v1/operations/registry",
+        "/v1/operations/runtime",
+        "/v1/operations/metrics",
+        "/v1/operations/policies",
+        "/v1/operations/attestations",
+    ];
+
+    for endpoint in &ops_endpoints {
+        // Unauthenticated -> 401 Unauthorized
+        let res = client
+            .get(format!("http://{}{}", addr, endpoint))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "endpoint {} should reject unauthenticated request",
+            endpoint
+        );
+    }
+
+    // Authenticated request to /v1/operations/registry -> Passes auth (200 OK)
+    let res = client
+        .get(format!("http://{}/v1/operations/registry", addr))
+        .header("x-api-key", "valid-key")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+}
+
+#[tokio::test]
 async fn test_path_traversal() {
     let tmp = std::env::temp_dir();
     let tool = FileReadTool::new(tmp.to_string_lossy().to_string());
@@ -59,12 +224,19 @@ async fn test_path_traversal() {
 
 #[tokio::test]
 async fn test_shell_injection() {
-    #[cfg(windows)]
-    let allowed = vec!["cmd".to_string(), "echo".to_string()];
-    #[cfg(not(windows))]
-    let allowed = vec!["echo".to_string()];
+    let allowed = vec![
+        "cmd".to_string(),
+        "sh".to_string(),
+        "bash".to_string(),
+        "powershell".to_string(),
+        "powershell.exe".to_string(),
+        "pwsh".to_string(),
+        "zsh".to_string(),
+        "echo".to_string(),
+    ];
     let tool = ShellCommandTool::new(allowed, 5);
 
+    // Unallowed command string
     let result = tool
         .execute(serde_json::json!({
             "command": "cmd /c rm -rf /"
@@ -72,20 +244,28 @@ async fn test_shell_injection() {
         .await;
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.contains("not in allowed list"));
+    assert!(err.contains("not in allowed list") || err.contains("strictly prohibited"));
 
-    #[cfg(windows)]
-    let (cmd, args) = ("cmd", vec!["/c", "echo", "hello"]);
-    #[cfg(not(windows))]
-    let (cmd, args) = ("echo", vec!["hello"]);
+    // Shell binaries must be rejected even if configured in allowed list
+    for shell_bin in &["cmd", "cmd.exe", "sh", "bash", "powershell", "powershell.exe", "pwsh", "zsh"] {
+        let res = tool
+            .execute(serde_json::json!({
+                "command": shell_bin,
+                "args": ["-c", "echo hello"]
+            }))
+            .await;
+        assert!(res.is_err(), "Shell binary '{}' should be rejected", shell_bin);
+        let err_msg = res.unwrap_err();
+        assert!(
+            err_msg.contains("strictly prohibited"),
+            "Expected strictly prohibited error for '{}', got: {}",
+            shell_bin,
+            err_msg
+        );
+    }
 
-    let result2 = tool
-        .execute(serde_json::json!({
-            "command": cmd,
-            "args": args
-        }))
-        .await;
-    assert!(result2.is_ok());
+    // Allowed non-shell command passes validation
+    assert!(tool.validate_command("echo").is_ok());
 }
 
 #[tokio::test]

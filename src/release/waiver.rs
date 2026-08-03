@@ -55,6 +55,7 @@ pub struct WaiverEvaluation {
     pub gate: GateId,
 }
 
+#[allow(dead_code)]
 pub fn load_waivers_from_yaml(path: &Path) -> Result<WaiverSet, GateError> {
     if !path.exists() {
         return Ok(WaiverSet::default());

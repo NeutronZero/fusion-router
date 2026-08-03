@@ -66,7 +66,7 @@ impl SemanticCache {
         let index = self.index.clone();
         let emb = query_embedding.clone();
         let results = tokio::task::spawn_blocking(move || {
-            let idx = index.lock().unwrap();
+            let idx = index.lock().unwrap_or_else(|e| e.into_inner());
             idx.search(&emb, 1)
         })
         .await
@@ -90,7 +90,7 @@ impl SemanticCache {
             let index = self.index.clone();
             let emb = embedding.clone();
             if tokio::task::spawn_blocking(move || {
-                let idx = index.lock().unwrap();
+                let idx = index.lock().unwrap_or_else(|e| e.into_inner());
                 idx.add(label, &emb)
             })
             .await
@@ -111,7 +111,7 @@ impl SemanticCache {
             if let Some(oldest) = oldest_to_remove {
                 let index = self.index.clone();
                 let _ = tokio::task::spawn_blocking(move || {
-                    let idx = index.lock().unwrap();
+                    let idx = index.lock().unwrap_or_else(|e| e.into_inner());
                     let _ = idx.remove(oldest);
                 })
                 .await;
@@ -153,7 +153,7 @@ impl SemanticCache {
         };
         let new_index = Index::new(&options).expect("Failed to create new HNSW index");
         new_index.reserve(self.max_entries).expect("Failed to reserve index capacity");
-        *self.index.lock().unwrap() = new_index;
+        *self.index.lock().unwrap_or_else(|e| e.into_inner()) = new_index;
         self.next_label.store(0, Ordering::Relaxed);
     }
 }

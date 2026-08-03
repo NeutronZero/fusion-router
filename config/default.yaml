@@ -98,7 +98,6 @@ tools:
     - ls
     - echo
     - cat
-    - cmd
   shell_timeout_secs: 10
   allowed_read_directories:
     - "."

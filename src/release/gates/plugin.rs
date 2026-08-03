@@ -99,6 +99,7 @@ pub trait PluginBackend: Send + Sync {
     fn load(&self, path: &std::path::Path) -> Result<PluginArtifact, GateError>;
 }
 
+#[allow(dead_code)]
 pub struct FilesystemPluginBackend {
     loader: FixtureLoader,
 }

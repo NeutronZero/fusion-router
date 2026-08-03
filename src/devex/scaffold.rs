@@ -7,7 +7,15 @@ impl PluginScaffolder {
     pub fn new() -> Self {
         Self
     }
+}
 
+impl Default for PluginScaffolder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PluginScaffolder {
     pub fn scaffold_plugin<P: AsRef<Path>>(&self, path: P, name: &str) -> std::io::Result<()> {
         let base_path = path.as_ref().join(name);
         fs::create_dir_all(&base_path)?;

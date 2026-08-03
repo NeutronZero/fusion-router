@@ -12,6 +12,7 @@ pub fn new_ollama_provider() -> Provider {
 pub struct OllamaProvider;
 
 impl OllamaProvider {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> Provider {
         new_ollama_provider()
     }

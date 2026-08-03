@@ -1,26 +1,33 @@
 use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, Json};
-use parking_lot::RwLock;
 use serde_json::{json, Value};
 
-use crate::capability::InMemoryCapabilityRegistry;
 use crate::operations::TimeWindow;
 
-use super::dashboard::{DashboardDataProvider, DefaultDashboardDataProvider};
+use super::dashboard::DashboardDataProvider;
 use super::runtime_inspector::RuntimeInspector;
 use super::policy_admin::PolicyAdmin;
 use super::attestation_viewer::AttestationViewer;
-use super::MockPackageVerifier;
-use super::RuntimeModuleCache;
+
+#[cfg(test)]
+use {
+    parking_lot::RwLock,
+    crate::capability::InMemoryCapabilityRegistry,
+    super::dashboard::DefaultDashboardDataProvider,
+    super::MockPackageVerifier,
+    super::RuntimeModuleCache,
+};
 
 #[derive(Clone)]
 pub struct OperationsState {
     pub dashboard: Arc<dyn DashboardDataProvider + Send + Sync>,
+    #[allow(dead_code)]
     pub inspector: Arc<RuntimeInspector>,
     pub policy_admin: Arc<PolicyAdmin>,
     pub attestation_viewer: Arc<AttestationViewer>,
 }
 
+#[cfg(test)]
 impl OperationsState {
     pub fn new_mock() -> Self {
         use parking_lot::Mutex as ParkingMutex;
@@ -45,11 +52,20 @@ impl OperationsState {
     }
 }
 
+fn json_value<T: serde::Serialize>(value: T) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    serde_json::to_value(value).map(Json).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("response serialization failed: {}", e)})),
+        )
+    })
+}
+
 pub async fn registry_handler(
     State(state): State<OperationsState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.dashboard.registry_summary() {
-        Ok(summary) => Ok(Json(serde_json::to_value(summary).unwrap())),
+        Ok(summary) => json_value(summary),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
     }
 }
@@ -58,7 +74,7 @@ pub async fn runtime_handler(
     State(state): State<OperationsState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.dashboard.runtime_summary() {
-        Ok(summary) => Ok(Json(serde_json::to_value(summary).unwrap())),
+        Ok(summary) => json_value(summary),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
     }
 }
@@ -74,7 +90,7 @@ pub async fn metrics_handler(
         end_secs: now,
     };
     match state.dashboard.invocation_metrics(window) {
-        Ok(metrics) => Ok(Json(serde_json::to_value(metrics).unwrap())),
+        Ok(metrics) => json_value(metrics),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
     }
 }
@@ -83,7 +99,7 @@ pub async fn policies_list_handler(
     State(state): State<OperationsState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.policy_admin.list_policies() {
-        Ok(policies) => Ok(Json(serde_json::to_value(policies).unwrap())),
+        Ok(policies) => json_value(policies),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
     }
 }
@@ -102,7 +118,7 @@ pub async fn attestations_handler(
     State(state): State<OperationsState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.attestation_viewer.list_packages() {
-        Ok(statuses) => Ok(Json(serde_json::to_value(statuses).unwrap())),
+        Ok(statuses) => json_value(statuses),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
     }
 }
@@ -112,6 +128,31 @@ mod tests {
     use super::*;
     use axum::routing::get;
     use axum::Router;
+
+    struct Unserializable;
+
+    impl serde::Serialize for Unserializable {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("boom"))
+        }
+    }
+
+    #[test]
+    fn test_json_value_maps_serialization_failure_to_error_response() {
+        let result = json_value(Unserializable);
+        assert!(result.is_err());
+        let (status, body) = result.unwrap_err();
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(body.0.get("error").is_some());
+    }
+
+    #[test]
+    fn test_json_value_serializes_ok_value() {
+        let result = json_value(json!({"total_capabilities": 3}));
+        assert!(result.is_ok());
+        let body = result.unwrap().0;
+        assert_eq!(body["total_capabilities"], 3);
+    }
 
     #[tokio::test]
     async fn test_registry_route_returns_json() {

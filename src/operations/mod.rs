@@ -80,6 +80,7 @@ impl RuntimeModuleCache {
         self.modules.read().len()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.modules.read().is_empty()
     }
@@ -88,6 +89,7 @@ impl RuntimeModuleCache {
         self.modules.write().insert(key, ());
     }
 
+    #[allow(dead_code)]
     pub fn clear(&self) {
         self.modules.write().clear();
     }
@@ -103,9 +105,70 @@ impl Default for RuntimeModuleCache {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PackageVerification {
+    pub schema_valid: bool,
+    pub signature_valid: bool,
+    pub semantic_valid: bool,
+}
+
 pub trait PackageVerifier: Send + Sync {
     fn verified_packages(&self) -> Vec<(String, String)>;
-    fn verify_package(&self, package_id: &str, version: &str) -> Result<(), OperationError>;
+    fn verify_package(&self, package_id: &str, version: &str) -> Result<PackageVerification, OperationError>;
+}
+
+/// Archive-backed verifier: loads the attestation envelope for a package and
+/// runs the 4-phase verification pipeline with a real HMAC-SHA256 signer.
+/// With no signing key configured, verification is refused (never fabricated).
+pub struct ArchivePackageVerifier {
+    archive: crate::release::archive::FilesystemArchiveBackend,
+    signer: Option<std::sync::Arc<dyn crate::release::signing::Signer>>,
+}
+
+impl ArchivePackageVerifier {
+    pub fn new(
+        archive: crate::release::archive::FilesystemArchiveBackend,
+        signer: Option<std::sync::Arc<dyn crate::release::signing::Signer>>,
+    ) -> Self {
+        Self { archive, signer }
+    }
+}
+
+impl PackageVerifier for ArchivePackageVerifier {
+    fn verified_packages(&self) -> Vec<(String, String)> {
+        use crate::release::archive::ArchiveBackend;
+        self.archive
+            .list()
+            .map(|ids| ids.into_iter().map(|id| (id, "unknown".into())).collect())
+            .unwrap_or_default()
+    }
+
+    fn verify_package(&self, package_id: &str, _version: &str) -> Result<PackageVerification, OperationError> {
+        use crate::release::archive::ArchiveBackend;
+        let Some(signer) = &self.signer else {
+            return Err(OperationError::Registry(
+                "attestation verification unavailable: FUSION_SIGNING_KEY not set".into(),
+            ));
+        };
+        let envelope = self
+            .archive
+            .load(package_id)
+            .map_err(|e| OperationError::Registry(e.to_string()))?;
+        let report = crate::release::verifier::AttestationVerifier::verify(&envelope, signer.as_ref())
+            .map_err(|e| OperationError::Registry(e.to_string()))?;
+        let verification = PackageVerification {
+            schema_valid: report.schema_valid,
+            signature_valid: report.signature_valid,
+            semantic_valid: report.semantic_valid,
+        };
+        if !(verification.schema_valid && verification.signature_valid && verification.semantic_valid) {
+            return Err(OperationError::Registry(format!(
+                "attestation {package_id} failed verification: {}",
+                report.summary
+            )));
+        }
+        Ok(verification)
+    }
 }
 
 pub struct MockPackageVerifier;
@@ -114,14 +177,38 @@ impl PackageVerifier for MockPackageVerifier {
     fn verified_packages(&self) -> Vec<(String, String)> {
         vec![]
     }
-    fn verify_package(&self, _package_id: &str, _version: &str) -> Result<(), OperationError> {
-        Ok(())
+    fn verify_package(&self, _package_id: &str, _version: &str) -> Result<PackageVerification, OperationError> {
+        Ok(PackageVerification { schema_valid: true, signature_valid: true, semantic_valid: true })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use crate::release::signing::HmacSha256Signer;
+
+    #[test]
+    fn test_archive_package_verifier_refuses_without_key() {
+        let archive = crate::release::archive::FilesystemArchiveBackend::new(
+            std::env::temp_dir().join(format!("fusion_ops_nokey_{}", std::process::id())),
+        );
+        let verifier = ArchivePackageVerifier::new(archive, None);
+        let result = verifier.verify_package("some-pkg", "1.0.0");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("FUSION_SIGNING_KEY"));
+    }
+
+    #[test]
+    fn test_archive_package_verifier_rejects_missing_attestation() {
+        let archive = crate::release::archive::FilesystemArchiveBackend::new(
+            std::env::temp_dir().join(format!("fusion_ops_missing_{}", std::process::id())),
+        );
+        let signer = Arc::new(HmacSha256Signer::new("ops", b"secret-key"));
+        let verifier = ArchivePackageVerifier::new(archive, Some(signer));
+        let result = verifier.verify_package("does-not-exist", "1.0.0");
+        assert!(result.is_err());
+    }
 
     #[test]
     fn test_operation_error_display() {

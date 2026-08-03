@@ -35,8 +35,8 @@ impl ModelResolutionPass {
     fn select_model(&self) -> &str {
         match &self.model_requirements {
             Some(reqs) if reqs.requires_tools => &self.model_catalog.code,
-            Some(reqs) if reqs.min_coding_score.map_or(false, |s| s >= 0.8) => &self.model_catalog.code,
-            Some(reqs) if reqs.min_reasoning_score.map_or(false, |s| s >= 0.8) => &self.model_catalog.architecture,
+            Some(reqs) if reqs.min_coding_score.is_some_and(|s| s >= 0.8) => &self.model_catalog.code,
+            Some(reqs) if reqs.min_reasoning_score.is_some_and(|s| s >= 0.8) => &self.model_catalog.architecture,
             _ => &self.model_catalog.fast,
         }
     }

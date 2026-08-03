@@ -32,7 +32,7 @@ impl FixtureLoader {
                 .map_err(|e| GateError::ExecutionFailed(format!("read dir {}: {e}", dir.display())))?
             {
                 let entry = entry.map_err(|e| GateError::ExecutionFailed(e.to_string()))?;
-                if entry.path().extension().map_or(false, |e| e == ext) {
+                if entry.path().extension().is_some_and(|e| e == ext) {
                     results.push(entry.path());
                 }
             }
@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn test_load_manifest_success() {
         let dir = std::env::temp_dir().join(format!("fusion_m2_fixture_loader_{}", uuid::Uuid::new_v4()));
-        let _ = std::fs::create_dir_all(&dir.join("tests/fixtures"));
+        let _ = std::fs::create_dir_all(dir.join("tests/fixtures"));
         let yaml = r#"
 configs:
   - version: "0.9.0"

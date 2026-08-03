@@ -37,7 +37,7 @@ impl CompilerPass for PolicyCompilerPass {
                 .config
                 .get("capability")
                 .and_then(|v| v.as_str())
-                .or_else(|| node.model.as_deref())
+                .or(node.model.as_deref())
                 .unwrap_or("general");
 
             if let Some(rule) = PolicyPrecedenceEngine::evaluate_matching_rule(&self.policy_ir, symbol_key) {

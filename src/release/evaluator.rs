@@ -93,7 +93,16 @@ impl PolicyEvaluator {
             .iter()
             .filter_map(|e| match e {
                 GateExecution::Success(res) => Some(res.clone()),
-                GateExecution::ExecutionError(_) => None,
+                GateExecution::ExecutionError(err) => {
+                    // The runner normalizes errors into failed results before
+                    // evaluation; reaching this branch means a caller bypassed
+                    // that contract, so the error must not vanish silently.
+                    tracing::warn!(
+                        error = %err,
+                        "evaluator dropped GateExecution::ExecutionError (caller bypassed runner normalization)"
+                    );
+                    None
+                }
             })
             .collect();
 
@@ -118,7 +127,11 @@ impl PolicyEvaluator {
             }
         }
 
-        let decision = if !remaining_required_failures.is_empty() {
+        let decision = if results.is_empty() {
+            // No gate evidence at all — the evaluation cannot support an
+            // approval decision.
+            ReleaseDecision::Blocked
+        } else if !remaining_required_failures.is_empty() {
             ReleaseDecision::Blocked
         } else if !waived_failures.is_empty() {
             ReleaseDecision::ApprovedWithWaivers
@@ -233,5 +246,49 @@ mod tests {
         assert_eq!(eval.decision, ReleaseDecision::Approved);
         assert_eq!(eval.summary.advisory_failed, 1);
         assert!(eval.advisory_failures.contains(&GateId::Provider1));
+    }
+
+    #[test]
+    fn test_evaluator_empty_evidence_blocked() {
+        let policy = PolicyDefinition::default_policy();
+        let ctx = EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
+        let results = vec![];
+
+        let eval = PolicyEvaluator::evaluate(&ctx, &results);
+        assert_eq!(eval.decision, ReleaseDecision::Blocked, "no evidence must not Approve");
+    }
+
+    #[test]
+    fn test_evaluator_required_execution_error_blocks() {
+        use crate::release::policy::EnvironmentPolicy;
+        use crate::release::gate::GateError;
+
+        let policy = PolicyDefinition {
+            name: "audit-fix".into(),
+            environments: [(
+                "production".to_string(),
+                EnvironmentPolicy {
+                    require: vec![GateId::Replay1],
+                    advisory: vec![],
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let ctx = EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
+        let results = vec![
+            mock_execution(GateId::Sdk1, true),
+            GateExecution::Success(GateResult {
+                gate_id: GateId::Replay1,
+                passed: false,
+                summary: GateError::ToolNotAvailable("determinism backend not available".into()).to_string(),
+                details: vec![],
+                duration: Duration::from_millis(10),
+            }),
+        ];
+
+        let eval = PolicyEvaluator::evaluate(&ctx, &results);
+        assert_eq!(eval.decision, ReleaseDecision::Blocked);
+        assert!(eval.required_failures.contains(&GateId::Replay1));
     }
 }

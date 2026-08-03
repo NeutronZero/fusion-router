@@ -47,7 +47,7 @@ impl EventProjection for CheckpointProjection {
             self.node_count += 1;
             let should_checkpoint = match self.policy {
                 CheckpointPolicy::EveryNode => true,
-                CheckpointPolicy::EveryNthNode(n) => self.node_count % n == 0,
+                CheckpointPolicy::EveryNthNode(n) => self.node_count.is_multiple_of(n),
                 CheckpointPolicy::Timed(_) | CheckpointPolicy::Manual => false,
             };
 
@@ -55,10 +55,14 @@ impl EventProjection for CheckpointProjection {
                 self.saved_sequence_numbers.insert(envelope.sequence_number);
                 let path = self.storage_dir.join(format!("{}-seq{}.chk", envelope.execution_id, envelope.sequence_number));
                 if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        GateError::ExecutionFailed(format!("checkpoint dir create error: {e}"))
+                    })?;
                 }
                 let json = serde_json::to_string_pretty(envelope).map_err(|e| GateError::ExecutionFailed(format!("checkpoint serialize error: {e}")))?;
-                let _ = std::fs::write(&path, json);
+                std::fs::write(&path, json).map_err(|e| {
+                    GateError::ExecutionFailed(format!("checkpoint write error: {e}"))
+                })?;
             }
         }
         Ok(())
@@ -93,6 +97,36 @@ mod tests {
         proj.handle_event(&env).await.unwrap(); // Duplicate call
 
         assert_eq!(proj.saved_sequence_numbers.len(), 1);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_projection_write_failure_propagates() {
+        let temp_dir = std::env::temp_dir().join(format!("fusion_chk_fail_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let blocker = temp_dir.join("blocker");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        // create_dir_all on this path fails: its parent is a regular file
+        let storage_dir = blocker.join("sub");
+
+        let mut proj = CheckpointProjection::new(CheckpointPolicy::EveryNode, storage_dir);
+
+        let env = ExecutionEventEnvelope::new(
+            "wf-1",
+            "exec-1",
+            None,
+            1,
+            None,
+            ExecutionEvent::NodeFinished {
+                node_id: "node_1".into(),
+                duration_ms: 50,
+                prompt_tokens: 10,
+                completion_tokens: 20,
+            },
+        );
+
+        let result = proj.handle_event(&env).await;
+        assert!(result.is_err(), "checkpoint write failure must not be silent");
         let _ = std::fs::remove_dir_all(temp_dir);
     }
 }

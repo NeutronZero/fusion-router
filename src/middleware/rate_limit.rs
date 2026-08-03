@@ -43,7 +43,8 @@ impl RateLimiter {
         }
 
         let buckets = self.buckets.clone();
-        let interval = Duration::from_secs(self.config.cleanup_interval_secs);
+        let interval_secs = self.config.cleanup_interval_secs.max(1);
+        let interval = Duration::from_secs(interval_secs);
         tokio::spawn(async move {
             loop {
                 sleep(interval).await;
@@ -183,5 +184,22 @@ mod tests {
         assert!(limiter.check_rate("client-b").is_ok());
         assert!(limiter.check_rate("client-b").is_ok());
         assert!(limiter.check_rate("client-b").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_zero_cleanup_interval_clamped() {
+        let config = RateLimitingConfig {
+            enabled: true,
+            requests_per_minute: 60,
+            burst_size: 5,
+            cleanup_interval_secs: 0,
+        };
+        let limiter = RateLimiter::new(config);
+
+        limiter.start_cleanup();
+
+        assert!(limiter.cleanup_started.load(Ordering::Relaxed));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 
 pub use bus::{BroadcastEventBus, EventBus};
 pub use payload::ExecutionEvent;
+#[allow(unused_imports)]
 pub use projection::{EventProjection, ProjectionDispatcher};
 
 pub const EVENT_SCHEMA_VERSION: &str = "fusion.router.event.v1";

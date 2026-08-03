@@ -45,7 +45,10 @@ impl PackageLoader {
         }
 
         let primary_id = manifest.capabilities[0].id.clone();
-        let mut reg = self.registry.write().unwrap();
+        let mut reg = self
+            .registry
+            .write()
+            .map_err(|e| PackageError::Registry(format!("capability registry lock poisoned: {}", e)))?;
 
         for contract in &manifest.capabilities {
             reg.register(contract.clone())

@@ -5,6 +5,7 @@ pub struct SandboxConfig {
     pub memory_limit_bytes: u64,
     pub fuel_amount: u64,
     pub timeout_ms: Option<u64>,
+    pub max_response_bytes: usize,
 }
 
 impl Default for SandboxConfig {
@@ -13,6 +14,7 @@ impl Default for SandboxConfig {
             memory_limit_bytes: 64 * 1024 * 1024,
             fuel_amount: 1_000_000,
             timeout_ms: None,
+            max_response_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -35,6 +37,7 @@ mod tests {
             memory_limit_bytes: 128 * 1024 * 1024,
             fuel_amount: 500_000,
             timeout_ms: Some(5000),
+            max_response_bytes: 8 * 1024 * 1024,
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: SandboxConfig = serde_json::from_str(&json).unwrap();
@@ -49,6 +52,7 @@ mod tests {
             memory_limit_bytes: 32 * 1024 * 1024,
             fuel_amount: 100,
             timeout_ms: Some(1000),
+            max_response_bytes: 4 * 1024 * 1024,
         };
         assert_eq!(config.memory_limit_bytes, 32 * 1024 * 1024);
         assert_eq!(config.fuel_amount, 100);

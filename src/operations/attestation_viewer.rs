@@ -14,6 +14,7 @@ pub struct PackageAttestationStatus {
 
 pub struct AttestationViewer {
     verifier: Arc<dyn PackageVerifier>,
+    #[allow(dead_code)]
     audit_log: Arc<AuditLog>,
 }
 
@@ -24,21 +25,36 @@ impl AttestationViewer {
 
     pub fn list_packages(&self) -> Result<Vec<PackageAttestationStatus>, OperationError> {
         let packages = self.verifier.verified_packages();
-        let statuses = packages.into_iter().map(|(id, ver)| {
-            PackageAttestationStatus {
-                package_id: id,
-                version: ver,
-                schema_valid: true,
-                signature_valid: true,
-                semantic_valid: true,
-                last_verified: chrono::Utc::now().timestamp(),
-            }
-        }).collect();
+        let statuses = packages
+            .into_iter()
+            .map(|(id, ver)| {
+                let now = chrono::Utc::now().timestamp();
+                match self.verifier.verify_package(&id, &ver) {
+                    Ok(v) => PackageAttestationStatus {
+                        package_id: id,
+                        version: ver,
+                        schema_valid: v.schema_valid,
+                        signature_valid: v.signature_valid,
+                        semantic_valid: v.semantic_valid,
+                        last_verified: now,
+                    },
+                    Err(_) => PackageAttestationStatus {
+                        package_id: id,
+                        version: ver,
+                        schema_valid: false,
+                        signature_valid: false,
+                        semantic_valid: false,
+                        last_verified: now,
+                    },
+                }
+            })
+            .collect();
         Ok(statuses)
     }
 
+    #[allow(dead_code)]
     pub fn re_verify(&self, package_id: &str, version: &str) -> Result<PackageAttestationStatus, OperationError> {
-        self.verifier.verify_package(package_id, version)?;
+        let verification = self.verifier.verify_package(package_id, version)?;
         self.audit_log.record(AuditEntry {
             timestamp: chrono::Utc::now().timestamp(),
             request_id: String::new(),
@@ -50,9 +66,9 @@ impl AttestationViewer {
         Ok(PackageAttestationStatus {
             package_id: package_id.into(),
             version: version.into(),
-            schema_valid: true,
-            signature_valid: true,
-            semantic_valid: true,
+            schema_valid: verification.schema_valid,
+            signature_valid: verification.signature_valid,
+            semantic_valid: verification.semantic_valid,
             last_verified: chrono::Utc::now().timestamp(),
         })
     }

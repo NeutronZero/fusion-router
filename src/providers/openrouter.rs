@@ -12,6 +12,7 @@ pub fn new_openrouter_provider(api_key: String) -> Provider {
 pub struct OpenRouterProvider;
 
 impl OpenRouterProvider {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(api_key: String) -> Provider {
         new_openrouter_provider(api_key)
     }

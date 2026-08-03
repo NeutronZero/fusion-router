@@ -30,6 +30,7 @@ impl GateId {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "SDK-1" => Some(GateId::Sdk1),
@@ -42,6 +43,14 @@ impl GateId {
             "CON-1" => Some(GateId::Connector1),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for GateId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_str(s).ok_or_else(|| format!("invalid GateId: {}", s))
     }
 }
 
