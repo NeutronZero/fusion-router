@@ -55,12 +55,12 @@ impl EventProjection for CheckpointProjection {
                 self.saved_sequence_numbers.insert(envelope.sequence_number);
                 let path = self.storage_dir.join(format!("{}-seq{}.chk", envelope.execution_id, envelope.sequence_number));
                 if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
                         GateError::ExecutionFailed(format!("checkpoint dir create error: {e}"))
                     })?;
                 }
                 let json = serde_json::to_string_pretty(envelope).map_err(|e| GateError::ExecutionFailed(format!("checkpoint serialize error: {e}")))?;
-                std::fs::write(&path, json).map_err(|e| {
+                tokio::fs::write(&path, json).await.map_err(|e| {
                     GateError::ExecutionFailed(format!("checkpoint write error: {e}"))
                 })?;
             }

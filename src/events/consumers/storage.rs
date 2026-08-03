@@ -46,20 +46,22 @@ impl EventProjection for PersistentEventStoreProjection {
     async fn handle_event(&mut self, envelope: &ExecutionEventEnvelope) -> Result<(), GateError> {
         let file_path = self.storage_dir.join(format!("{}.jsonl", envelope.execution_id));
         if let Some(parent) = file_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            let _ = tokio::fs::create_dir_all(parent).await;
         }
 
         let json = serde_json::to_string(envelope)
             .map_err(|e| GateError::ExecutionFailed(format!("serialize event: {e}")))?;
 
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&file_path)
+            .await
             .map_err(|e| GateError::ExecutionFailed(format!("open event log {}: {e}", file_path.display())))?;
 
-        writeln!(file, "{json}")
+        file.write_all(format!("{json}\n").as_bytes())
+            .await
             .map_err(|e| GateError::ExecutionFailed(format!("write event log {}: {e}", file_path.display())))?;
 
         Ok(())

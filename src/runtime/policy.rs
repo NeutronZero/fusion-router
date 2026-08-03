@@ -85,4 +85,37 @@ mod tests {
         let result = check_http_access(&perms, "https://evil.com/steal");
         assert!(matches!(result, Err(GateError::PermissionDenied(_))));
     }
+
+    #[test]
+    fn test_secret_denied_when_only_http_permissions() {
+        let perms = vec![Permission::Http("https://example.com/*".into())];
+        let result = check_secret_access(&perms, "db_password");
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_http_denied_when_only_secret_permissions() {
+        let perms = vec![Permission::Secrets("db_*".into())];
+        let result = check_http_access(&perms, "https://example.com/api");
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_empty_permissions_deny_secret_access() {
+        let result = check_secret_access(&[], "db_password");
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_empty_permissions_deny_http_access() {
+        let result = check_http_access(&[], "https://example.com/api");
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_secret_glob_prefix_denied() {
+        let perms = vec![Permission::Secrets("db_*".into())];
+        let result = check_secret_access(&perms, "api_other_key");
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
 }

@@ -11,7 +11,7 @@ Checks:
 Usage:
     python scripts/check-memory.py
     python scripts/check-memory.py --verbose
-    python scripts/check-memory.py --fix    # Update stale paths (todo)
+    python scripts/check-memory.py --fix    # Update stale paths (unique same-name match)
 """
 
 import os
@@ -149,7 +149,70 @@ def check_documentation_cross_references() -> list:
     return errors
 
 
+def find_suggestions(missing_path: str, source_files: set) -> list:
+    """Find existing source files whose file name matches a missing path."""
+    name = missing_path.rsplit("/", 1)[-1]
+    if not name:
+        return []
+    return sorted(p for p in source_files if p.rsplit("/", 1)[-1] == name)
+
+
+def apply_path_fixes(memory_file: Path, source_files: set) -> dict:
+    """Rewrite stale file paths in a memory file when a unique same-name file exists.
+
+    Returns a mapping of old path -> new path that was applied.
+    """
+    content = memory_file.read_text(encoding="utf-8")
+    fixes = {}
+    seen = set()
+
+    for pattern in [FILE_PATH_RE, SRC_PATH_RE, CRATE_PATH_RE]:
+        for match in pattern.finditer(content):
+            path = match.group(1).replace("\\", "/")
+            if path in seen:
+                continue
+            seen.add(path)
+            if "*" in path or "{" in path or path.endswith("/"):
+                continue
+            if (REPO_ROOT / path).exists() or path in source_files:
+                continue
+
+            suggestions = find_suggestions(path, source_files)
+            if len(suggestions) == 1:
+                fixes[path] = suggestions[0]
+            elif len(suggestions) > 1:
+                print(
+                    f"  AMBIGUOUS: {path} (in {memory_file.name}) matches "
+                    f"multiple files: {', '.join(suggestions)}; skipping"
+                )
+            else:
+                print(
+                    f"  NO MATCH: {path} (in {memory_file.name}) has no same-name file; skipping"
+                )
+
+    if fixes:
+        new_content = content
+        for old, new in fixes.items():
+            new_content = new_content.replace(f"`{old}`", f"`{new}`")
+        memory_file.write_text(new_content, encoding="utf-8")
+
+    return fixes
+
+
+def apply_all_fixes(source_files: set) -> int:
+    """Rewrite stale paths across all memory files. Returns number of fixes applied."""
+    total = 0
+    for mf in get_memory_files():
+        fixes = apply_path_fixes(mf, source_files)
+        if fixes:
+            total += len(fixes)
+            for old, new in fixes.items():
+                print(f"  FIXED: {old} -> {new} (in {mf.name})")
+    return total
+
+
 def main():
+    fix_mode = "--fix" in sys.argv
     verbose = "--verbose" in sys.argv
 
     print("=" * 60)
@@ -161,6 +224,12 @@ def main():
     print(f"Source files indexed: {len(source_files)}")
     print(f"Memory files: {len(list(get_memory_files()))}")
     print()
+
+    if fix_mode:
+        print("--- Applying --fix: rewriting stale paths ---")
+        fixed = apply_all_fixes(source_files)
+        print(f"  Applied {fixed} path fix(es).")
+        print()
 
     all_errors = []
 

@@ -35,6 +35,23 @@ impl DefaultScheduler {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_sets_max_concurrent() {
+        let scheduler = DefaultScheduler::new(4);
+        assert_eq!(scheduler.max_concurrent, 4);
+    }
+
+    #[test]
+    fn test_default_uses_standard_concurrency() {
+        let scheduler = DefaultScheduler::default();
+        assert_eq!(scheduler.max_concurrent, DEFAULT_MAX_CONCURRENT);
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::scheduler::Scheduler for DefaultScheduler {
     #[tracing::instrument(skip(self, graph), fields(node_count = graph.nodes.len()))]

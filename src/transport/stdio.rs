@@ -67,3 +67,19 @@ impl Transport for StdioTransport {
         Err(TransportError::Network("Streaming not yet supported for stdio transport".to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_stores_command_and_args() {
+        let transport = StdioTransport::new(
+            "python".into(),
+            vec!["-c".into(), "print(1)".into()],
+        );
+
+        assert_eq!(transport.command, "python");
+        assert_eq!(transport.args, vec!["-c".to_string(), "print(1)".to_string()]);
+    }
+}

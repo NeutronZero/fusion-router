@@ -123,4 +123,64 @@ mod tests {
         let result = runtime.load_module(invalid_bytes);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_load_module_empty_bytes_fails() {
+        let runtime = WasmRuntime::new().unwrap();
+        let result = runtime.load_module(&[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_instantiate_fails_on_unresolved_import() {
+        let runtime = WasmRuntime::new().unwrap();
+        let wat = r#"
+            (module
+                (import "env" "missing_func" (func))
+            )
+        "#;
+        let module = runtime.load_module(wat.as_bytes()).unwrap();
+
+        let result = module.instantiate(&runtime);
+        assert!(result.is_err(), "instantiate must fail for unresolved imports");
+    }
+
+    #[test]
+    fn test_call_func_missing_export_fails() {
+        let runtime = WasmRuntime::new().unwrap();
+        let wat = r#"
+            (module
+                (func (export "add") (param i32 i32) (result i32)
+                    local.get 0
+                    local.get 1
+                    i32.add
+                )
+            )
+        "#;
+        let module = runtime.load_module(wat.as_bytes()).unwrap();
+        let mut instance = module.instantiate(&runtime).unwrap();
+
+        let result = instance.call_func("nonexistent", &[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_call_func_wrong_signature_fails() {
+        let runtime = WasmRuntime::new().unwrap();
+        let wat = r#"
+            (module
+                (func (export "add") (param i32 i32) (result i32)
+                    local.get 0
+                    local.get 1
+                    i32.add
+                )
+            )
+        "#;
+        let module = runtime.load_module(wat.as_bytes()).unwrap();
+        let mut instance = module.instantiate(&runtime).unwrap();
+
+        let result = instance.call_func("add", &[Val::I32(1)]);
+        assert!(result.is_err(), "calling with wrong arity must fail");
+    }
 }

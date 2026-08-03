@@ -177,24 +177,27 @@ impl CapabilityResolver {
         &self,
         contracts: &[CapabilityContract],
     ) -> Result<(Vec<CapabilityContract>, Vec<DependencyEdge>), ResolverError> {
-        let mut result_map: HashMap<CapabilityId, CapabilityContract> = HashMap::new();
+        let mut result_map: HashMap<CapabilityId, Arc<CapabilityContract>> = HashMap::new();
         let mut dep_edges: Vec<DependencyEdge> = Vec::new();
         let mut queue: VecDeque<CapabilityId> = VecDeque::new();
 
         for c in contracts {
             let id = c.id.clone();
-            result_map.insert(id.clone(), c.clone());
+            result_map.insert(id.clone(), Arc::new(c.clone()));
             queue.push_back(id);
         }
 
         let mut in_flight: HashSet<CapabilityId> = queue.iter().cloned().collect();
 
         while let Some(current_id) = queue.pop_front() {
-            let current = result_map.get(&current_id)
-                .ok_or_else(|| ResolverError::UnregisteredCapability(current_id.clone()))?;
-            let deps = current.dependencies.clone();
+            // Clone the Arc (cheap) so dependencies can be iterated by reference
+            // without holding a borrow across the map insert below.
+            let current = result_map
+                .get(&current_id)
+                .ok_or_else(|| ResolverError::UnregisteredCapability(current_id.clone()))?
+                .clone();
 
-            for dep_id in &deps {
+            for dep_id in &current.dependencies {
                 if in_flight.contains(dep_id) {
                     if let Some(dep_contract) = self.registry.get(dep_id) {
                         if dep_contract.dependencies.contains(&current_id) {
@@ -211,7 +214,7 @@ impl CapabilityResolver {
                         }
                     })?;
 
-                    result_map.insert(dep_id.clone(), dep_contract.clone());
+                    result_map.insert(dep_id.clone(), Arc::new(dep_contract.clone()));
                     queue.push_back(dep_id.clone());
                     in_flight.insert(dep_id.clone());
                 }
@@ -223,7 +226,10 @@ impl CapabilityResolver {
             }
         }
 
-        let mut result: Vec<CapabilityContract> = result_map.into_values().collect();
+        let mut result: Vec<CapabilityContract> = result_map
+            .into_values()
+            .map(|contract| contract.as_ref().clone())
+            .collect();
         result.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
         Ok((result, dep_edges))
     }

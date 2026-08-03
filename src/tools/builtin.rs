@@ -177,6 +177,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_file_read_tool_rejects_absolute_path_outside_allowed_dir() {
+        let tmp = std::env::temp_dir();
+        let tool = FileReadTool::new(tmp.to_string_lossy().to_string());
+
+        // An absolute path must never resolve relative to the allowed directory
+        // (Path::join splices absolute paths, replacing the base).
+        let result = tool
+            .execute(serde_json::json!({"path": "C:\\Windows\\win.ini"}))
+            .await;
+        assert!(result.is_err());
+
+        let result = tool
+            .execute(serde_json::json!({"path": "/etc/passwd"}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn test_file_read_tool_reads_file_content() {
         let tmp = std::env::temp_dir();
         let unique_name = format!("_fusion_test_readable_{}.txt", uuid::Uuid::new_v4());

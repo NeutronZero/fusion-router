@@ -39,3 +39,20 @@ impl EventProjection for OpenTelemetryProjection {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new() {
+        let projection = OpenTelemetryProjection::new();
+        assert_eq!(projection.name(), "OpenTelemetryProjection");
+    }
+
+    #[test]
+    fn test_default_equivalent_to_new() {
+        let default = OpenTelemetryProjection::default();
+        assert_eq!(default.name(), OpenTelemetryProjection::new().name());
+    }
+}

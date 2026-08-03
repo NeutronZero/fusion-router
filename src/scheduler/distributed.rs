@@ -96,3 +96,54 @@ impl Scheduler for DistributedScheduler {
         self.local_fallback.run_with_cancellation(instance, executor, cancellation_token).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_pool_new_is_empty() {
+        let pool = RemoteWorkerPool::new();
+        assert!(pool.get_workers().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_pool_add_and_remove_worker() {
+        let pool = RemoteWorkerPool::new();
+
+        pool.add_worker(WorkerNode::new("worker-1".into(), "http://10.0.0.1:9000".into(), 4))
+            .await;
+
+        let workers = pool.get_workers().await;
+        assert_eq!(workers.len(), 1);
+        assert_eq!(workers[0].id, "worker-1");
+        assert_eq!(workers[0].address, "http://10.0.0.1:9000");
+        assert_eq!(workers[0].capacity, 4);
+        assert_eq!(workers[0].active_tasks, 0);
+
+        pool.remove_worker("worker-1").await;
+        assert!(pool.get_workers().await.is_empty());
+    }
+
+    #[test]
+    fn test_worker_node_new() {
+        let worker = WorkerNode::new("w".into(), "addr".into(), 8);
+        assert_eq!(worker.id, "w");
+        assert_eq!(worker.address, "addr");
+        assert_eq!(worker.capacity, 8);
+        assert_eq!(worker.active_tasks, 0);
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_new_stores_pool() {
+        let pool = RemoteWorkerPool::new();
+        let scheduler = DistributedScheduler::new(pool.clone());
+
+        pool.add_worker(WorkerNode::new("w1".into(), "addr".into(), 2))
+            .await;
+
+        let workers = scheduler.pool.get_workers().await;
+        assert_eq!(workers.len(), 1);
+        assert_eq!(workers[0].id, "w1");
+    }
+}

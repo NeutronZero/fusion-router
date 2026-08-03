@@ -84,4 +84,43 @@ mod tests {
         assert_eq!(instances.len(), 1);
         assert_eq!(instances[0].capability_id, "test.cap");
     }
+
+    #[test]
+    fn test_get_instance_found() {
+        let cache = Arc::new(RuntimeModuleCache::new());
+        cache.insert(CacheKey(
+            fusion_plugin_api::CapabilityId::new("test.cap"),
+            semver::Version::parse("0.1.0").unwrap(),
+        ));
+        let inspector = RuntimeInspector::new(cache.clone());
+
+        let detail = inspector
+            .get_instance("test.cap")
+            .unwrap()
+            .expect("instance should be found");
+        assert_eq!(detail.capability_id, "test.cap");
+        assert_eq!(detail.version, "0.1.0");
+    }
+
+    #[test]
+    fn test_get_instance_not_found() {
+        let cache = Arc::new(RuntimeModuleCache::new());
+        cache.insert(CacheKey(
+            fusion_plugin_api::CapabilityId::new("test.cap"),
+            semver::Version::parse("0.1.0").unwrap(),
+        ));
+        let inspector = RuntimeInspector::new(cache.clone());
+
+        let detail = inspector.get_instance("other.cap").unwrap();
+        assert!(detail.is_none());
+    }
+
+    #[test]
+    fn test_get_instance_empty_cache() {
+        let cache = Arc::new(RuntimeModuleCache::new());
+        let inspector = RuntimeInspector::new(cache.clone());
+
+        let detail = inspector.get_instance("anything.cap").unwrap();
+        assert!(detail.is_none());
+    }
 }

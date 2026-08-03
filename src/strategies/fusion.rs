@@ -28,8 +28,15 @@ impl ModelAvailability {
     pub fn from_models(models: &[String]) -> Self {
         let high_keywords = ["gpt-4", "claude-opus", "gemini-ultra", "claude-3.5", "o1", "o3"];
         let medium_keywords = ["gpt-4o-mini", "claude-sonnet", "gemini-pro", "claude-haiku"];
-        let has_high = models.iter().any(|m| high_keywords.iter().any(|k| m.contains(k)));
-        let has_medium = models.iter().any(|m| medium_keywords.iter().any(|k| m.contains(k)));
+        let matches_keyword = |model: &str, keyword: &str| {
+            model == keyword
+                || model.starts_with(&format!("{keyword}-"))
+                || model.starts_with(&format!("{keyword}."))
+                || model.contains(&format!("-{keyword}-"))
+                || model.contains(&format!("-{keyword}."))
+        };
+        let has_high = models.iter().any(|m| high_keywords.iter().any(|k| matches_keyword(m, k)));
+        let has_medium = models.iter().any(|m| medium_keywords.iter().any(|k| matches_keyword(m, k)));
         Self {
             has_high_capability: has_high,
             has_medium_capability: has_medium || has_high,
@@ -175,5 +182,87 @@ impl Strategy for FusionStrategy {
         graph.add_edge("barrier_fusion", "reducer_fusion", None);
 
         Ok(graph)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_models_detects_high_capability() {
+        let models: Vec<String> = vec!["gpt-4".into(), "claude-haiku".into()];
+        let availability = ModelAvailability::from_models(&models);
+
+        assert!(availability.has_high_capability);
+        assert!(availability.has_medium_capability);
+        assert_eq!(availability.eligible_models, models);
+    }
+
+    #[test]
+    fn test_from_models_detects_medium_capability() {
+        let availability = ModelAvailability::from_models(&["gpt-4o-mini".into()]);
+
+        assert!(!availability.has_high_capability);
+        assert!(availability.has_medium_capability);
+        assert_eq!(availability.eligible_models, vec!["gpt-4o-mini".to_string()]);
+    }
+
+    #[test]
+    fn test_from_models_no_known_keywords() {
+        let availability = ModelAvailability::from_models(&["local-llm-7b".into()]);
+
+        assert!(!availability.has_high_capability);
+        assert!(!availability.has_medium_capability);
+    }
+
+    #[test]
+    fn test_from_models_empty() {
+        let availability = ModelAvailability::from_models(&[]);
+
+        assert!(!availability.has_high_capability);
+        assert!(!availability.has_medium_capability);
+        assert!(availability.eligible_models.is_empty());
+    }
+
+    #[test]
+    fn test_capability_high() {
+        let availability = ModelAvailability {
+            has_high_capability: true,
+            has_medium_capability: true,
+            eligible_models: vec!["gpt-4".into()],
+        };
+
+        assert!(matches!(availability.capability(), ModelCapability::High));
+    }
+
+    #[test]
+    fn test_capability_medium() {
+        let availability = ModelAvailability {
+            has_high_capability: false,
+            has_medium_capability: true,
+            eligible_models: vec!["gpt-4o-mini".into()],
+        };
+
+        assert!(matches!(availability.capability(), ModelCapability::Medium));
+    }
+
+    #[test]
+    fn test_capability_low() {
+        let availability = ModelAvailability {
+            has_high_capability: false,
+            has_medium_capability: false,
+            eligible_models: vec!["local-llm-7b".into()],
+        };
+
+        assert!(matches!(availability.capability(), ModelCapability::Low));
+    }
+
+    #[test]
+    fn test_new_has_no_model_hints() {
+        let strategy = FusionStrategy::new(Vec::new());
+
+        assert!(strategy.model_hints.is_none());
+        assert!(strategy.sub_strategies.is_empty());
     }
 }

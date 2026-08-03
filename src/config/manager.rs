@@ -67,7 +67,8 @@ impl ConfigManager {
     }
 
     pub async fn reload(&self) -> Result<u64, ReloadError> {
-        let content = std::fs::read_to_string(&self.config_path)
+        let content = tokio::fs::read_to_string(&self.config_path)
+            .await
             .map_err(|e| ReloadError::Parse(e.to_string()))?;
 
         let new_config: AppConfig = serde_yaml::from_str(&content)
