@@ -57,7 +57,7 @@ async fn policy_invariant_idempotence() {
     }"#;
 
     let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
-    let ir = PolicyIR::from_ast(&ast);
+    let ir = PolicyIR::from_ast(&ast).unwrap();
     let pass = PolicyCompilerPass::new(ir);
 
     let (input_ir, _) = create_sample_ir();
@@ -98,7 +98,7 @@ async fn policy_invariant_precedence_deny_over_approval() {
     }"#;
 
     let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
-    let ir = PolicyIR::from_ast(&ast);
+    let ir = PolicyIR::from_ast(&ast).unwrap();
 
     let rule = PolicyPrecedenceEngine::evaluate_matching_rule(&ir, "shell.exec").unwrap();
     assert_eq!(rule.effect, PolicyEffect::Deny); // Deny strictly wins over approval
@@ -121,7 +121,7 @@ async fn policy_invariant_non_destructive_preservation() {
     }"#;
 
     let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
-    let ir = PolicyIR::from_ast(&ast);
+    let ir = PolicyIR::from_ast(&ast).unwrap();
     let pass = PolicyCompilerPass::new(ir);
 
     let (input_ir, original_node_id) = create_sample_ir();

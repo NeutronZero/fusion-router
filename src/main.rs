@@ -190,9 +190,20 @@ async fn main() {
         provider_registry.clone() as Arc<dyn providers::ChatProvider + Send + Sync>,
         resource_manager,
         Arc::new(evidence_repo),
-        config,
+        config.clone(),
         PathBuf::from(&config_path),
         connector_resolver.clone(),
+    );
+
+    // Law 5 / ADR-034: the execution plane compiles through the same
+    // `build_compiler` pipeline as the chat path, with a budget pass reading
+    // the shared resource manager instance (no empty pass list, no bypass).
+    let exec_plane_compiler: Arc<dyn crate::compiler::Compiler> = Arc::new(
+        crate::compiler::build_compiler(
+            config.model_catalog.clone(),
+            state.resource_manager.clone(),
+            None,
+        ),
     );
 
     state.config_manager.register_subscriber(Box::new(provider_registry.clone()));
@@ -246,7 +257,11 @@ async fn main() {
         .with_state(ops_state);
 
     let event_bus = Arc::new(crate::events::BroadcastEventBus::new(1024));
-    let exec_plane = crate::server::execution::build_execution_plane(event_bus, state.executor.clone());
+    let exec_plane = crate::server::execution::build_execution_plane(
+        event_bus,
+        state.executor.clone(),
+        exec_plane_compiler,
+    );
     let execution_routes = axum::Router::new()
         .route("/v1/executions", axum::routing::post(crate::server::execution::execute_workflow_handler))
         .with_state(exec_plane);

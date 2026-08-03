@@ -499,7 +499,14 @@ async fn test_executions_and_operations_auth_enforcement() {
 
     let event_bus = Arc::new(BroadcastEventBus::new(64));
     let executor = Arc::new(DefaultExecutor::new(provider, HashMap::new()));
-    let exec_plane = build_execution_plane(event_bus, executor);
+    let plane_compiler: Arc<dyn fusion_router::compiler::Compiler> = Arc::new(
+        fusion_router::compiler::build_compiler(
+            config.model_catalog.clone(),
+            state.resource_manager.clone(),
+            None,
+        ),
+    );
+    let exec_plane = build_execution_plane(event_bus, executor, plane_compiler);
     let execution_routes = Router::new()
         .route("/v1/executions", post(execute_workflow_handler))
         .with_state(exec_plane);

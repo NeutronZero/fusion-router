@@ -62,6 +62,15 @@ The `PolicyCompilerPass` (in `src/compiler/passes/policy.rs`) applies policy dur
 | Assessment | `src/release/assessment.rs` | Collects and scores gate results |
 | Waiver | `src/release/waiver.rs` | Policy waiver management |
 
+### Deny Enforcement (v0.13.1, ADR-034)
+
+`PolicyEffect::Deny` is a hard compile error, not advisory (WP 1.1):
+
+- `PolicyCompilerPass::apply` returns `CompilerError::ValidationError` on a matched Deny rule; no `ExecutionGraph` is produced for a workflow violating a deny policy (Law 2).
+- `PolicyIR::from_ast` is fail-closed: unknown/typo/case-mismatched `effect` strings error instead of defaulting to `Allow`.
+- `PolicyPrecedenceEngine::evaluate_matching_rule` computes precedence internally (`Deny > Approval > Allow`, then priority) — order-independent for any `PolicyIR` source.
+- Invariant: "A workflow violating a matched Deny rule cannot produce an ExecutionGraph."
+
 ### Attestation Subsystem (`src/release/attestation.rs`)
 
 4-phase verification:

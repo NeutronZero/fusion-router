@@ -174,7 +174,7 @@ mod tests {
         #[cfg(not(windows))]
         let (cmd, args): (&str, Vec<&str>) = ("echo", vec!["hello world"]);
         #[cfg(windows)]
-        let (cmd, args): (&str, Vec<&str>) = ("echo", vec!["hello world"]);
+        let (cmd, _args): (&str, Vec<&str>) = ("echo", vec!["hello world"]);
 
         assert!(tool.validate_command(cmd).is_ok());
 

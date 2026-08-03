@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::compiler::{Compiler, DefaultCompiler};
+use crate::compiler::Compiler;
 use crate::events::payload::ExecutionEvent;
 use crate::events::{BroadcastEventBus, EventBus, ExecutionEventEnvelope};
 use crate::executor::Executor;
@@ -276,11 +276,15 @@ impl ExecutionPlane {
 }
 
 /// Returns the production execution plane with an in-memory session store.
+///
+/// Law 5 / ADR-034: the plane must receive a compiler built by
+/// `build_compiler` — the same mandatory pass pipeline as every other
+/// execution endpoint. An empty pass list is never accepted here.
 pub fn build_execution_plane(
     bus: Arc<BroadcastEventBus>,
     executor: Arc<dyn Executor>,
+    compiler: Arc<dyn Compiler>,
 ) -> Arc<ExecutionPlane> {
-    let compiler = Arc::new(DefaultCompiler { passes: vec![] });
     let lifecycle = Arc::new(LifecycleManager::new(Arc::new(InMemorySessionStore::new())));
     Arc::new(ExecutionPlane::new(bus, compiler, executor, lifecycle))
 }
@@ -377,6 +381,20 @@ mod tests {
         }
     }
 
+    /// Law 5: test planes compile through the same `build_compiler` factory.
+    fn test_plane_compiler() -> Arc<dyn Compiler> {
+        Arc::new(crate::compiler::build_compiler(
+            crate::types::ModelCatalog::default(),
+            Arc::new(crate::resource::DefaultResourceManager::new(crate::types::Quota {
+                max_daily_cost: 1_000_000.0,
+                max_daily_tokens: 1_000_000_000,
+                max_concurrent: 100,
+                provider_limits: std::collections::HashMap::new(),
+            })),
+            None,
+        ))
+    }
+
     #[tokio::test]
     async fn test_execute_workflow_success_emits_events_and_outputs() {
         let bus = Arc::new(BroadcastEventBus::new(64));
@@ -384,7 +402,7 @@ mod tests {
             Arc::new(EchoProvider),
             HashMap::new(),
         ));
-        let plane = build_execution_plane(bus.clone(), executor);
+        let plane = build_execution_plane(bus.clone(), executor, test_plane_compiler());
         let mut bus_rx = bus.subscribe();
 
         let request = ExecuteWorkflowRequest {
@@ -431,7 +449,7 @@ mod tests {
             Arc::new(FailingProvider),
             HashMap::new(),
         ));
-        let plane = build_execution_plane(bus, executor);
+        let plane = build_execution_plane(bus, executor, test_plane_compiler());
 
         let request = ExecuteWorkflowRequest {
             trigger_name: "api-test".into(),
@@ -455,7 +473,7 @@ mod tests {
             Arc::new(EchoProvider),
             HashMap::new(),
         ));
-        let plane = build_execution_plane(bus, executor);
+        let plane = build_execution_plane(bus, executor, test_plane_compiler());
         let app = axum::Router::new()
             .route("/v1/executions", post(execute_workflow_handler))
             .with_state(plane);

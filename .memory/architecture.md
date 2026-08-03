@@ -93,6 +93,8 @@ From `docs/architecture/invariants.md`:
 14. The compiler pipeline is extensible via registered passes
 15. The compiler owns `ExecutionGraph` and is responsible for its lifecycle
 16. ADR-027 compiler phase invariants matrix: each phase has "May Do" / "Must Not Do" rules
+17. All compiler construction (chat path, execution plane, tests) goes through `build_compiler()`; no production code builds `DefaultCompiler { passes: vec![] }` (ADR-034, v0.13.1)
+18. `AppState` and the execution plane (`build_execution_plane`) share the same compiler pipeline and resource manager; deny policy blocks compilation before any graph exists (ADR-034, v0.13.1)
 
 ## Feature Flags
 

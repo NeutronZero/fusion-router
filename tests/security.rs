@@ -50,6 +50,7 @@ async fn test_v1_executions_auth_enforcement() {
     use fusion_router::events::BroadcastEventBus;
     use fusion_router::executor::DefaultExecutor;
     use fusion_router::providers::ChatProvider;
+    use fusion_router::resource::DefaultResourceManager;
     use fusion_router::server::execution::{build_execution_plane, execute_workflow_handler};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -70,7 +71,19 @@ async fn test_v1_executions_auth_enforcement() {
 
     let event_bus = Arc::new(BroadcastEventBus::new(64));
     let executor = Arc::new(DefaultExecutor::new(Arc::new(DummyProvider), HashMap::new()));
-    let exec_plane = build_execution_plane(event_bus, executor);
+    let plane_compiler: Arc<dyn fusion_router::compiler::Compiler> = Arc::new(
+        fusion_router::compiler::build_compiler(
+            fusion_router::types::ModelCatalog::default(),
+            Arc::new(DefaultResourceManager::new(fusion_router::types::Quota {
+                max_daily_cost: 1_000_000.0,
+                max_daily_tokens: 1_000_000_000,
+                max_concurrent: 100,
+                provider_limits: Default::default(),
+            })),
+            None,
+        ),
+    );
+    let exec_plane = build_execution_plane(event_bus, executor, plane_compiler);
     let execution_routes = Router::new()
         .route("/v1/executions", post(execute_workflow_handler))
         .with_state(exec_plane);

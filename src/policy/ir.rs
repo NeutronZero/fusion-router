@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::policy::ast::PolicyAST;
+use crate::policy::diagnostics::PolicyDiagnostic;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PolicyEffect {
@@ -36,20 +37,34 @@ pub struct PolicyRule {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyIR {
     pub rules: Vec<PolicyRule>,
 }
 
 impl PolicyIR {
     /// Normalizes a high-level `PolicyAST` into a compiler `PolicyIR`.
-    pub fn from_ast(ast: &PolicyAST) -> Self {
+    ///
+    /// Fail-closed: an unrecognized `effect` string is a hard error instead of
+    /// silently downgrading the rule to `Allow` (ADR-034 / v0.13.1 charter WP 1.1).
+    pub fn from_ast(ast: &PolicyAST) -> Result<Self, PolicyDiagnostic> {
         let mut rules = Vec::new();
 
         for decl in &ast.declarations {
             let effect = match decl.effect.as_str() {
                 "deny" => PolicyEffect::Deny,
                 "approval" => PolicyEffect::Approval,
-                _ => PolicyEffect::Allow,
+                "allow" => PolicyEffect::Allow,
+                other => {
+                    return Err(PolicyDiagnostic::error(
+                        format!("declaration '{}'", decl.name),
+                        Some(decl.name.clone()),
+                        format!(
+                            "Invalid effect '{}'. Expected one of: deny, approval, allow",
+                            other
+                        ),
+                    ));
+                }
             };
 
             let conditions = decl
@@ -78,7 +93,7 @@ impl PolicyIR {
                 .then_with(|| b.priority.cmp(&a.priority))
         });
 
-        Self { rules }
+        Ok(Self { rules })
     }
 }
 
@@ -112,9 +127,52 @@ mod tests {
         }"#;
 
         let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
-        let ir = PolicyIR::from_ast(&ast);
+        let ir = PolicyIR::from_ast(&ast).unwrap();
 
         assert_eq!(ir.rules.len(), 2);
         assert_eq!(ir.rules[0].effect, PolicyEffect::Deny); // Deny takes precedence over Allow!
+    }
+
+    #[test]
+    fn test_from_ast_rejects_unknown_effect() {
+        let json_raw = r#"{
+            "version": "1.0",
+            "declarations": [
+                {
+                    "name": "typo-rule",
+                    "priority": 100,
+                    "match_target": "shell.exec",
+                    "effect": "denyy",
+                    "conditions": {},
+                    "annotations": {}
+                }
+            ]
+        }"#;
+
+        let (ast, diagnostics) = PolicyParser::parse_json(json_raw).unwrap();
+        assert!(!diagnostics.is_empty(), "parser should flag the invalid effect");
+
+        let result = PolicyIR::from_ast(&ast);
+        assert!(result.is_err(), "unknown effect must fail closed, not default to Allow");
+    }
+
+    #[test]
+    fn test_from_ast_rejects_uppercase_effect() {
+        let json_raw = r#"{
+            "version": "1.0",
+            "declarations": [
+                {
+                    "name": "case-rule",
+                    "priority": 100,
+                    "match_target": "shell.exec",
+                    "effect": "Deny",
+                    "conditions": {},
+                    "annotations": {}
+                }
+            ]
+        }"#;
+
+        let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
+        assert!(PolicyIR::from_ast(&ast).is_err(), "case-mismatched effects must fail closed");
     }
 }

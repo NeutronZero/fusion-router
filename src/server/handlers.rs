@@ -13,10 +13,7 @@ use futures::stream::{self, BoxStream};
 use futures::StreamExt;
 use uuid::Uuid;
 
-use crate::compiler::passes::BudgetOptimisationPass;
-use crate::compiler::passes::ControlFlowValidationPass;
 use crate::compiler::DefaultCompiler;
-use crate::compiler::passes::{ConstraintValidationPass, ModelResolutionPass};
 use crate::config::manager::ConfigManager;
 use crate::config::AppConfig;
 use crate::tools::{ToolRegistry, HTTPRequestTool, ShellCommandTool};
@@ -89,19 +86,12 @@ impl AppState {
 
         let resource_manager = Arc::new(resource_manager);
 
-        let compiler = Arc::new(DefaultCompiler {
-            passes: vec![
-                Box::new(ConstraintValidationPass),
-                Box::new(ControlFlowValidationPass),
-                Box::new(ModelResolutionPass {
-                    model_catalog: config.model_catalog.clone(),
-                    model_requirements: None,
-                }),
-                Box::new(BudgetOptimisationPass {
-                    resource_manager: resource_manager.clone(),
-                }),
-            ],
-        });
+        // Law 1 / ADR-034: single construction path for the compiler pass pipeline.
+        let compiler = Arc::new(crate::compiler::build_compiler(
+            config.model_catalog.clone(),
+            resource_manager.clone(),
+            None,
+        ));
 
         let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
         strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));

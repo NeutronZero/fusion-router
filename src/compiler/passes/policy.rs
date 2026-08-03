@@ -48,6 +48,20 @@ impl CompilerPass for PolicyCompilerPass {
                     effect: rule.effect.clone(),
                 });
 
+                if rule.effect == PolicyEffect::Deny {
+                    // A matched Deny rule is a hard compile error (ADR-034 / Law 2):
+                    // no ExecutionGraph may be produced for a workflow that violates
+                    // a deny policy. Fail before any Approval handling.
+                    return Err(CompilerError::ValidationError {
+                        pass: "PolicyCompilerPass".to_string(),
+                        node_id: Some(node.id),
+                        message: format!(
+                            "Policy rule '{}' denies target '{}' (effect: deny); node {} cannot be compiled",
+                            rule.rule_id, rule.target_pattern, node.id
+                        ),
+                    });
+                }
+
                 if rule.effect == PolicyEffect::Approval {
                     // Idempotence check: check if an approval gate edge pointing to node.id already exists
                     let already_guarded = new_edges.iter().any(|edge| {
@@ -115,7 +129,7 @@ mod tests {
         }"#;
 
         let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
-        let ir = PolicyIR::from_ast(&ast);
+        let ir = PolicyIR::from_ast(&ast).unwrap();
         let pass = PolicyCompilerPass::new(ir);
 
         let target_node_id = Uuid::new_v4();
@@ -143,5 +157,155 @@ mod tests {
 
         assert_eq!(output_ir.nodes.len(), 2); // 1 original + 1 injected GateNode!
         assert_eq!(output_ir.edges.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_deny_rule_blocks_compilation() {
+        let json_raw = r#"{
+            "version": "1.0",
+            "declarations": [
+                {
+                    "name": "deny-shell",
+                    "priority": 100,
+                    "match_target": "shell.exec",
+                    "effect": "deny",
+                    "conditions": {},
+                    "annotations": {}
+                }
+            ]
+        }"#;
+
+        let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
+        let ir = PolicyIR::from_ast(&ast).unwrap();
+        let pass = PolicyCompilerPass::new(ir);
+
+        let target_node_id = Uuid::new_v4();
+        let mut config = std::collections::HashMap::new();
+        config.insert("capability".into(), serde_json::json!("shell.exec"));
+
+        let input_ir = WorkflowIR {
+            plan_id: Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: target_node_id,
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: Some("gpt-4o".into()),
+                config,
+            }],
+            edges: vec![],
+            metadata: crate::types::IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.0,
+                estimated_tokens: 100,
+            },
+        };
+
+        let result = pass.apply(input_ir).await;
+        assert!(result.is_err(), "a matched Deny rule must fail compilation");
+        let err = result.unwrap_err();
+        match err {
+            crate::types::CompilerError::ValidationError { pass, node_id, message } => {
+                assert_eq!(pass, "PolicyCompilerPass");
+                assert_eq!(node_id, Some(target_node_id));
+                assert!(message.contains("deny-shell"), "message must identify the deny rule: {message}");
+            }
+            other => panic!("expected ValidationError, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_deny_outranks_approval_on_same_target() {
+        let json_raw = r#"{
+            "version": "1.0",
+            "declarations": [
+                {
+                    "name": "approval-rule",
+                    "priority": 100,
+                    "match_target": "shell.exec",
+                    "effect": "approval",
+                    "conditions": {},
+                    "annotations": {}
+                },
+                {
+                    "name": "deny-rule",
+                    "priority": 1,
+                    "match_target": "shell.exec",
+                    "effect": "deny",
+                    "conditions": {},
+                    "annotations": {}
+                }
+            ]
+        }"#;
+
+        let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
+        let ir = PolicyIR::from_ast(&ast).unwrap();
+        let pass = PolicyCompilerPass::new(ir);
+
+        let mut config = std::collections::HashMap::new();
+        config.insert("capability".into(), serde_json::json!("shell.exec"));
+
+        let input_ir = WorkflowIR {
+            plan_id: Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: Uuid::new_v4(),
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: Some("gpt-4o".into()),
+                config,
+            }],
+            edges: vec![],
+            metadata: crate::types::IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.0,
+                estimated_tokens: 100,
+            },
+        };
+
+        let result = pass.apply(input_ir).await;
+        assert!(result.is_err(), "Deny must win over Approval regardless of priority");
+    }
+
+    #[tokio::test]
+    async fn test_unrelated_target_is_not_denied() {
+        let json_raw = r#"{
+            "version": "1.0",
+            "declarations": [
+                {
+                    "name": "deny-shell",
+                    "priority": 100,
+                    "match_target": "shell.exec",
+                    "effect": "deny",
+                    "conditions": {},
+                    "annotations": {}
+                }
+            ]
+        }"#;
+
+        let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
+        let ir = PolicyIR::from_ast(&ast).unwrap();
+        let pass = PolicyCompilerPass::new(ir);
+
+        let mut config = std::collections::HashMap::new();
+        config.insert("capability".into(), serde_json::json!("web.fetch"));
+
+        let input_ir = WorkflowIR {
+            plan_id: Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: Uuid::new_v4(),
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: Some("gpt-4o".into()),
+                config,
+            }],
+            edges: vec![],
+            metadata: crate::types::IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.0,
+                estimated_tokens: 100,
+            },
+        };
+
+        let output_ir = pass.apply(input_ir).await.expect("unrelated node must pass");
+        assert_eq!(output_ir.nodes.len(), 1);
     }
 }

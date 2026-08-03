@@ -53,6 +53,8 @@ Legality rules govern pass ordering. Rollback safety ensures recovery from faile
 - Compiler owns graph lifecycle
 - Pass pipeline is extensible via `PassRegistry` (ADR-010)
 - PrimitiveGraph → ExecutionGraph derivation via `to_execution_graph()` (ADR-019)
+- A workflow violating a matched Deny policy rule cannot produce an `ExecutionGraph` (ADR-034, v0.13.1)
+- Every execution endpoint compiles through the shared `build_compiler()` pass pipeline; no production path constructs `DefaultCompiler` with an empty pass list (ADR-034, v0.13.1)
 
 ## Source Files
 

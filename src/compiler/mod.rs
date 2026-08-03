@@ -7,6 +7,7 @@ pub mod optimization;
 pub mod pipeline;
 
 use async_trait::async_trait;
+use std::sync::Arc;
 use crate::types::{CompilerError, ExecutionGraph, WorkflowIR};
 pub use passes::CompilerPass;
 
@@ -17,6 +18,33 @@ pub trait Compiler: Send + Sync {
 
 pub struct DefaultCompiler {
     pub passes: Vec<Box<dyn CompilerPass + Send + Sync>>,
+}
+
+/// Builds the mandatory compiler pass pipeline (ADR-034 / Law 1).
+///
+/// This is the sole production construction path for `DefaultCompiler`.
+/// Every execution endpoint (chat, `/v1/executions`, triggers) must compile
+/// through a compiler produced here; an empty pass list is never
+/// constructible from this factory. A supplied `PolicyIR` appends the
+/// policy pass (deny = compile error, per Law 2).
+pub fn build_compiler(
+    model_catalog: crate::types::ModelCatalog,
+    resource_manager: Arc<dyn crate::resource::ResourceManager>,
+    policy_ir: Option<crate::policy::ir::PolicyIR>,
+) -> DefaultCompiler {
+    let mut passes: Vec<Box<dyn CompilerPass + Send + Sync>> = vec![
+        Box::new(passes::ConstraintValidationPass),
+        Box::new(passes::ControlFlowValidationPass),
+        Box::new(passes::ModelResolutionPass {
+            model_catalog,
+            model_requirements: None,
+        }),
+        Box::new(passes::BudgetOptimisationPass { resource_manager }),
+    ];
+    if let Some(ir) = policy_ir {
+        passes.push(Box::new(passes::policy::PolicyCompilerPass::new(ir)));
+    }
+    DefaultCompiler { passes }
 }
 
 #[async_trait]
@@ -160,5 +188,108 @@ mod tests {
             }
             _ => panic!("expected PassError"),
         }
+    }
+
+    fn permissive_quota() -> crate::types::Quota {
+        crate::types::Quota {
+            max_daily_cost: 1_000_000.0,
+            max_daily_tokens: 1_000_000_000,
+            max_concurrent: 100,
+            provider_limits: std::collections::HashMap::new(),
+        }
+    }
+
+    fn test_compiler() -> DefaultCompiler {
+        build_compiler(
+            crate::types::ModelCatalog::default(),
+            Arc::new(crate::resource::DefaultResourceManager::new(permissive_quota())),
+            None,
+        )
+    }
+
+    #[test]
+    fn law1_build_compiler_contains_mandatory_passes_in_order() {
+        let compiler = test_compiler();
+        let names: Vec<String> = compiler.passes.iter().map(|p| p.name().to_string()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "constraint_validation",
+                "control_flow_validation",
+                "model_resolution",
+                "budget_optimisation",
+            ],
+            "mandatory pass pipeline must be present and ordered"
+        );
+        assert!(!compiler.passes.is_empty(), "Law 1: no execution path may use an empty pass pipeline");
+    }
+
+    #[tokio::test]
+    async fn law1_compiler_rejects_ir_violating_control_flow_validation() {
+        let compiler = test_compiler();
+        let mut ir = test_ir();
+        // Edge referencing an unknown node must be rejected by the pipeline.
+        ir.edges.push(crate::types::IREdge {
+            from: uuid::Uuid::new_v4(),
+            to: uuid::Uuid::new_v4(),
+            condition: None,
+        });
+        let result = compiler.compile(ir).await;
+        assert!(result.is_err(), "dangling edge must fail compilation");
+        assert!(matches!(
+            result,
+            Err(CompilerError::ValidationError { pass, .. }) if pass == "control_flow_validation"
+        ));
+    }
+
+    #[tokio::test]
+    async fn law2_deny_policy_blocks_compilation_through_factory() {
+        let json_raw = r#"{
+            "version": "1.0",
+            "declarations": [
+                {
+                    "name": "deny-shell",
+                    "priority": 100,
+                    "match_target": "shell.exec",
+                    "effect": "deny",
+                    "conditions": {},
+                    "annotations": {}
+                }
+            ]
+        }"#;
+        let (ast, _) = crate::policy::ast::PolicyParser::parse_json(json_raw).unwrap();
+        let policy_ir = crate::policy::ir::PolicyIR::from_ast(&ast).unwrap();
+
+        let compiler = build_compiler(
+            crate::types::ModelCatalog::default(),
+            Arc::new(crate::resource::DefaultResourceManager::new(permissive_quota())),
+            Some(policy_ir),
+        );
+
+        let mut ir = test_ir();
+        ir.nodes[0].config.insert(
+            "capability".into(),
+            serde_json::json!("shell.exec"),
+        );
+        let result = compiler.compile(ir).await;
+        assert!(result.is_err(), "a matched Deny rule must block compilation through the factory");
+    }
+
+    #[tokio::test]
+    async fn law4_compile_failure_yields_no_graph() {
+        let compiler = test_compiler();
+        // Empty IR fails ConstraintValidationPass; compile must return Err, not a graph.
+        let empty_ir = crate::types::WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![],
+            edges: vec![],
+            metadata: crate::types::IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+            },
+        };
+        let result = compiler.compile(empty_ir).await;
+        assert!(result.is_err(), "ExecutionGraph construction is impossible after compiler failure");
     }
 }
