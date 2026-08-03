@@ -1,17 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [master]
-    paths: &ci_paths
-      - "**/*.rs"
-      - "plugins/**"
-      - Cargo.toml
-      - Cargo.lock
-      - .github/workflows/ci.yml
-  pull_request:
-    branches: [master]
-    paths: *ci_paths
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
