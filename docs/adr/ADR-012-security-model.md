@@ -1,7 +1,9 @@
 # ADR-012: Security Model
 
 ## Status
-Accepted
+Accepted — **Amended by ADR-035 (Fail-Closed Deployment, 2026-08-03)**
+
+> Amendment: Sections 1 (opt-in auth), 3 (CORS defaults), and 4 (opt-in rate limiting) are superseded where they conflict with ADR-035. The security model moves from opt-in to fail-closed: authentication, rate limiting, and same-origin CORS are default-enabled in release builds; insecure postures require the explicit `--unsafe-dev` flag.
 
 ## Context
 FusionRouter exposes an HTTP API for LLM routing, which may be deployed in production environments requiring access control, origin restrictions, and abuse prevention. Early versions had no security — the server was open to any client. As adoption grows, operators need opt-in authentication, cross-origin request control, and rate limiting to protect against unauthorized use and resource exhaustion.

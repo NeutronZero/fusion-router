@@ -15,7 +15,7 @@
 | 009 | Configuration Management | Accepted | YAML config, env var overlay, startup validation (11 checks) |
 | 010 | Plugin System | Accepted | 4 extension points, TOML manifest, WASM (gated), no hot-reload |
 | 011 | Testing Strategy | Accepted | Inline unit tests, mock providers, async support, 15+ categories |
-| 012 | Security Model | Accepted | API key auth (opt-in), CORS, token bucket rate limiting |
+| 012 | Security Model | Accepted — Amended by ADR-035 | API key auth, CORS, token bucket rate limiting; fail-closed post-ADR-035 |
 | 013 | Workflow Registry | Accepted | WorkflowDefinition YAML schema, template instantiation to WorkflowIR |
 | 014 | Workflow Planner | Accepted | Registry-first, SimplePlanner fallback |
 | 015 | Dynamic Workflow | Accepted | LLM-generated WorkflowIR, static/dynamic/hybrid modes, safety guards |
@@ -45,6 +45,10 @@
 | ADR-019 | Capability Host Interface | Approved | `CapabilityHostServices` trait, 5 host functions, SandboxRuntime |
 | ADR-032 | Execution ABI Separate from PrimitiveGraph | Accepted | PrimitiveGraph stays compiler-internal; ABI generator emits ExecutionAbi (v0.13 contract, Decision 1) |
 | ADR-033 | v0.13 Architecture Freeze | Accepted (Frozen) | Six core abstractions frozen as stable public contracts |
+| ADR-034 | Single Compiler Pipeline | Draft | `build_compiler()` sole construction path; deny = compile error; total capability policy (v0.13.1 charter) |
+| ADR-035 | Fail-Closed Deployment | Draft | Fail-closed defaults; `--unsafe-dev`; identity-based rate limiting; constant-time key check (v0.13.1 charter) |
+| ADR-036 | Plugin Execution Context | Draft | `PluginExecutionContext`; caller-bound permissions; metered/timed WASM; content-bound attestation (v0.13.1 charter) |
+| ADR-037 | Structured Tool Invocation | Draft | Provider-native `tool_calls` only; model output is never executable (v0.13.1 charter) |
 
 ## ADR Location: `docs/decisions/`
 
