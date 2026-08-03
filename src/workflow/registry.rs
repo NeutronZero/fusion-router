@@ -157,3 +157,140 @@ impl WorkflowRegistry {
         self.definitions.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{ComplexityLevel, Intent, Requirements};
+
+    fn reqs(intent: Intent, has_files: bool, complexity: ComplexityLevel) -> Requirements {
+        Requirements {
+            intent_classification: intent,
+            complexity,
+            has_files,
+            context_window: 8192,
+            original_text: "test".into(),
+            execution_intent: None,
+            output_preferences: None,
+            model_requirements: None,
+        }
+    }
+
+    fn def(name: &str, intents: Vec<Intent>, requires_files: bool) -> WorkflowDefinition {
+        WorkflowDefinition {
+            name: name.into(),
+            description: String::new(),
+            required_intents: intents,
+            min_complexity: 0,
+            requires_files,
+            node_templates: vec![NodeTemplate {
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: None,
+                config: HashMap::new(),
+            }],
+            edges: vec![],
+        }
+    }
+
+    #[test]
+    fn test_can_handle_matching_intent() {
+        let wf = def("wf-code", vec![Intent::Code], false);
+        assert!(wf.can_handle(&reqs(Intent::Code, false, ComplexityLevel::Medium)));
+    }
+
+    #[test]
+    fn test_can_handle_rejects_wrong_intent() {
+        let wf = def("wf-code", vec![Intent::Code], false);
+        assert!(!wf.can_handle(&reqs(Intent::Debug, false, ComplexityLevel::Medium)));
+    }
+
+    #[test]
+    fn test_can_handle_unrestricted_intent() {
+        let wf = def("wf-any", vec![], false);
+        assert!(wf.can_handle(&reqs(Intent::Creative, false, ComplexityLevel::Low)));
+    }
+
+    #[test]
+    fn test_can_handle_requires_files() {
+        let wf = def("wf-files", vec![], true);
+        assert!(wf.can_handle(&reqs(Intent::Code, true, ComplexityLevel::Medium)));
+        assert!(!wf.can_handle(&reqs(Intent::Code, false, ComplexityLevel::Medium)));
+    }
+
+    #[test]
+    fn test_select_returns_matching_workflow() {
+        let mut registry = WorkflowRegistry::new();
+        registry.register(def("wf-debug", vec![Intent::Debug], false));
+        registry.register(def("wf-code", vec![Intent::Code], false));
+
+        let selected = registry.select(&reqs(Intent::Code, false, ComplexityLevel::High)).unwrap();
+        assert_eq!(selected.name, "wf-code");
+    }
+
+    #[test]
+    fn test_select_returns_none_when_no_match() {
+        let mut registry = WorkflowRegistry::new();
+        registry.register(def("wf-code", vec![Intent::Code], false));
+
+        assert!(registry.select(&reqs(Intent::Architecture, false, ComplexityLevel::Low)).is_none());
+    }
+
+    #[test]
+    fn test_instantiate_creates_ir_with_default_model() {
+        let wf = def("wf-gen", vec![], false);
+        let ir = wf.instantiate(&reqs(Intent::Code, false, ComplexityLevel::Low));
+
+        assert_eq!(ir.nodes.len(), 1);
+        assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
+        assert_eq!(ir.nodes[0].model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(ir.metadata.estimated_tokens, 1000);
+        assert_eq!(ir.metadata.estimated_cost, 0.01);
+    }
+
+    #[test]
+    fn test_instantiate_respects_explicit_model() {
+        let mut wf = def("wf-gen", vec![], false);
+        wf.node_templates[0].model = Some("gpt-4o".into());
+        let ir = wf.instantiate(&reqs(Intent::Code, false, ComplexityLevel::High));
+
+        assert_eq!(ir.nodes[0].model.as_deref(), Some("gpt-4o"));
+        assert_eq!(ir.metadata.estimated_cost, 0.10);
+    }
+
+    #[test]
+    fn test_instantiate_wires_edges_by_index() {
+        let wf = WorkflowDefinition {
+            name: "wf-edges".into(),
+            description: String::new(),
+            required_intents: vec![],
+            min_complexity: 0,
+            requires_files: false,
+            node_templates: vec![
+                NodeTemplate {
+                    kind: IRNodeKind::Generate,
+                    strategy: StrategyKind::Single,
+                    model: None,
+                    config: HashMap::new(),
+                },
+                NodeTemplate {
+                    kind: IRNodeKind::Judge,
+                    strategy: StrategyKind::Single,
+                    model: None,
+                    config: HashMap::new(),
+                },
+            ],
+            edges: vec![EdgeTemplate {
+                from: 0,
+                to: 1,
+                condition: None,
+            }],
+        };
+
+        let ir = wf.instantiate(&reqs(Intent::Code, false, ComplexityLevel::Medium));
+
+        assert_eq!(ir.edges.len(), 1);
+        assert_eq!(ir.edges[0].from, ir.nodes[0].id);
+        assert_eq!(ir.edges[0].to, ir.nodes[1].id);
+    }
+}

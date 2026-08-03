@@ -246,3 +246,57 @@ impl PipelineStep<ExecutionResult, ChatCompletionResponse> for ResponseBuilderSt
         Ok(response)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_request() -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            model: "gpt-4o".into(),
+            messages: vec![],
+            stream: false,
+            temperature: None,
+            max_tokens: None,
+            tools: None,
+            files: None,
+            execution: None,
+            output: None,
+        }
+    }
+
+    #[test]
+    fn test_pipeline_context_new_initializes_state() {
+        let request_id = Uuid::new_v4();
+        let token = CancellationToken::new();
+        let request = test_request();
+
+        let ctx = PipelineContext::new(request_id, request, token.clone());
+
+        assert_eq!(ctx.request_id, request_id);
+        assert_eq!(ctx.request.model, "gpt-4o");
+        assert!(ctx.assembled_context.is_none());
+        assert!(ctx.requirements.is_none());
+        assert!(ctx.evidence.is_none());
+        assert!(ctx.ir.is_none());
+        assert!(ctx.graph.is_none());
+        assert!(ctx.resource_guard.is_none());
+        assert!(ctx.execution_result.is_none());
+        assert!(ctx.response.is_none());
+        assert!(ctx.budget_envelope.is_none());
+    }
+
+    #[test]
+    fn test_pipeline_context_cancellation_token_carried() {
+        let token = CancellationToken::new();
+        let ctx = PipelineContext::new(
+            Uuid::new_v4(),
+            test_request(),
+            token.clone(),
+        );
+
+        assert!(!ctx.cancellation_token.is_cancelled());
+        token.cancel();
+        assert!(ctx.cancellation_token.is_cancelled());
+    }
+}

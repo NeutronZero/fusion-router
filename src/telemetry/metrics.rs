@@ -122,6 +122,26 @@ mod tests {
     }
 
     #[test]
+    fn test_metrics_render_uses_prometheus_format() {
+        let _ = FusionMetrics::instance();
+        let output = render_metrics();
+
+        // Standard prometheus text format: HELP and TYPE declarations
+        assert!(output.contains("# HELP fusionrouter_requests_total"));
+        assert!(output.contains("# TYPE fusionrouter_requests_total counter"));
+        assert!(output.contains("# TYPE fusionrouter_request_duration_seconds histogram"));
+
+        // Counter lines must end with a plain integer
+        for line in output.lines().filter(|l| l.starts_with("fusionrouter_requests_total")) {
+            let value = line.rsplit(' ').next().unwrap_or("");
+            assert!(
+                value.parse::<u64>().is_ok(),
+                "counter sample must be an integer, got: {line}"
+            );
+        }
+    }
+
+    #[test]
     fn test_metrics_observe_duration() {
         let metrics = FusionMetrics::instance();
         metrics

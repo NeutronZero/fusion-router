@@ -45,6 +45,18 @@ pub fn compute_assessment_id(payload: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::release::gate::{GateId, GateResult};
+    use crate::release::policy::ReleaseEnvironment;
+
+    fn passing_result() -> GateResult {
+        GateResult {
+            gate_id: GateId::Sdk1,
+            passed: true,
+            summary: "sdk gate passed".into(),
+            details: vec![],
+            duration: std::time::Duration::from_secs(0),
+        }
+    }
 
     #[test]
     fn test_compute_assessment_id_deterministic() {
@@ -55,5 +67,55 @@ mod tests {
         assert_eq!(id1, id2);
         assert_ne!(id1, id3);
         assert!(id1.starts_with("asm-"));
+    }
+
+    #[test]
+    fn test_compute_assessment_id_format() {
+        let id = compute_assessment_id("payload");
+        let suffix = id.strip_prefix("asm-").unwrap();
+        assert_eq!(suffix.len(), 16, "suffix must be 16 hex digits, got: {suffix}");
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    fn eval(decision: crate::release::evaluator::ReleaseDecision) -> PolicyEvaluation {
+        PolicyEvaluation {
+            environment: ReleaseEnvironment::Development,
+            decision,
+            summary: Default::default(),
+            required_failures: vec![],
+            waived_failures: vec![],
+            advisory_failures: vec![],
+            passed_gates: vec![],
+        }
+    }
+
+    #[test]
+    fn test_release_assessment_new_builds_id() {
+        let assessment = ReleaseAssessment::new(
+            ReleaseEnvironment::Development,
+            eval(crate::release::evaluator::ReleaseDecision::Approved),
+            vec![passing_result()],
+        );
+
+        assert!(assessment.assessment_id.starts_with("asm-"));
+        assert_eq!(assessment.environment, ReleaseEnvironment::Development);
+        assert_eq!(assessment.gate_results.len(), 1);
+        assert!(assessment.gate_results[0].passed);
+    }
+
+    #[test]
+    fn test_assessment_id_differs_by_decision() {
+        let a = ReleaseAssessment::new(
+            ReleaseEnvironment::Development,
+            eval(crate::release::evaluator::ReleaseDecision::Approved),
+            vec![],
+        );
+        let b = ReleaseAssessment::new(
+            ReleaseEnvironment::Development,
+            eval(crate::release::evaluator::ReleaseDecision::Blocked),
+            vec![],
+        );
+
+        assert_ne!(a.assessment_id, b.assessment_id);
     }
 }

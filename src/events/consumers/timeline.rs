@@ -102,4 +102,42 @@ mod tests {
         assert!(ascii.contains("Workflow Timeline: exec-100"));
         assert!(ascii.contains("WorkflowStarted"));
     }
+
+    #[test]
+    fn test_render_ascii_exact_format() {
+        let model = TimelineModel {
+            execution_id: "exec-1".into(),
+            start_timestamp: None,
+            entries: vec![
+                TimelineEntry {
+                    sequence_number: 1,
+                    relative_ms: 0,
+                    event_type: "WorkflowStarted".into(),
+                    summary: "started".into(),
+                },
+                TimelineEntry {
+                    sequence_number: 2,
+                    relative_ms: 42,
+                    event_type: "NodeFinished".into(),
+                    summary: "done".into(),
+                },
+            ],
+        };
+
+        let rendered = model.render_ascii();
+
+        let expected = "Workflow Timeline: exec-1\n\n000ms ├─► [WorkflowStarted] started\n042ms ├─► [NodeFinished] done\n";
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_render_ascii_empty_entries() {
+        let model = TimelineModel {
+            execution_id: "exec-empty".into(),
+            start_timestamp: None,
+            entries: vec![],
+        };
+
+        assert_eq!(model.render_ascii(), "Workflow Timeline: exec-empty\n\n");
+    }
 }

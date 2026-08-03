@@ -25,3 +25,130 @@ pub fn intent_to_workflow(intent: &NormalizedIntent) -> Result<WorkflowIR, Valid
     let builder = builder.sequential("task", "output")?;
     builder.build()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::intent::{Constraints, IntentKind, NormalizedIntent};
+    use fusion_ir::WorkflowEdgeKind;
+    use uuid::Uuid;
+
+    fn intent_with(
+        goal: &str,
+        kind: IntentKind,
+        constraints: Constraints,
+        budget: crate::intent::Budget,
+    ) -> NormalizedIntent {
+        NormalizedIntent {
+            intent_id: Uuid::new_v4(),
+            goal: goal.into(),
+            kind,
+            constraints,
+            budget,
+            session_id: None,
+        }
+    }
+
+    fn default_constraints() -> Constraints {
+        Constraints {
+            max_latency_ms: None,
+            max_cost_usd: None,
+            max_tokens: None,
+            min_confidence: None,
+        }
+    }
+
+    fn default_budget() -> crate::intent::Budget {
+        crate::intent::Budget {
+            max_cost_usd: None,
+            max_tokens: None,
+            max_execution_ms: None,
+        }
+    }
+
+    #[test]
+    fn test_lowering_builds_valid_chain() {
+        let ir = intent_to_workflow(&intent_with(
+            "summarize the docs",
+            IntentKind::Analysis,
+            default_constraints(),
+            default_budget(),
+        ))
+        .expect("must lower without validation errors");
+
+        let nodes = ir.nodes();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].id(), "task");
+        assert_eq!(nodes[0].config()["goal"], "summarize the docs");
+        assert_eq!(nodes[0].config()["intent_kind"], "Analysis");
+        assert_eq!(nodes[1].id(), "output");
+    }
+
+    #[test]
+    fn test_lowering_omits_absent_constraints() {
+        let ir = intent_to_workflow(&intent_with(
+            "goal",
+            IntentKind::Code,
+            default_constraints(),
+            default_budget(),
+        ))
+        .unwrap();
+
+        let config = ir.nodes()[0].config();
+        assert!(!config.contains_key("max_latency_ms"));
+        assert!(!config.contains_key("max_tokens"));
+    }
+
+    #[test]
+    fn test_lowering_includes_supplied_constraints() {
+        let ir = intent_to_workflow(&intent_with(
+            "goal",
+            IntentKind::Code,
+            Constraints {
+                max_latency_ms: Some(250),
+                max_cost_usd: Some(0.5),
+                max_tokens: Some(4096),
+                min_confidence: Some(0.8),
+            },
+            default_budget(),
+        ))
+        .unwrap();
+
+        let config = ir.nodes()[0].config();
+        assert_eq!(config["max_latency_ms"], 250);
+        assert_eq!(config["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn test_lowering_wires_sequential_edge() {
+        let ir = intent_to_workflow(&intent_with(
+            "goal",
+            IntentKind::Analysis,
+            default_constraints(),
+            default_budget(),
+        ))
+        .unwrap();
+
+        assert!(ir.edges().iter().any(|e| {
+            e.from() == "task" && e.to() == "output" && e.kind() == WorkflowEdgeKind::Sequential
+        }));
+    }
+
+    #[test]
+    fn test_lowering_carries_budget_metadata() {
+        let ir = intent_to_workflow(&intent_with(
+            "goal",
+            IntentKind::Analysis,
+            default_constraints(),
+            crate::intent::Budget {
+                max_cost_usd: Some(1.5),
+                max_tokens: Some(8000),
+                max_execution_ms: None,
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(ir.metadata().estimated_cost, 1.5);
+        assert_eq!(ir.metadata().estimated_tokens, 8000);
+    }
+}
