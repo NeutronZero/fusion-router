@@ -1,0 +1,9 @@
+[package]
+name = "fusion-worker"
+version = "0.14.0"
+edition = "2021"
+
+[dependencies]
+fusion-core = { path = "../fusion-core" }
+fusion-worker-protocol = { path = "../fusion-worker-protocol" }
+serde = { version = "1", features = ["derive"] }

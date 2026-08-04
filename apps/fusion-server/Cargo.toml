@@ -1,0 +1,19 @@
+[package]
+name = "fusion-server"
+version = "0.14.0"
+edition = "2021"
+
+[dependencies]
+fusion-core = { path = "../../crates/fusion-core" }
+fusion-kernel = { path = "../../crates/fusion-kernel" }
+fusion-compiler = { path = "../../crates/fusion-compiler" }
+fusion-planner = { path = "../../crates/fusion-planner" }
+fusion-scheduler = { path = "../../crates/fusion-scheduler" }
+fusion-runtime = { path = "../../crates/fusion-runtime" }
+fusion-infrastructure = { path = "../../crates/fusion-infrastructure" }
+fusion-studio-api = { path = "../../crates/fusion-studio-api" }
+axum = "0.7"
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"

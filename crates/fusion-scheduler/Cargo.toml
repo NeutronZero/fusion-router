@@ -1,0 +1,13 @@
+[package]
+name = "fusion-scheduler"
+version = "0.14.0"
+edition = "2021"
+
+[dependencies]
+fusion-core = { path = "../fusion-core" }
+fusion-kernel = { path = "../fusion-kernel" }
+fusion-api-internal = { path = "../fusion-api-internal" }
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

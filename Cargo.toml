@@ -6,10 +6,24 @@ license = "MIT OR Apache-2.0"
 
 [workspace]
 members = [
+    "crates/fusion-core",
+    "crates/fusion-kernel",
+    "crates/fusion-api-internal",
+    "crates/fusion-planner",
+    "crates/fusion-compiler",
+    "crates/fusion-scheduler",
+    "crates/fusion-runtime",
+    "crates/fusion-infrastructure",
+    "crates/fusion-security",
+    "crates/fusion-api-public",
+    "crates/fusion-studio-api",
+    "crates/fusion-worker-protocol",
+    "crates/fusion-worker",
     "crates/fusion-plugin-api",
     "crates/fusion-capability-macros",
     "crates/fusion-capability-sdk",
     "crates/fusion-ir",
+    "apps/fusion-server",
     "plugins/example-provider",
     "plugins/fusion-plugin-echo",
 ]
@@ -73,6 +87,14 @@ ctrlc = "3"
 http = "0.2"
 
 [dev-dependencies]
+fusion-core = { path = "crates/fusion-core" }
+fusion-kernel = { path = "crates/fusion-kernel" }
+fusion-api-internal = { path = "crates/fusion-api-internal" }
+fusion-compiler = { path = "crates/fusion-compiler" }
+fusion-planner = { path = "crates/fusion-planner" }
+fusion-scheduler = { path = "crates/fusion-scheduler" }
+fusion-infrastructure = { path = "crates/fusion-infrastructure" }
+fusion-security = { path = "crates/fusion-security" }
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 fusion-plugin-echo = { path = "plugins/fusion-plugin-echo" }
 fusion-capability-sdk = { path = "crates/fusion-capability-sdk" }

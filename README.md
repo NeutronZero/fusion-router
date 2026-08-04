@@ -1,42 +1,59 @@
-# FusionRouter v0.13.1 — AI Execution Compiler & Security-Hardened Runtime
+# FusionRouter v0.14 LTS Foundation — Compiler-Driven AI Orchestration Platform
 
-[![Version](https://img.shields.io/badge/version-0.13.1-blue.svg)](https://github.com/NeutronZero/fusion-router/releases/tag/v0.13.1)
+[![Version](https://img.shields.io/badge/version-0.14.0--LTS-blue.svg)](https://github.com/NeutronZero/fusion-router/releases/tag/v0.14.0)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1421%20passed-success.svg)](https://github.com/NeutronZero/fusion-router)
-[![Architecture](https://img.shields.io/badge/architecture-v0.13.0%20frozen-purple.svg)](docs/specifications/architecture-v0.13.md)
+[![Architecture](https://img.shields.io/badge/architecture-AF--005%20frozen-purple.svg)](docs/developer/handbook.md)
+[![Status](https://img.shields.io/badge/status-LTS%20Foundation%20Certified-success.svg)](docs/governance/v1-readiness-report.md)
 
-FusionRouter is an **AI execution compiler**: it compiles high-level user intent into executable, verifiable, replayable workflow artifacts — exactly as a traditional compiler turns source code into machine code. Execution is a compilation product, never an improvisation.
+> **"FusionRouter is a compiler-driven AI orchestration platform that converts user intent into deterministic execution graphs, providing explainable routing, operational governance, portable execution bundles, and deterministic replay."**
 
-For the frozen v0.13.0 architecture specification, see [Architecture Specification (v0.13.0)](docs/specifications/architecture-v0.13.md). For the v0.13.1 security hardening milestone, see the [v0.13.1 Charter](docs/implementation/security-hardening-v0.13.1.md).
+```text
+Compile AI Workflows.
+Execute Anywhere.
+Explain Every Decision.
+Replay Every Execution.
+```
 
 ---
 
-## Key Features in v0.13.x
+## Key Features in v0.14 LTS Foundation
 
-### Six Frozen Core Abstractions (v0.13.0 / ADR-032, ADR-033)
-- **`NormalizedIntent`** — canonical, provider-free user goals and constraints (Contract 1).
-- **`WorkflowIR`** — versioned, immutable logical workflow graph (Contract 2).
-- **`ExecutionAbi`** — executable workflow contract between compiler and runtime; only the compiler generates it (Contract 3).
-- **`ExecutionTarget`** — provider-independent runtime placement and environment constraints (Contract 4).
-- **`ExecutionRuntimeInterface` (ERI)** — stable runtime execution contract; 9-state execution model (Contract 5).
-- **`CapabilityRegistry` + `CapabilityTrait`** — semantic capability catalog with execution-relevant traits (Contract 6).
+### 1. Governed Platform Architecture (AF-003, AF-004, AF-005 Freezes)
+- **AF-003 Architecture Freeze:** 17 Architecture Laws, 11 Architectural Invariants, strict 3-tier Cargo workspace hierarchy (`Foundation -> Engine -> Platform -> Applications`).
+- **AF-004 Platform Contract Freeze (`v1`):** Versioned, frozen schemas for `WorkflowIR v1`, `Execution ABI v1`, `REST API v1`, `Worker Protocol v1`, `Plugin SDK v1`, `ExecutionBundle v1`, `Compiler Report v1`, `Dashboard API v1`, `Health Report v1`.
+- **AF-005 Repository Layout Freeze:** Locked workspace topology (`crates/`, `apps/`, `ui/`, `docs/`, `tests/`) protecting plugin authors and platform consumers against structural drift.
 
-### Security Hardening (v0.13.1 / ADRs 034–037)
-- **Fail-closed deployment (Phase 2 / ADR-035)** — release builds reject auth-off or rate-limit-off configurations; `--unsafe-dev` is the only escape hatch (Law 6).
-- **Tool Execution Trust Boundary (Phase 3 / ADR-037, Law 7)** — model output is never interpreted as executable actions:
-  - Executor consumes **provider-native `tool_calls` only**; free-form JSON tool parsing removed.
-  - Per-request `tool_allowlist` + `allow_auto_exec` (default **false**) gate every tool execution.
-  - **Shell tool argument policy** — command allowlist and allowed read directories; unrestricted arguments disabled by default.
-  - **HTTP tool URL policy** — HTTPS-only scheme enforcement plus SSRF defense (private/loopback/link-local blocklist with DNS recheck).
-- **Compiler contract enforcement (Phase 1)** — single `build_compiler()` factory; policy `Deny` enforced at compile time on all resolution paths.
-- Milestone laws verified by `tests/security_invariants.rs` (law1–law10 scaffold per charter).
+### 2. Compiler Primacy & Zero Bypass Governance
+- Every request traverses the `Planner -> Compiler -> Scheduler -> Runtime` pipeline. Zero bypass paths.
+- **9-Pass Optimization Pipeline:** `Validation`, `CapabilityResolution`, `ConstraintSolver`, `ConstantFolding`, `DeadNodeElimination`, `NodeFusion`, `RetryInjection`, `FallbackInjection`, `SchedulingHints`.
+- **Fine-Grained Capability Catalog (`CapabilityRegistry`):** Reasoning over specific capabilities (`Vision`, `JSON`, `ToolCalling`, `Reasoning`, `Streaming`, `Embeddings`, `Audio`, `ImageGen`, `Video`, `MCP`).
+- **Intent Execution Profiles (`ExecutionProfile`):** Lowering user intent (`Fast`, `Balanced`, `Cheap`, `Coding`, `Research`, `Vision`, `Reasoning`, `Creative`, `Offline`) into compiler policies.
 
-### Release Governance & Platform (v0.11–v0.13 foundation)
-- **Runtime Event Stream ABI (ADR-017)** — schema-versioned `ExecutionEventEnvelope` events, `BroadcastEventBus`, `ProjectionDispatcher` with panic isolation.
-- **Release Governance** — 8 deterministic gates, policy engine, signed attestations (`AttestationBuilder`, Ed25519 `Signer`, 4-phase `AttestationVerifier`), append-only attestation archive.
-- **Capability Platform** — `.fusionpkg` package format (verify → load → resolve → execute), WASM sandboxing (fuel/memory limits), host services, `fusion` CLI (`new`, `build`, `test`, `publish`, `dev`).
-- **Operations Platform** — `/v1/operations/*` REST API (dashboard data, runtime inspector, policy admin, attestation viewer).
-- **Live Configuration** — two-phase config reload with generation counter, provider/connector subscribers.
+### 3. Portable Execution Intelligence & Deterministic Replay Engine
+- **Portable Execution Bundles (`.fusion` Export/Import):** Complete trace snapshots containing `ExecutionRecord`, `WorkflowIR`, `CompilerReport`, `Timeline`, `Telemetry`, and `ConfigSnapshot`.
+- **3-Mode Deterministic Replay:** Step through executions via `Timeline Replay`, `Compiler Pass Replay` (with time-travel pass diffing), or `Runtime Replay`.
+- **100% Replay Fidelity Guarantee:** Verified by `tests/beta_replay.rs`.
+
+### 4. Mission Control & Operational Health Management
+- **Fusion Studio Web Dashboard (`http://localhost:8080`):** Live Mission Control overview, 5-Tab Compiler Inspector, Provider Lifecycle Manager (zero-restart live hot-reload), and System Diagnostics.
+- **Platform Health Engine:** 9-domain health checklist (`API Gateway`, `SQLite Database`, `Local Ollama Probe`, `Provider Connectivity`) with automated diagnostic recovery actions.
+- **Certified Performance SLOs (Invariant 11):** Enforced in CI via [`docs/slo/manifest.yaml`](docs/slo/manifest.yaml) (Planner `<10ms`, Compiler `<20ms`, Scheduler `<5ms`, Runtime Overhead `<10ms`, Replay `<20ms`).
+
+---
+
+## 3-Tier Workspace Architecture
+
+```text
+fusion-router/
+├── crates/
+│   ├── Tier 1: Foundation (fusion-core, fusion-kernel, fusion-api-internal)
+│   ├── Tier 2: Domain Engine (fusion-planner, fusion-compiler, fusion-scheduler, fusion-runtime)
+│   └── Tier 3: Platform (fusion-infrastructure, fusion-security, fusion-api-public, fusion-studio-api, fusion-plugin-sdk, fusion-worker-protocol, fusion-worker)
+├── apps/
+│   └── fusion-server/             (Executable binary entry point & Bootstrap sequence)
+├── ui/                            (Studio React + TS Frontend, Design Tokens & UI Extension SDK)
+└── docs/                          (User Guide, Operator Guide, Architecture Handbook, Tutorials, Cookbook)
+```
 
 ---
 
@@ -47,87 +64,27 @@ For the frozen v0.13.0 architecture specification, see [Architecture Specificati
 
 ### Build & Run
 ```bash
-# Run local dev server (default port 8080)
-cargo run
+# Run local FusionRouter Studio server (http://localhost:8080)
+cargo run -p fusion-server
 
-# Run all tests
-cargo test
+# Run full workspace test suite
+cargo test --workspace
 
-# Run all tests including optional features (semantic-cache, prometheus-metrics)
-cargo test --all-features
-
-# Evaluate release policy & attest release
-cargo run --bin fusion -- gates evaluate --env production
-cargo run --bin fusion -- gates attest --env production
-
-# Trace execution timeline
-cargo run --bin fusion -- trace timeline exec-123 --format text
+# Run Architecture Conformance & Contract Compatibility tests
+cargo test --test conformance --test compatibility_v1 --test performance_slo
 ```
 
 ---
 
-## System Architecture Pipeline
+## Documentation Platform
 
-```text
-                 Unified Ingress
-                        │
-                        ▼
-        Intent Normalization (NormalizedIntent)
-                        │
-                        ▼
-      Planner / Compiler Pipeline (WorkflowIR → ExecutionAbi)
-                        │
-                        ▼
-       Execution Runtime Engine (ERI, 9-state model)
-                        │
-                        ▼ (emits ExecutionEventEnvelope)
-        Runtime Event Stream ABI (ADR-017)
-                        │
-                        ▼
-         Projection Dispatcher (panic-isolated)
-   ┌────────┬────────┬────────┬────────┬────────┐
-   ▼        ▼        ▼        ▼        ▼        ▼
- OTel   Timeline  Checkpoint Storage    Memory  Evidence
-                        │
-                        ▼
-        Release Governance (8 gates)
-                        │
-                        ▼
-   Assessment → Signed Attestation Archive
-```
-
----
-
-## Test Suite & Verification
-
-FusionRouter v0.13.1 passes **1421 tests** (all features) with 0 failures:
-
-```text
-lib unit tests (src/)                       : 667 passed
-main binary unit tests (src/main.rs)        : 569 passed
-cli binary tests (src/bin/fusion.rs)        :  10 passed
-integration tests (tests/*.rs)              : 175 passed
----------------------------------------------------------------
-Total (cargo test --all-features)           : 1421 passed, 0 failed
-```
-
-Includes `tests/security_invariants.rs` (milestone law tests) and live-validated fail-closed behavior for auth, tool allowlist, shell argument policy, and SSRF protection.
-
----
-
-## Documentation
-
-- [Architecture Specification (v0.13.0, frozen)](docs/specifications/architecture-v0.13.md)
-- [v0.13.1 Security Hardening Charter](docs/implementation/security-hardening-v0.13.1.md)
-- [ADR-032: Execution ABI separate from PrimitiveGraph](docs/adrs/adr-032-execution-abi-separate-from-primitivegraph.md)
-- [ADR-033: Architecture Freeze](docs/adrs/adr-033-architecture-freeze.md)
-- [ADR-034: Single Compiler Pipeline](docs/adrs/adr-034-single-compiler-pipeline.md)
-- [ADR-035: Fail-Closed Deployment](docs/adrs/adr-035-fail-closed-deployment.md)
-- [ADR-036: Plugin Execution Context](docs/adrs/adr-036-plugin-execution-context.md)
-- [ADR-037: Structured Tool Invocation](docs/adrs/adr-037-structured-tool-invocation.md)
-- [Provider API Specification (tool-call contract)](docs/specifications/provider-api.md)
-- [Quickstart Guide](QUICKSTART.md)
-- [Operator Deployment Guide](docs/operator/deployment-guide.md)
+- [v1.0 Release Readiness & Certification Report](docs/governance/v1-readiness-report.md)
+- [Architecture Handbook (AF-003 / AF-004 / AF-005)](docs/developer/handbook.md)
+- [User Guide & Onboarding](docs/user/index.md)
+- [Operator Deployment & Health Engine Guide](docs/operator/index.md)
+- [Step-by-Step Guided Tutorials (1–8)](docs/tutorials/index.md)
+- [Practical Routing Cookbook](docs/cookbook/index.md)
+- [Performance SLO Manifest](docs/slo/manifest.yaml)
 
 ---
 

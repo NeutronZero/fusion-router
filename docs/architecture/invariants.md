@@ -1,52 +1,38 @@
-# Architectural Invariants & Governance Constitution
+# Architectural Invariants (AF-003)
 
-This document defines the core invariants and architectural governance constitution for FusionRouter.
-
----
-
-## Core Invariants
-
-1. **All LLM interactions go through the Provider trait.** No subsystem calls an LLM API directly.
-2. **The Compiler is a pipeline of pure passes.** Each pass takes an IR and returns a transformed IR or an error.
-3. **The Planner produces a WorkflowIR, never an ExecutionGraph.** Compilation is a separate concern.
-4. **Every ExecutionNode has exactly one Strategy.** The Strategy trait determines how it is expanded.
-5. **Scheduling is topology-driven.** A node executes when all its dependency nodes have succeeded.
-6. **The ResourceManager is the sole authority on budget.** No other component makes quota decisions.
-7. **Telemetry is passive.** It observes and records but never alters execution.
-8. **Evidence is derived from telemetry.** The EvidenceRepository aggregates raw records into snapshots.
-9. **All config is external.** No hardcoded models, providers, or policies.
-10. **Context is immutable once assembled.** No component modifies the ContextSnapshot after creation.
-11. **Requirements are a heuristic, not a guarantee.** They guide but never constrain execution.
-12. **Every public API is OpenAI-compatible.** `/v1/chat/completions` is the primary interface.
-13. **Streaming is first-class.** All providers must support both streaming and non-streaming modes.
-14. **Errors are typed.** Every fallible operation returns a structured error type, not a string.
-15. **Capabilities are declarative.** The Planner operates on `CapabilityContract`, never on physical implementations.
-16. **CapabilityRegistry is frozen at runtime.** `PluginManager` freezes the registry during startup; runtime lookups are read-only (`Arc<CapabilityRegistry>`).
+This document specifies the immutable architectural invariants for FusionRouter v0.14.0 and beyond.
 
 ---
 
-## Compiler Phase Invariants (ADR-027 Matrix)
+### Invariant 1: Immutable WorkflowIR
+`WorkflowIR` is immutable after construction. No pass or subsystem may mutate a `WorkflowIR` instance once created; optimizations transform `WorkflowIR` into new optimized instances or lower them into `ExecutionGraph` instances.
 
-| Phase | May Do | Must Not Do |
-|---|---|---|
-| **Plugin Manager** | Discover plugins, validate manifests, run compatibility checks, freeze registry | Mutate registry after startup, execute workflow graphs |
-| **Capability Resolver** | Resolve contracts, build `CapabilityGraph`, instantiate `CapabilityInstance` handles, query cache | Execute capability logic, rewrite workflow intent |
-| **Planner** | Analyze user intent, extract requirements, construct abstract `PrimitiveGraph` IR | Bind concrete connectors, execute tools, evaluate security approvals |
-| **Policy Compiler** | Parse policy declarations, compile `PolicyIR`, rewrite `PrimitiveGraph` (inserting `ApprovalNode` / `PolicyGuardNode`) | Schedule graph execution, perform LLM calls, bypass security rules |
-| **Optimization Passes** | Apply graph transformations (dead node elimination, fan-out consolidation), annotate `NodeMetadata` | Alter execution semantics, introduce unvetted user intent |
-| **Scheduler** | Lower `PrimitiveGraph` to `ExecutionGraph`, resolve readiness dependencies, dispatch work items | Rewrite graph topology, mutate capability contracts |
-| **Connector Resolver** | Perform late binding of abstract `CapabilityInstance` handles to concrete `Connector` implementations | Modify graph node ordering, alter user security policies |
-| **Plugin Executor** | Execute physical node logic (Rust native / WASM / dynamic libraries), emit telemetry | Mutate workflow graph structure, bypass node metadata bounds |
+### Invariant 2: Immutable ExecutionGraph
+`ExecutionGraph` is immutable after compilation. Execution state (node progress, results, retries) is maintained in `ExecutionContext` rather than mutating the underlying graph DAG topology.
 
----
+### Invariant 3: Deterministic Compiler Passes
+Compiler passes are 100% deterministic. Given the identical input `WorkflowIR` and compiler configuration, compilation must produce an identical `ExecutionGraph`.
 
-## Architecture Change Policy
+### Invariant 4: Isolated Planner
+The Planner never invokes external providers or tools directly. The Planner's sole responsibility is resolving intent into a `WorkflowIR` DAG over the `CapabilitySystem`.
 
-Every proposed change to the codebase must clear the following 3-question governance check before implementation:
+### Invariant 5: Worker Boundary
+Workers execute `Execution ABI v1` tasks assigned by the Coordinator. Workers never perform workflow planning or DAG optimization.
 
-1. **Does it introduce a new abstraction?**
-   * *Rule*: Requires an approved ADR.
-2. **Does it modify a stable ABI (`CapabilityContract`, Plugin API, Scheduler API)?**
-   * *Rule*: Requires an approved ADR + migration strategy.
-3. **Does it violate ADR-027 phase invariants?**
-   * *Rule*: Redesign required before implementation.
+### Invariant 6: Decoupled Studio Storage
+Fusion Studio UI never accesses database repositories directly. All Studio operations flow through the public REST (`/api/v1/*`) or WebSocket (`/ws/events`) APIs in `fusion-studio-api`.
+
+### Invariant 7: Pure Storage Repositories
+Storage repositories in `fusion-infrastructure` handle persistence and transaction safety exclusively. Repositories never contain domain business logic.
+
+### Invariant 8: Kernel Independence
+`fusion-kernel` has zero infrastructure, storage, network, or UI dependencies. Kernel interfaces communicate solely through versioned contracts.
+
+### Invariant 9: Versioned Public Contracts
+Every externally consumed public contract (`REST API`, `Worker Protocol`, `Plugin SDK`, `WorkflowIR`, `Execution ABI`) must carry an explicit version tag (`v1`).
+
+### Invariant 10: Strongly-Typed Execution IDs
+Every execution is assigned a unique, strongly-typed `ExecutionId` at creation time, which correlates all logs, metrics, telemetry, and evidence.
+
+### Invariant 11: Versioned Performance Contracts
+Performance contracts (SLOs for Planner <10ms, Compiler <20ms, Scheduler <5ms, Runtime Overhead <10ms, Replay <20ms) are versioned alongside API contracts and enforced via regression testing.

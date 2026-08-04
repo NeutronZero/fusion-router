@@ -1,0 +1,17 @@
+[package]
+name = "fusion-infrastructure"
+version = "0.14.0"
+edition = "2021"
+
+[dependencies]
+fusion-core = { path = "../fusion-core" }
+fusion-kernel = { path = "../fusion-kernel" }
+fusion-api-internal = { path = "../fusion-api-internal" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.29", features = ["bundled"] }
+parking_lot = "0.12"
+tracing = "0.1"
+reqwest = { version = "0.11", features = ["json"] }
+tokio = { version = "1", features = ["full"] }

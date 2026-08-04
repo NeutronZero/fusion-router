@@ -11,5 +11,6 @@ advisory-dbs/
 *.db-shm
 *.db-wal
 graphify-out/
+scratch/
 
 # git worktrees.worktrees/

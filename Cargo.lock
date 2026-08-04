@@ -1038,6 +1038,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "fusion-api-internal"
+version = "0.14.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "fusion-core",
+ "fusion-kernel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fusion-api-public"
+version = "0.14.0"
+dependencies = [
+ "fusion-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fusion-capability-macros"
 version = "0.1.0"
 dependencies = [
@@ -1062,6 +1083,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "fusion-compiler"
+version = "0.14.0"
+dependencies = [
+ "fusion-api-internal",
+ "fusion-core",
+ "fusion-ir",
+ "fusion-kernel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fusion-core"
+version = "0.14.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "uuid",
+]
+
+[[package]]
+name = "fusion-infrastructure"
+version = "0.14.0"
+dependencies = [
+ "chrono",
+ "fusion-api-internal",
+ "fusion-core",
+ "fusion-kernel",
+ "parking_lot",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "fusion-ir"
 version = "0.1.0"
 dependencies = [
@@ -1069,6 +1130,31 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "uuid",
+]
+
+[[package]]
+name = "fusion-kernel"
+version = "0.14.0"
+dependencies = [
+ "chrono",
+ "fusion-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "fusion-planner"
+version = "0.14.0"
+dependencies = [
+ "async-trait",
+ "fusion-api-internal",
+ "fusion-core",
+ "fusion-ir",
+ "fusion-kernel",
+ "serde",
 ]
 
 [[package]]
@@ -1110,10 +1196,18 @@ dependencies = [
  "dashmap",
  "dotenv",
  "flate2",
+ "fusion-api-internal",
  "fusion-capability-sdk",
+ "fusion-compiler",
+ "fusion-core",
+ "fusion-infrastructure",
  "fusion-ir",
+ "fusion-kernel",
+ "fusion-planner",
  "fusion-plugin-api",
  "fusion-plugin-echo",
+ "fusion-scheduler",
+ "fusion-security",
  "futures",
  "http 0.2.12",
  "libloading",
@@ -1151,6 +1245,93 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wat",
+]
+
+[[package]]
+name = "fusion-runtime"
+version = "0.14.0"
+dependencies = [
+ "fusion-api-internal",
+ "fusion-core",
+ "fusion-kernel",
+ "tokio",
+]
+
+[[package]]
+name = "fusion-scheduler"
+version = "0.14.0"
+dependencies = [
+ "async-trait",
+ "fusion-api-internal",
+ "fusion-core",
+ "fusion-kernel",
+ "tokio",
+]
+
+[[package]]
+name = "fusion-security"
+version = "0.14.0"
+dependencies = [
+ "base64 0.22.1",
+ "fusion-core",
+ "ring",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "fusion-server"
+version = "0.14.0"
+dependencies = [
+ "axum",
+ "fusion-compiler",
+ "fusion-core",
+ "fusion-infrastructure",
+ "fusion-kernel",
+ "fusion-planner",
+ "fusion-runtime",
+ "fusion-scheduler",
+ "fusion-studio-api",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "fusion-studio-api"
+version = "0.14.0"
+dependencies = [
+ "axum",
+ "fusion-api-public",
+ "fusion-compiler",
+ "fusion-core",
+ "fusion-ir",
+ "fusion-kernel",
+ "fusion-planner",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "fusion-worker"
+version = "0.14.0"
+dependencies = [
+ "fusion-core",
+ "fusion-worker-protocol",
+ "serde",
+]
+
+[[package]]
+name = "fusion-worker-protocol"
+version = "0.14.0"
+dependencies = [
+ "fusion-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2594,6 +2775,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ring"
+version = "0.17.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "getrandom 0.2.17",
+ "libc",
+ "untrusted",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3559,6 +3754,12 @@ name = "unsafe-libyaml"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
+
+[[package]]
+name = "untrusted"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"

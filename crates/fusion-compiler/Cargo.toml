@@ -1,0 +1,12 @@
+[package]
+name = "fusion-compiler"
+version = "0.14.0"
+edition = "2021"
+
+[dependencies]
+fusion-core = { path = "../fusion-core" }
+fusion-kernel = { path = "../fusion-kernel" }
+fusion-api-internal = { path = "../fusion-api-internal" }
+fusion-ir = { path = "../fusion-ir" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

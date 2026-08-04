@@ -1,0 +1,12 @@
+[package]
+name = "fusion-security"
+version = "0.14.0"
+edition = "2021"
+
+[dependencies]
+fusion-core = { path = "../fusion-core" }
+ring = "0.17"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"

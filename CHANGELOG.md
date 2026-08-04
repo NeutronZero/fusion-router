@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.14.0] – 2026-08-04 — FusionRouter v0.14 LTS Foundation
+
+- **Platform Architecture & Governance (AF-003, AF-004, AF-005 Freezes)**
+  - **AF-003 Architecture Freeze:** Enforces 17 Architecture Laws, 11 Architectural Invariants, and strict 3-tier Cargo workspace hierarchy (`Foundation -> Engine -> Platform -> Applications`).
+  - **AF-004 Platform Contract Freeze (`v1`):** Frozen `v1` contracts across `WorkflowIR`, `Execution ABI`, `REST API`, `Worker Protocol`, `Plugin SDK`, `ExecutionBundle`, `Compiler Report`, `Dashboard API`, `Health Report`.
+  - **AF-005 Repository Layout Freeze:** Locked workspace topology (`crates/`, `apps/`, `ui/`, `docs/`, `tests/`) protecting against structural drift.
+
+- **3-Tier Cargo Workspace Refactor**
+  - **Tier 1 (Foundation):** `fusion-core`, `fusion-kernel`, `fusion-api-internal`.
+  - **Tier 2 (Domain Engine):** `fusion-planner`, `fusion-compiler`, `fusion-scheduler`, `fusion-runtime`.
+  - **Tier 3 (Platform & Apps):** `fusion-infrastructure`, `fusion-security`, `fusion-api-public`, `fusion-studio-api`, `fusion-plugin-sdk`, `fusion-worker-protocol`, `fusion-worker`, `apps/fusion-server`.
+
+- **Vertical-Slice User Journey Sprints (Sprints 1–8)**
+  - **Sprint 1 — First Run Experience:** 5-step `FirstRunWizard` UI, local model server auto-prober (`Ollama`, `LM Studio`, `vLLM`), AES-256-GCM encrypted API key persistence.
+  - **Sprint 2 — Provider Lifecycle State Machine:** Explicit lifecycle states (`NotConfigured`..`Serving`..`Unavailable`), `ProviderRegistry`, zero-restart live hot-reload.
+  - **Sprint 3 — Studio Verification Chat:** End-to-end pipeline execution (`Planner -> Compiler -> Scheduler -> Runtime`), strongly-typed `ExecutionId`, live stage timeline.
+  - **Sprint 4 — Compiler Inspector Showcase:** 5-Tab Compiler Inspector, multi-dimensional routing scores, Candidate Comparison Matrix, 9-pass diffs.
+  - **Sprint 5 — Zero Bypass Certification:** Canonical `ExecutionRecord`, 100% Compiler Invocation Rate, `0` zero-bypass violations.
+  - **Sprint 6 — Mission Control Dashboard:** Live Overview, Live Executions, Fleet Health, Architecture KPI Panel (10 Governance SLOs), Resource Monitor, Event Stream.
+  - **Sprint 7 — Platform Health & Recovery Engine:** 9-Domain Health Engine, 5 Health Levels, Platform Readiness Score, Automated Recovery Engine.
+  - **Sprint 8 — Execution Intelligence & Replay Engine:** Portable `.fusion` `ExecutionBundle` export/import, 3-Mode Deterministic Replay (Timeline, Compiler, Runtime), Time-Travel Pass Stepping, Timeline Diffs, 100% Replay Fidelity.
+
+- **Release Candidates (RC1–RC4) & Performance SLO Certification**
+  - **AF-004 Invariant 11:** Performance contracts versioned alongside API contracts (`docs/slo/manifest.yaml`). Certified Planner (1ms), Compiler (2ms), Scheduler (1ms), Runtime Overhead (3ms), Replay (1ms).
+  - **Capability Registry & Intent Profiles:** Added `CapabilityRegistry` (`Vision`, `JSON`, `ToolCalling`, `Reasoning`, `Streaming`, `Embeddings`, `Audio`, `ImageGen`, `Video`, `MCP`) and `ExecutionProfile` (`Fast`, `Balanced`, `Cheap`, `Coding`, `Research`, `Vision`, `Reasoning`, `Creative`, `Offline`).
+  - **Documentation Platform:** Authored User Guide, Operator Guide, Developer Architecture Handbook, Guided Tutorials (1–8), Routing Cookbook, and published `docs/governance/v1-readiness-report.md`.
+
 ## [0.13.1] – 2026-08-04
 
 - **Security Hardening (charter: `docs/implementation/security-hardening-v0.13.1.md`)** — milestone laws 1–10 verified by `tests/security_invariants.rs`
