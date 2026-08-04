@@ -211,3 +211,33 @@ FusionRouter is a compiler that compiles user intent into executable, verifiable
 ## Architecture Freeze Declaration
 
 This architecture is declared frozen as of v0.13.0. The six core abstractions — `NormalizedIntent`, `WorkflowIR`, `ExecutionAbi`, `ExecutionTarget`, `ExecutionRuntimeInterface`, and `CapabilityRegistry` with `CapabilityTrait` — are stable public contracts. Changes to these contracts require a new ADR and a new architecture freeze. The v0.12 implementation remains functional behind compatibility boundaries; reconciling it to these contracts is v0.14 boundary work, and no future feature may introduce a new foundational concept outside the six abstractions.
+
+## v0.13.1 Addendum — Security Hardening (ADRs 034–037)
+
+This addendum records security hardening applied under the v0.13.1 milestone (`docs/implementation/security-hardening-v0.13.1.md`). It extends the Security section above with ratified, implemented trust boundaries; it does not alter the frozen v0.13.0 contracts.
+
+### Milestone Laws 6–10 (in addition to the Architectural Laws above)
+
+| Law | Statement | Enforcement |
+|-----|-----------|-------------|
+| 6 | Release builds fail closed on insecure defaults | `validate()` rejects auth-off/rate-limit-off in release; `--unsafe-dev` is the only escape hatch (ADR-035) |
+| 7 | Model output is never interpreted as executable actions | Executor consumes provider-native `tool_calls` only; free-form JSON tool parsing removed (ADR-037) |
+| 8 | Host functions enforce permissions of the invoking plugin only | `PluginExecutionContext` threaded into host; no registry scan (ADR-036) |
+| 9 | Every external boundary has a deadline; every queue is bounded | Timeout/backpressure sweep |
+| 10 | Every externally supplied path is canonicalized and proven to remain inside its trust root before use | Central path-safety helper (`src/security/paths.rs`) at registry, plugin loader, file tools, package extraction, attestation archive |
+
+### Tool Execution Trust Boundary (ADR-037 / Law 7)
+
+- **Execution is fed only from provider-native `tool_calls`**, normalized by `native_tool_calls_from` (`src/providers/mod.rs`). A model printing `{"tool": ...}` in its output text yields text only — never executable work.
+- **Per-request tool allowlist**: nodes declare `config.tool_allowlist`; only allowlisted tools are advertised to the provider and executable. `tools.allow_auto_exec` defaults to **false**.
+- **Shell tool argument policy** (`src/tools/shell_tool.rs`, `src/security/paths.rs`): command allowlist + allowed read directories; `allow_unrestricted_args` defaults to **false**. No argument may escape the allowed read roots.
+- **HTTP tool URL policy** (`src/tools/http_tool.rs`): HTTPS-only scheme enforcement; SSRF defense rejects loopback/private/link-local addresses at URL validation and again after DNS resolution.
+- Tool definitions are serialized in the OpenAI wire shape (`{"type":"function","function":{...}}`) for openrouter, zen, and ollama providers.
+
+### Fail-Closed Deployment (ADR-035 / Law 6)
+
+Release builds reject configurations that disable authentication or rate limiting. The hardened runtime validates defaults at startup and fails fast on insecure configuration; debug-only escape hatches are explicit and never compiled into release builds by default.
+
+### Compiler Contract Enforcement (Phase 1)
+
+All execution graphs pass the full compiler pipeline through the single `build_compiler()` factory (`src/compiler/mod.rs`); `Deny` policy matches block compilation, and capability policies are applied on every resolution path.

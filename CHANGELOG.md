@@ -1,6 +1,22 @@
 # Changelog
 
-## [Unreleased]
+## [Unreleased] – 0.13.1 (Security Hardening Milestone)
+
+- **Security Hardening (charter: `docs/implementation/security-hardening-v0.13.1.md`)** — milestone laws 1–10 verified by `tests/security_invariants.rs`
+  - **Phase 1 — Compiler Contract Enforcement**: single `build_compiler()` factory (`src/compiler/mod.rs`); policy `Deny` enforced at compile time; capability policy applied on all resolution paths; laws 1/2/4/5 exit-criteria tests end to end
+  - **Phase 2 — Fail-Closed Deployment (ADR-035)**: release validation rejects auth-off/rate-limit-off configurations; hardened auth + rate-limiting path; `--unsafe-dev` is the only escape hatch (Law 6)
+  - **Phase 3 — Tool Execution Trust Boundary (ADR-037, Law 7)**: model output is never interpreted as executable actions
+    - Executor consumes **provider-native `tool_calls` only**; free-form JSON tool parsing removed (`native_tool_calls_from` normalizes OpenAI/Ollama wire shapes)
+    - Per-request `tool_allowlist` + `tools.allow_auto_exec` (default **false**) gate every tool execution
+    - **Shell tool argument policy** — command allowlist + allowed read directories; `allow_unrestricted_args` default **false**
+    - **HTTP tool URL policy** — HTTPS-only scheme enforcement; SSRF defense via private/loopback/link-local blocklist with DNS recheck (`src/security/paths.rs`, `src/tools/http_tool.rs`)
+  - **Tool wire-format fix** — `ToolDefinition` serialized in OpenAI wire shape (`{"type":"function","function":{...}}`) via `tool_definitions_wire()` (openrouter/zen/ollama); found by live test against the Zen API
+
+- **Test reliability**
+  - `config_reload_tests`: temp-dir names now include a process-wide counter (Windows `SystemTime` nanos collision caused tests to overwrite each other's config files)
+  - `runtime_events_tests`: poll the event store until all events are persisted instead of a fixed sleep + listener abort (deterministic under parallel load)
+
+- **Docs & Memory** — ADR-037 ratified/implemented; `provider-api.md` tool-call contract; `.memory/` updated and validated (`check-memory.py` ALL CHECKS PASSED)
 
 ## [0.13.0] – 2026-07-31
 
