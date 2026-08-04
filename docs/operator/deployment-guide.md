@@ -49,29 +49,41 @@ A `.env` file in the working directory is loaded automatically at startup (via `
 
 ### Default Settings (from code)
 
+The defaults are **fail-closed** (ADR-035, v0.13.1): a default install refuses to boot unless a valid API key is configured, binds to loopback only, and has tool execution disabled.
+
 | Setting | Default |
 |---|---|
-| Server host | `0.0.0.0` |
+| Server host | `127.0.0.1` |
 | Server port | `8080` |
 | Shutdown timeout | 30 seconds |
 | Log format | `text` (or `json`) |
 | Log level | `info` |
-| Rate limiting | disabled |
-| CORS | Allow all origins (`*`) |
+| Authentication | enabled (requires at least one `api_keys` entry) |
+| Rate limiting | enabled (60 req/min, burst 10, keyed on peer address or authenticated identity) |
+| CORS | same-origin only (empty `allowed_origins`) |
+| Shell commands | none (`allowed_shell_commands: []`) |
+| HTTP tool | disabled (`enable_http_tool: false`) |
 | Semantic cache | enabled (default feature) |
+
+### `--unsafe-dev` (development only)
+
+Release builds reject insecure combinations at startup: auth disabled, rate limiting disabled, wildcard CORS (`*`), non-empty shell allowlist, or the HTTP tool enabled — each fails `validate()` unless the server is started with `--unsafe-dev` (which logs a prominent warning and is never appropriate for a network-exposed deployment).
 
 ## Running the Server
 
 ```bash
-# Minimum viable start
+# Minimum viable start (fail-closed: set an API key in config first)
 FUSION_CONFIG=./my-config.yaml OPENCODEZEN_API_KEY=sk-... ./fusion-router
+
+# Local development without auth/rate limiting (do not expose publicly)
+./fusion-router --unsafe-dev
 
 # With OpenTelemetry
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
   cargo run --release --features "otel"
 ```
 
-The server listens on `0.0.0.0:8080` by default (configurable in `config.yaml`).
+The server listens on `127.0.0.1:8080` by default (configurable in `config.yaml`).
 
 ### Graceful Shutdown
 

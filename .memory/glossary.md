@@ -18,6 +18,8 @@
 
 **CircuitBreaker** — 3-state (Closed/Open/Half-Open) failure isolation mechanism for provider calls.
 
+**ClientIdentity** — Authenticated client identifier set by the auth middleware (SHA-256 of the API key) and used by the rate limiter for bucket keying.
+
 **Compiler** — Pure deterministic pass pipeline that lowers `WorkflowIR` → `PrimitiveGraph` → `ExecutionGraph`.
 
 **Compiler Pass** — A single pure transformation or validation step in the compiler pipeline.
@@ -27,6 +29,10 @@
 **ContextAssembler** — Pipeline stage that builds `ContextSnapshot` from system prompt templates, conversation history, and tool definitions.
 
 **ContextSnapshot** — The assembled context including system prompt, conversation history, and available tools.
+
+## F
+
+**Fail-closed** — Default posture (ADR-035): a default install is unreachable without authentication, bound to `127.0.0.1`, rate-limited, CORS same-origin, with shell/HTTP tools disabled; release-mode `validate()` rejects any insecure combination unless `--unsafe-dev` is passed.
 
 ## D
 
@@ -115,6 +121,10 @@
 **Trigger** — Execution initiation mechanism (Webhook, Cron, EventBus).
 
 **TriggerTrace** — Provenance chain for triggered executions.
+
+## U
+
+**unsafe-dev** — CLI flag (`--unsafe-dev`, `AppConfig::unsafe_dev`) that explicitly disables fail-closed deployment posture (auth off, rate limit off, wildcard CORS, permissive tools, placeholder API keys). Debug/development escape hatch only; never for production (ADR-035).
 
 ## W
 

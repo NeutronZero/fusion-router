@@ -70,6 +70,7 @@ fn build_app(quota: &Quota) -> Router {
     let resource_manager = DefaultResourceManager::new(quota.clone());
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = AppConfig {
+        unsafe_dev: false,
         server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 0, shutdown_timeout_secs: 30, cors: Default::default() },
         resources: fusion_router::config::ResourceConfig {
             max_daily_cost: quota.max_daily_cost,

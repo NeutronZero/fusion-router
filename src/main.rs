@@ -50,17 +50,18 @@ use scheduler::connector_subscriber::ConnectorSubscriber;
 use telemetry::SqliteEvidenceRepository;
 
 /// Resolves an API key from the environment, failing fast in release builds
-/// instead of silently substituting placeholder credentials.
-fn resolve_api_key(env_var: &str, placeholder: &str) -> anyhow::Result<String> {
+/// instead of silently substituting placeholder credentials. The placeholder
+/// escape hatch is limited to debug builds and explicit `--unsafe-dev` runs.
+fn resolve_api_key(env_var: &str, placeholder: &str, unsafe_dev: bool) -> anyhow::Result<String> {
     if let Ok(key) = std::env::var(env_var) {
         if !key.trim().is_empty() {
             return Ok(key);
         }
     }
-    if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) || unsafe_dev {
         tracing::warn!(
             env_var = %env_var,
-            "API key missing; using placeholder key (debug build only)"
+            "API key missing; using placeholder key (debug/--unsafe-dev only)"
         );
         return Ok(placeholder.to_string());
     }
@@ -73,19 +74,35 @@ fn resolve_api_key(env_var: &str, placeholder: &str) -> anyhow::Result<String> {
 async fn main() {
     let _ = dotenv::dotenv();
 
+    let unsafe_dev = std::env::args().any(|a| a == "--unsafe-dev");
+    if unsafe_dev {
+        tracing::warn!(
+            "==================================================================\n\
+             == WARNING: running with --unsafe-dev                          ==\n\
+             == Authentication, rate limiting, CORS, and tool defaults are  ==\n\
+             == NOT enforced. DO NOT expose this server to untrusted        ==\n\
+             == networks.                                                   ==\n\
+             =================================================================="
+        );
+    }
+
     telemetry::tracing::init_console();
     let _ = telemetry::tracing::init_tracing();
 
     let config_path = std::env::var("FUSION_CONFIG")
         .unwrap_or_else(|_| "config/default.yaml".to_string());
 
-    let config = AppConfig::load(&config_path)
+    let mut config = AppConfig::load(&config_path)
         .unwrap_or_else(|e| {
             eprintln!("failed to load config: {e}, using defaults");
             AppConfig::load("config/default.yaml").unwrap_or_else(|_| {
                 panic!("Could not load config from config/default.yaml");
             })
         });
+
+    if unsafe_dev {
+        config.unsafe_dev = true;
+    }
 
     if let Err(errors) = config.validate() {
         for err in &errors {
@@ -113,7 +130,7 @@ async fn main() {
 
     tracing::info!("loaded config from {}", config_path);
 
-    let openrouter_key = resolve_api_key("OPENROUTER_API_KEY", "test-key")
+    let openrouter_key = resolve_api_key("OPENROUTER_API_KEY", "test-key", unsafe_dev)
         .unwrap_or_else(|e| panic!("{e}"));
     let default_target = ProviderTarget::new(
         "default".to_string(),
@@ -126,12 +143,12 @@ async fn main() {
 
     for (name, cfg) in &config.providers {
         let api_key = match cfg.api_key_env.as_ref() {
-            Some(var) => resolve_api_key(var, &format!("test-key-{name}"))
+            Some(var) => resolve_api_key(var, &format!("test-key-{name}"), unsafe_dev)
                 .unwrap_or_else(|e| panic!("{e}")),
-            None if cfg!(debug_assertions) => {
+            None if cfg!(debug_assertions) || unsafe_dev => {
                 tracing::warn!(
                     provider = %name,
-                    "no api_key_env configured; using placeholder key (debug build only)"
+                    "no api_key_env configured; using placeholder key (debug/--unsafe-dev only)"
                 );
                 format!("test-key-{name}")
             }
@@ -276,11 +293,11 @@ async fn main() {
         .merge(operations_routes)
         .merge(execution_routes)
         .layer(TraceLayer::new_for_http())
-        .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
-        .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
-        .layer(axum::Extension(auth_config))
-        .layer(crate::middleware::cors::cors_layer_from_config(&cors_config));
+        .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware));
 
+    // ADR-035: the rate limiter sits INSIDE the auth layer so it keys on the
+    // authenticated identity (set via ClientIdentity) rather than spoofable
+    // headers; unauthenticated traffic falls back to the TCP peer address.
     if rate_limiting_enabled {
         let limiter = middleware::rate_limit::RateLimiter::new(rate_limiting_config);
         limiter.start_cleanup();
@@ -289,6 +306,11 @@ async fn main() {
             .layer(axum::Extension(limiter));
     }
 
+    let app = app
+        .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
+        .layer(axum::Extension(auth_config))
+        .layer(crate::middleware::cors::cors_layer_from_config(&cors_config));
+
     let addr = format!("{}:{}", host, port)
         .parse::<std::net::SocketAddr>()
         .unwrap();
@@ -296,10 +318,13 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .unwrap();
 }
 
 #[cfg(unix)]

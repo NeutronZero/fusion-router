@@ -61,6 +61,7 @@ fn dummy_target(name: &str) -> ProviderTarget {
 
 fn empty_config() -> AppConfig {
     AppConfig {
+        unsafe_dev: false,
         server: ServerConfig {
             host: "0.0.0.0".into(),
             port: 8080,
@@ -99,6 +100,9 @@ resources:
   max_daily_tokens: 1000000
   max_concurrent: 5
   max_concurrent_nodes: 16
+auth:
+  enabled: false
+  api_keys: []
 providers:
 {}
 connectors:
@@ -120,6 +124,9 @@ resources:
   max_daily_tokens: 1000000
   max_concurrent: 5
   max_concurrent_nodes: 16
+auth:
+  enabled: false
+  api_keys: []
 providers:
 {}"#,
         provider_block

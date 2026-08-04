@@ -230,6 +230,9 @@ server:
 resources:
   max_daily_cost: 100.0
   max_daily_tokens: 1000000
+auth:
+  enabled: false
+  api_keys: []
 "#.into()),
             },
         ]};
@@ -260,6 +263,9 @@ server:
 resources:
   max_daily_cost: 100.0
   max_daily_tokens: 1000000
+auth:
+  enabled: false
+  api_keys: []
 "#.into()),
             },
         ]};

@@ -320,3 +320,60 @@ async fn law1_build_compiler_produces_mandatory_passes() {
         assert!(names.contains(&mandatory), "missing mandatory pass {mandatory}: {names:?}");
     }
 }
+
+/// Law 6 (ADR-035): a default install fails closed — every insecure
+/// combination is rejected by release-mode validation, and `--unsafe-dev`
+/// (`AppConfig::unsafe_dev`) is the only escape hatch.
+#[test]
+fn law6_release_fails_closed() {
+    let default = fusion_router::config::AppConfig::load("config/default.yaml")
+        .expect("config/default.yaml must parse");
+
+    assert_eq!(default.server.host, "127.0.0.1", "default bind must be loopback");
+    assert!(default.auth.enabled, "auth must be enabled by default");
+    assert!(default.rate_limiting.enabled, "rate limiting must be enabled by default");
+    assert!(default.server.cors.allowed_origins.is_empty(), "CORS must be same-origin by default");
+    assert!(default.tools.allowed_shell_commands.is_empty(), "shell tools must be disabled by default");
+    assert!(!default.tools.enable_http_tool, "HTTP tool must be disabled by default");
+
+    // Default install has no API keys configured: boot must be refused
+    // (unreachable without authentication) in any profile.
+    assert!(
+        default.validate().is_err(),
+        "default install with empty api_keys must not boot"
+    );
+    let errors = default.validate_with_profile(true).unwrap_err();
+    assert!(
+        errors.iter().any(|e| e.field == "auth.api_keys"),
+        "must flag missing api_keys: {errors:?}"
+    );
+
+    // Every insecure combination is rejected in release mode without
+    // --unsafe-dev, and accepted with it.
+    let mut insecure = default.clone();
+    insecure.auth.enabled = false;
+    insecure.rate_limiting.enabled = false;
+    insecure.server.cors.allowed_origins = vec!["*".into()];
+    insecure.tools.allowed_shell_commands = vec!["cat".into()];
+    insecure.tools.enable_http_tool = true;
+
+    let errors = insecure.validate_with_profile(true).unwrap_err();
+    for field in [
+        "auth.enabled",
+        "rate_limiting.enabled",
+        "server.cors.allowed_origins",
+        "tools.allowed_shell_commands",
+        "tools.enable_http_tool",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.field == field),
+            "release mode must flag insecure '{field}': {errors:?}"
+        );
+    }
+
+    insecure.unsafe_dev = true;
+    assert!(
+        insecure.validate_with_profile(true).is_ok(),
+        "--unsafe-dev must be the escape hatch for insecure configuration"
+    );
+}

@@ -70,6 +70,7 @@ mod tests {
 
     fn minimal_app_config() -> AppConfig {
         AppConfig {
+            unsafe_dev: false,
             server: ServerConfig {
                 host: "0.0.0.0".into(),
                 port: 8080,

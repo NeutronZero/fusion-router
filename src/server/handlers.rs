@@ -665,6 +665,7 @@ mod tests {
             ResourceConfig, ServerConfig, StrategyConfig, ToolsConfig,
         };
         let config = AppConfig {
+            unsafe_dev: false,
             server: ServerConfig {
                 host: "0.0.0.0".into(),
                 port: 0,

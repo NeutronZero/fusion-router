@@ -1,9 +1,10 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::{
-    extract::Request,
+    extract::{ConnectInfo, Request},
     http::StatusCode,
     middleware::Next,
     response::Response,
@@ -13,6 +14,11 @@ use serde_json::json;
 use tokio::time::sleep;
 
 use crate::config::RateLimitingConfig;
+use crate::middleware::auth::ClientIdentity;
+
+/// Upper bound on distinct rate-limit buckets; past this the limiter denies
+/// new clients instead of growing unboundedly (M2 / ADR-035).
+pub const MAX_BUCKETS: usize = 100_000;
 
 #[derive(Clone)]
 pub struct RateLimiter {
@@ -26,6 +32,24 @@ struct Bucket {
     tokens: f64,
     last_refill: Instant,
     last_access: Instant,
+}
+
+/// Derives the rate-limit bucket key from unspoofable identity only:
+/// 1. authenticated identity (set by the auth middleware, already inside the
+///    auth layer); 2. the TCP peer address via `ConnectInfo`; 3. fallback
+///    `"unknown"` when neither is available (only possible when the router
+///    lacks connect-info support — production wiring always provides it).
+///
+/// `x-forwarded-for` is never consulted (M2): it is client-controlled, so
+/// spoofing it must not mint fresh buckets or reset existing ones.
+pub fn client_identity(req: &Request, authenticated: Option<&str>) -> String {
+    if let Some(identity) = authenticated {
+        return identity.to_string();
+    }
+    if let Some(ConnectInfo(addr)) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
+        return format!("peer:{}", addr.ip());
+    }
+    "unknown".to_string()
 }
 
 impl RateLimiter {
@@ -70,6 +94,11 @@ impl RateLimiter {
     }
 
     pub fn check_rate(&self, client_id: &str) -> Result<(), u64> {
+        if !self.buckets.contains_key(client_id) && self.buckets.len() >= MAX_BUCKETS {
+            // Bucket cap: deny new clients instead of growing the map
+            // without bound (M2 / ADR-035). Cleanup reclaims stale buckets.
+            return Err(429);
+        }
         let mut bucket = self.buckets.entry(client_id.to_string()).or_insert_with(|| Bucket {
             tokens: self.config.burst_size as f64,
             last_refill: Instant::now(),
@@ -108,18 +137,12 @@ pub async fn rate_limit_middleware(
         return Ok(next.run(req).await);
     }
 
-    let client_id = req
-        .headers()
-        .get("x-api-key")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            req.headers()
-                .get("x-forwarded-for")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    let authenticated = req
+        .extensions()
+        .get::<ClientIdentity>()
+        .map(|id| id.0.as_str());
+
+    let client_id = client_identity(&req, authenticated);
 
     match limiter.check_rate(&client_id) {
         Ok(()) => Ok(next.run(req).await),
@@ -133,6 +156,85 @@ pub async fn rate_limit_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
+
+    fn test_req() -> Request {
+        Request::builder()
+            .uri("/v1/chat/completions")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    #[test]
+    fn test_client_identity_prefers_connect_info_over_spoofed_xff() {
+        let mut req = test_req();
+        req.headers_mut().insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.9"),
+        );
+        req.extensions_mut()
+            .insert(ConnectInfo("1.2.3.4:5555".parse::<SocketAddr>().unwrap()));
+
+        let id = client_identity(&req, None);
+        assert_eq!(id, "peer:1.2.3.4", "x-forwarded-for must never key a bucket");
+    }
+
+    #[test]
+    fn test_client_identity_ignores_spoofed_xff_without_connect_info() {
+        let mut req = test_req();
+        req.headers_mut().insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.9"),
+        );
+        assert_eq!(client_identity(&req, None), "unknown");
+    }
+
+    #[test]
+    fn test_client_identity_uses_authenticated_identity() {
+        let req = test_req();
+        assert_eq!(
+            client_identity(&req, Some("key:abcd")),
+            "key:abcd",
+            "authenticated identity must win over peer address"
+        );
+    }
+
+    #[test]
+    fn test_spoofed_xff_cannot_reset_buckets() {
+        // Same peer, different spoofed x-forwarded-for: same bucket, so the
+        // second request is limited (burst 2 already consumed).
+        let config = RateLimitingConfig {
+            enabled: true,
+            requests_per_minute: 60,
+            burst_size: 2,
+            cleanup_interval_secs: 300,
+        };
+        let limiter = RateLimiter::new(config);
+        assert!(limiter.check_rate("peer:1.2.3.4").is_ok());
+        assert!(limiter.check_rate("peer:1.2.3.4").is_ok());
+        assert!(limiter.check_rate("peer:1.2.3.4").is_err());
+    }
+
+    #[test]
+    fn test_bucket_count_is_capped() {
+        let config = RateLimitingConfig {
+            enabled: true,
+            requests_per_minute: 60,
+            burst_size: 2,
+            cleanup_interval_secs: 300,
+        };
+        let limiter = RateLimiter::new(config);
+
+        for i in 0..MAX_BUCKETS {
+            assert!(limiter.check_rate(&format!("client-{i}")).is_ok());
+        }
+        assert_eq!(limiter.buckets.len(), MAX_BUCKETS);
+
+        // A brand-new client past the cap is denied (bucket cap enforced);
+        // an existing client keeps its bucket.
+        assert!(limiter.check_rate(&format!("client-{}", MAX_BUCKETS + 1)).is_err());
+        assert!(limiter.check_rate("client-0").is_ok());
+    }
 
     #[test]
     fn test_rate_limiter_allows_burst() {

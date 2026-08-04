@@ -78,6 +78,7 @@ async fn test_chat_completion_endpoint() {
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = AppConfig::load("config/default.yaml").unwrap_or_else(|_| {
         AppConfig {
+            unsafe_dev: false,
             server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 8080, shutdown_timeout_secs: 30, cors: Default::default() },
             resources: fusion_router::config::ResourceConfig {
                 max_daily_cost: 100.0,
@@ -281,6 +282,7 @@ impl ChatProvider for MidMockProvider {
 
 fn test_config() -> AppConfig {
     AppConfig {
+        unsafe_dev: false,
         server: ServerConfig { host: "0.0.0.0".into(), port: 8080, shutdown_timeout_secs: 30, cors: CorsConfig::default() },
         resources: ResourceConfig { max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, max_concurrent_nodes: 16, provider_limits: Default::default() },
         policies: vec![], providers: Default::default(),

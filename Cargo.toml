@@ -51,6 +51,7 @@ prometheus = { version = "0.14", features = ["process"] }
 tokio-tungstenite = "0.21"
 thiserror = "1"
 sha2 = "0.10"
+subtle = "2"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

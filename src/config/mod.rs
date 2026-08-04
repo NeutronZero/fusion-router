@@ -10,6 +10,8 @@ use crate::types::{Policy, PolicyAction, PolicyCondition, Quota, ProviderLimit};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
+    #[serde(default)]
+    pub unsafe_dev: bool,
     pub server: ServerConfig,
     pub resources: ResourceConfig,
     #[serde(default)]
@@ -46,7 +48,7 @@ pub struct ServerConfig {
     pub cors: CorsConfig,
 }
 
-fn default_host() -> String { "0.0.0.0".to_string() }
+fn default_host() -> String { "127.0.0.1".to_string() }
 fn default_port() -> u16 { 8080 }
 fn default_shutdown_timeout() -> u64 { 30 }
 
@@ -60,7 +62,7 @@ pub struct CorsConfig {
     pub allowed_headers: Vec<String>,
 }
 
-fn default_cors_origins() -> Vec<String> { vec!["*".into()] }
+fn default_cors_origins() -> Vec<String> { vec![] }
 fn default_cors_methods() -> Vec<String> { vec!["GET".into(), "POST".into(), "PUT".into(), "DELETE".into(), "OPTIONS".into()] }
 fn default_cors_headers() -> Vec<String> { vec!["content-type".into(), "authorization".into(), "x-api-key".into(), "x-request-id".into()] }
 
@@ -75,12 +77,22 @@ impl Default for CorsConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[derive(Default)]
 pub struct AuthConfig {
-    #[serde(default)]
+    #[serde(default = "default_auth_enabled")]
     pub enabled: bool,
     #[serde(default)]
     pub api_keys: Vec<String>,
+}
+
+fn default_auth_enabled() -> bool { true }
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_auth_enabled(),
+            api_keys: Vec::new(),
+        }
+    }
 }
 
 
@@ -96,7 +108,7 @@ pub struct RateLimitingConfig {
     pub cleanup_interval_secs: u64,
 }
 
-fn default_rate_limiting_enabled() -> bool { false }
+fn default_rate_limiting_enabled() -> bool { true }
 fn default_rpm() -> u64 { 60 }
 fn default_burst() -> u32 { 10 }
 fn default_cleanup_interval() -> u64 { 300 }
@@ -230,7 +242,7 @@ pub struct ToolsConfig {
 }
 
 fn default_allowed_shell_commands() -> Vec<String> {
-    vec!["ls".into(), "echo".into(), "cat".into()]
+    vec![]
 }
 
 fn default_shell_timeout_secs() -> u64 { 10 }
@@ -239,7 +251,7 @@ fn default_allowed_read_directories() -> Vec<String> {
     vec![".".into()]
 }
 
-fn default_enable_http_tool() -> bool { true }
+fn default_enable_http_tool() -> bool { false }
 
 impl Default for ToolsConfig {
     fn default() -> Self {
@@ -275,6 +287,14 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), Vec<ConfigValidationError>> {
+        // Release builds enforce fail-closed deployment posture (ADR-035);
+        // debug builds skip these so local development stays frictionless.
+        self.validate_with_profile(!cfg!(debug_assertions))
+    }
+
+    /// Same as `validate()`, with the profile explicit so tests can exercise
+    /// the release-mode fail-closed checks regardless of the build profile.
+    pub fn validate_with_profile(&self, release: bool) -> Result<(), Vec<ConfigValidationError>> {
         let mut errors: Vec<ConfigValidationError> = Vec::new();
 
         if self.server.port == 0 {
@@ -322,7 +342,7 @@ impl AppConfig {
             });
         }
 
-        if self.auth.enabled && self.auth.api_keys.is_empty() {
+        if self.auth.enabled && self.auth.api_keys.is_empty() && !self.unsafe_dev {
             errors.push(ConfigValidationError {
                 field: "auth.api_keys".into(),
                 message: "auth is enabled but no api_keys configured".into(),
@@ -353,6 +373,51 @@ impl AppConfig {
                     field: "rate_limiting.cleanup_interval_secs".into(),
                     message: "cleanup_interval_secs must be > 0".into(),
                     value: Some(self.rate_limiting.cleanup_interval_secs.to_string()),
+                    severity: ValidationSeverity::Error,
+                });
+            }
+        }
+
+        // ADR-035: release builds fail closed on insecure combinations.
+        // `--unsafe-dev` (AppConfig::unsafe_dev) is the only escape hatch.
+        if release && !self.unsafe_dev {
+            if !self.auth.enabled {
+                errors.push(ConfigValidationError {
+                    field: "auth.enabled".into(),
+                    message: "authentication is disabled; start with --unsafe-dev to run without auth".into(),
+                    value: None,
+                    severity: ValidationSeverity::Error,
+                });
+            }
+            if !self.rate_limiting.enabled {
+                errors.push(ConfigValidationError {
+                    field: "rate_limiting.enabled".into(),
+                    message: "rate limiting is disabled; start with --unsafe-dev to run without rate limiting".into(),
+                    value: None,
+                    severity: ValidationSeverity::Error,
+                });
+            }
+            if self.server.cors.allowed_origins.iter().any(|o| o == "*") {
+                errors.push(ConfigValidationError {
+                    field: "server.cors.allowed_origins".into(),
+                    message: "wildcard CORS origin '*' is forbidden; start with --unsafe-dev to allow it".into(),
+                    value: None,
+                    severity: ValidationSeverity::Error,
+                });
+            }
+            if !self.tools.allowed_shell_commands.is_empty() {
+                errors.push(ConfigValidationError {
+                    field: "tools.allowed_shell_commands".into(),
+                    message: "shell commands are disabled by default; start with --unsafe-dev to allow them".into(),
+                    value: None,
+                    severity: ValidationSeverity::Error,
+                });
+            }
+            if self.tools.enable_http_tool {
+                errors.push(ConfigValidationError {
+                    field: "tools.enable_http_tool".into(),
+                    message: "the HTTP tool is disabled by default; start with --unsafe-dev to enable it".into(),
+                    value: None,
                     severity: ValidationSeverity::Error,
                 });
             }
@@ -403,6 +468,7 @@ mod tests {
 
     fn base_config() -> AppConfig {
         AppConfig {
+            unsafe_dev: false,
             server: ServerConfig {
                 host: "0.0.0.0".into(),
                 port: 8080,
@@ -420,13 +486,113 @@ mod tests {
             providers: HashMap::new(),
             strategies: StrategyConfig::default(),
             tools: ToolsConfig::default(),
-            auth: AuthConfig::default(),
+            auth: AuthConfig { enabled: true, api_keys: vec!["sk-test".into()] },
             rate_limiting: RateLimitingConfig::default(),
             logging: LoggingConfig::default(),
             model_catalog: crate::types::ModelCatalog::default(),
             connectors: HashMap::new(),
             features: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn test_defaults_are_fail_closed() {
+        assert_eq!(default_host(), "127.0.0.1");
+        assert_eq!(default_cors_origins(), Vec::<String>::new());
+        assert!(default_rate_limiting_enabled());
+        assert_eq!(default_allowed_shell_commands(), Vec::<String>::new());
+        assert!(!default_enable_http_tool());
+        assert!(AuthConfig::default().enabled, "auth must default to enabled");
+        let mut config = base_config();
+        config.auth = AuthConfig::default();
+        assert!(config.auth.enabled && config.auth.api_keys.is_empty());
+    }
+
+    #[test]
+    fn test_unsafe_dev_defaults_false_via_deserialization() {
+        let yaml = r#"
+server:
+  port: 8080
+resources:
+  max_daily_cost: 10.0
+  max_daily_tokens: 1000000
+"#;
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(!config.unsafe_dev, "unsafe_dev must default to false");
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert!(config.auth.enabled, "auth must default to enabled when deserialized");
+        assert!(config.rate_limiting.enabled, "rate limiting must default to enabled");
+        assert!(config.server.cors.allowed_origins.is_empty());
+        assert!(config.tools.allowed_shell_commands.is_empty());
+        assert!(!config.tools.enable_http_tool);
+    }
+
+    #[test]
+    fn test_release_validate_rejects_auth_disabled_without_unsafe_dev() {
+        let mut config = base_config();
+        config.auth.enabled = false;
+        let errors = config.validate_with_profile(true).unwrap_err();
+        assert!(errors.iter().any(|e| e.field == "auth.enabled"));
+    }
+
+    #[test]
+    fn test_release_validate_rejects_rate_limit_disabled_without_unsafe_dev() {
+        let mut config = base_config();
+        config.rate_limiting.enabled = false;
+        let errors = config.validate_with_profile(true).unwrap_err();
+        assert!(errors.iter().any(|e| e.field == "rate_limiting.enabled"));
+    }
+
+    #[test]
+    fn test_release_validate_rejects_wildcard_cors_without_unsafe_dev() {
+        let mut config = base_config();
+        config.server.cors.allowed_origins = vec!["*".into()];
+        let errors = config.validate_with_profile(true).unwrap_err();
+        assert!(errors.iter().any(|e| e.field == "server.cors.allowed_origins"));
+    }
+
+    #[test]
+    fn test_release_validate_rejects_permissive_tools_without_unsafe_dev() {
+        let mut config = base_config();
+        config.tools.allowed_shell_commands = vec!["cat".into()];
+        config.tools.enable_http_tool = true;
+        let errors = config.validate_with_profile(true).unwrap_err();
+        assert!(errors.iter().any(|e| e.field == "tools.allowed_shell_commands"));
+        assert!(errors.iter().any(|e| e.field == "tools.enable_http_tool"));
+    }
+
+    #[test]
+    fn test_release_validate_rejects_auth_enabled_without_keys() {
+        let mut config = base_config();
+        config.auth.api_keys = vec![];
+        let errors = config.validate_with_profile(true).unwrap_err();
+        assert!(errors.iter().any(|e| e.field == "auth.api_keys"));
+    }
+
+    #[test]
+    fn test_unsafe_dev_allows_insecure_configuration() {
+        let mut config = base_config();
+        config.unsafe_dev = true;
+        config.auth.enabled = false;
+        config.auth.api_keys = vec![];
+        config.rate_limiting.enabled = false;
+        config.server.cors.allowed_origins = vec!["*".into()];
+        config.tools.allowed_shell_commands = vec!["cat".into()];
+        config.tools.enable_http_tool = true;
+        assert!(
+            config.validate_with_profile(true).is_ok(),
+            "unsafe_dev must be the escape hatch for every insecure combination"
+        );
+    }
+
+    #[test]
+    fn test_debug_profile_skips_release_checks() {
+        let mut config = base_config();
+        config.auth.enabled = false;
+        config.rate_limiting.enabled = false;
+        config.server.cors.allowed_origins = vec!["*".into()];
+        config.tools.enable_http_tool = true;
+        assert!(config.validate_with_profile(false).is_ok());
     }
 
     #[test]
@@ -517,7 +683,7 @@ mod tests {
         let mut config = base_config();
         config.server.port = 0;
         config.resources.max_concurrent = 0;
-        config.auth.enabled = true;
+        config.auth.api_keys = vec![];
         let errors = config.validate().unwrap_err();
         assert_eq!(errors.len(), 3);
     }

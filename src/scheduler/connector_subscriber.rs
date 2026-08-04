@@ -100,6 +100,7 @@ mod tests {
 
     fn make_snapshot(generation: u64, connectors: HashMap<String, ConnectorConfig>) -> ConfigSnapshot {
         let config = AppConfig {
+            unsafe_dev: false,
             server: crate::config::ServerConfig {
                 host: "0.0.0.0".into(),
                 port: 8080,

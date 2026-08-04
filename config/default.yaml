@@ -1,10 +1,9 @@
 server:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 8080
   shutdown_timeout_secs: 30
   cors:
-    allowed_origins:
-      - "*"
+    allowed_origins: []
     allowed_methods:
       - GET
       - POST
@@ -66,20 +65,20 @@ connectors:
     config:
       allowed_paths: ["./data"]
 
-# Authentication
+# Authentication (fail-closed: enabled by default; set at least one api_key)
 auth:
-  enabled: false
+  enabled: true
   api_keys: []
   # When enabled, requests must include x-api-key header matching one of api_keys.
   # Whitelisted paths: /health, /ready, /metrics
 
-# Rate limiting (opt-in, disabled by default)
+# Rate limiting (fail-closed: enabled by default)
 rate_limiting:
-  enabled: false
+  enabled: true
   requests_per_minute: 60
   burst_size: 10
   cleanup_interval_secs: 300
-  # Uses token-bucket algorithm per client (identified by x-api-key or x-forwarded-for)
+  # Uses token-bucket algorithm per client (peer address or authenticated identity)
 
 # Structured logging
 logging:
@@ -94,14 +93,11 @@ streaming:
   default_chunk_timeout_secs: 30
 
 tools:
-  allowed_shell_commands:
-    - ls
-    - echo
-    - cat
+  allowed_shell_commands: []
   shell_timeout_secs: 10
   allowed_read_directories:
     - "."
-  enable_http_tool: true
+  enable_http_tool: false
 
 # Feature flags (runtime overridable)
 features:

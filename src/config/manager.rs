@@ -151,6 +151,7 @@ mod tests {
 
     fn minimal_config() -> AppConfig {
         AppConfig {
+            unsafe_dev: false,
             server: ServerConfig {
                 host: "0.0.0.0".into(),
                 port: 8080,
@@ -193,6 +194,9 @@ mod tests {
 resources:
   max_daily_cost: 100.0
   max_daily_tokens: 1000000
+auth:
+  enabled: false
+  api_keys: []
 "#
         .into()
     }

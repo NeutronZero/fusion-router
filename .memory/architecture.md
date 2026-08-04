@@ -116,6 +116,9 @@ These mitigations are already in place. Future audits should treat them as resol
 | Shell interpreter escape (`cmd /c ...`) | Hard blocklist `REJECTED_SHELLS` (`cmd`, `cmd.exe`, `sh`, `bash`, `powershell`, `powershell.exe`, `pwsh`, `zsh`) checked **before** allow-list; reject `cmd` also removed from `config/default.yaml` | `src/tools/shell_tool.rs` (~line 28) |
 | Rate limiter busy-loop when `cleanup_interval_secs = 0` | `cleanup_interval_secs.max(1)` clamps to minimum 1 s; config validation rejects 0 at startup | `src/middleware/rate_limit.rs` (~line 46), `src/config/mod.rs` (~line 351) |
 | Silent LLM response truncation (`finish_reason="length"` + empty content) | `ensure_non_truncated` returns an error instead of silently returning `""` | `src/providers/mod.rs` (~line 88), used in `zen_model.rs`, `openrouter_model.rs` |
+| Insecure defaults (C1) | Defaults are fail-closed: bind `127.0.0.1`, auth on, rate limiting on, CORS same-origin, shell/HTTP tools off; `validate_with_profile(true)` rejects insecure combos; `--unsafe-dev` is the only escape hatch (ADR-035, v0.13.1) | `src/config/mod.rs`, `config/default.yaml`, `src/main.rs` |
+| Rate-limit bucket spoofing / starvation (M2) | Bucket key comes from authenticated identity (`ClientIdentity`) or TCP peer address (`ConnectInfo`) — never `x-forwarded-for`; bucket map capped at 100k (new clients denied at cap); limiter layered inside auth (ADR-035, v0.13.1) | `src/middleware/rate_limit.rs`, `src/middleware/auth.rs`, `src/main.rs` |
+| Timing side-channel on API keys (M3) | Constant-time comparison over SHA-256 digests (`subtle::ConstantTimeEq`); keys > 1 KB rejected before hashing (ADR-035, v0.13.1) | `src/middleware/auth.rs` |
 
 ## External Crates (FusionRouter SDK)
 
