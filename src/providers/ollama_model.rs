@@ -60,7 +60,7 @@ impl Model for OllamaModel {
             "stream": req.stream,
         });
         if let Some(tools) = &req.tools {
-            body["tools"] = serde_json::json!(tools);
+            body["tools"] = serde_json::json!(super::tool_definitions_wire(tools));
         }
 
         Ok(TransportRequest {

@@ -65,7 +65,7 @@ impl Model for OpenRouterModel {
             "max_tokens": req.max_tokens,
         });
         if let Some(tools) = &req.tools {
-            body["tools"] = serde_json::json!(tools);
+            body["tools"] = serde_json::json!(super::tool_definitions_wire(tools));
         }
 
         Ok(TransportRequest {
@@ -208,6 +208,14 @@ mod tests {
             output: None,
         };
         let transport_req = model.format_request(&req, "k").unwrap();
-        assert_eq!(transport_req.body["tools"][0]["name"], "calculator");
+        assert_eq!(transport_req.body["tools"][0]["type"], "function");
+        assert_eq!(
+            transport_req.body["tools"][0]["function"]["name"],
+            "calculator"
+        );
+        assert_eq!(
+            transport_req.body["tools"][0]["function"]["description"],
+            "calc"
+        );
     }
 }

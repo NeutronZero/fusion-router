@@ -97,12 +97,33 @@ pub fn ensure_non_truncated(choice: &serde_json::Value, content: &str) -> anyhow
 /// Extracts provider-native tool calls from a transport response body.
 ///
 /// Law 7 / ADR-037: tool execution is fed ONLY from these structured
+/// OpenAI-compatible wire shape for tool definitions
+/// (`{"type": "function", "function": {name, description, parameters}}`).
+/// `ToolDefinition` itself is the domain model; this maps it onto the
+/// provider transport contract (ADR-037).
+pub fn tool_definitions_wire(
+    tools: &[crate::types::ToolDefinition],
+) -> Vec<serde_json::Value> {
+    tools
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                }
+            })
+        })
+        .collect()
+}
+
 /// `tool_calls` — model output text is never parsed for tool invocation.
 ///
 /// `container` names the node holding the message: `"choices"` (OpenAI wire
 /// shape, index `choice_index`) or `"message"` (Ollama wire shape, index -1).
-pub fn native_tool_calls_from(
-    body: &serde_json::Value,
+pub fn native_tool_calls_from(    body: &serde_json::Value,
     container: &str,
     choice_index: i32,
 ) -> Option<Vec<crate::types::ToolCall>> {
