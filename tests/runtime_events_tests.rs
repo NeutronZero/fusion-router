@@ -61,11 +61,18 @@ async fn test_end_to_end_runtime_event_pipeline() {
     bus.publish(env2).await.unwrap();
     bus.publish(env3).await.unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Projections run on detached tasks; wait until the store has observed
+    // all three events instead of sleeping a fixed amount, which races under
+    // parallel test load (listener abort could drop the last event).
+    let store = PersistentEventStoreProjection::new(temp_dir.clone());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut loaded = Vec::new();
+    while loaded.len() < 3 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        loaded = store.load_events("exec-e2e-1").await.unwrap();
+    }
     handle.abort();
 
-    let store = PersistentEventStoreProjection::new(temp_dir.clone());
-    let loaded = store.load_events("exec-e2e-1").await.unwrap();
     assert_eq!(loaded.len(), 3);
     assert_eq!(loaded[0].sequence_number, 1);
     assert_eq!(loaded[1].sequence_number, 2);

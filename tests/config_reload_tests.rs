@@ -147,12 +147,22 @@ struct TempGuard {
 
 impl TempGuard {
     fn new() -> Self {
+        // Windows SystemTime granularity (~100 ns) means parallel tests in
+        // the same process can observe identical timestamps; pair the clock
+        // with a process-wide monotonic counter so temp dirs never collide
+        // (otherwise tests overwrite each other's config files).
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir =
-            std::env::temp_dir().join(format!("fr_cfg_test_{}_{}", std::process::id(), ts));
+        let dir = std::env::temp_dir().join(format!(
+            "fr_cfg_test_{}_{}_{}",
+            std::process::id(),
+            ts,
+            seq
+        ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         Self { path: dir }
     }
