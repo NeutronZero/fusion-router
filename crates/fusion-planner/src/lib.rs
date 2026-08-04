@@ -1,21 +1,47 @@
 use fusion_core::PlatformError;
 use fusion_ir::WorkflowIR;
-use fusion_kernel::CapabilitySystem;
+use fusion_kernel::{CapabilityRegistry, CapabilitySystem};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExecutionIntent {
+    Quality,
+    Speed,
+    Balanced,
+    Cheap,
+    Offline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlannerKind {
+    Static,
+    Dynamic,
+    CapabilityBased,
+}
 
 pub struct PlannerContract {
     pub intent: String,
+    pub execution_intent: ExecutionIntent,
 }
 
 pub struct PlannerService {
     capability_system: CapabilitySystem,
+    capability_registry: CapabilityRegistry,
 }
 
 impl PlannerService {
     pub fn new(capability_system: CapabilitySystem) -> Self {
-        Self { capability_system }
+        Self {
+            capability_system,
+            capability_registry: CapabilityRegistry::new(),
+        }
     }
 
     pub fn plan(&self, intent: &str) -> Result<WorkflowIR, PlatformError> {
+        self.plan_with_intent(intent, ExecutionIntent::Balanced)
+    }
+
+    pub fn plan_with_intent(&self, intent: &str, execution_intent: ExecutionIntent) -> Result<WorkflowIR, PlatformError> {
         if intent.is_empty() {
             return Err(PlatformError::Planner {
                 code: "EMPTY_INTENT".to_string(),
@@ -24,6 +50,9 @@ impl PlannerService {
             });
         }
         let _ = &self.capability_system;
+        let _ = &self.capability_registry;
+        let _ = &execution_intent;
+
         fusion_ir::WorkflowBuilder::new()
             .task("n1", "CodeGeneration")
             .map_err(|e| PlatformError::Planner {
@@ -49,5 +78,18 @@ impl PlannerService {
                 message: e.to_string(),
                 recovery_suggestion: "Check workflow validation".to_string(),
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_planner_service_with_intents() {
+        let system = CapabilitySystem::new();
+        let planner = PlannerService::new(system);
+        let ir = planner.plan_with_intent("Build web application", ExecutionIntent::Quality).expect("Plan");
+        assert_eq!(ir.nodes().len(), 2);
     }
 }

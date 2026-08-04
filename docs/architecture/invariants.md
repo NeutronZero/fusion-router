@@ -36,3 +36,6 @@ Every execution is assigned a unique, strongly-typed `ExecutionId` at creation t
 
 ### Invariant 11: Versioned Performance Contracts
 Performance contracts (SLOs for Planner <10ms, Compiler <20ms, Scheduler <5ms, Runtime Overhead <10ms, Replay <20ms) are versioned alongside API contracts and enforced via regression testing.
+
+### Invariant 12: Single Source of Truth (Migration Law)
+Every subsystem has exactly one authoritative implementation located in its designated workspace crate (`crates/fusion-*`). Compatibility modules in `src/` may re-export workspace symbols but must never duplicate business logic. No parallel implementations, mirrored logic, or temporary copies are permitted.

@@ -8,3 +8,4 @@ fusion-core = { path = "../fusion-core" }
 fusion-kernel = { path = "../fusion-kernel" }
 fusion-api-internal = { path = "../fusion-api-internal" }
 tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
