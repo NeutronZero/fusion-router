@@ -121,6 +121,8 @@ impl AppState {
         tool_registry.register(Arc::new(ShellCommandTool::new(
             config.tools.allowed_shell_commands.clone(),
             config.tools.shell_timeout_secs,
+            config.tools.allowed_read_directories.clone(),
+            config.tools.allow_unrestricted_args,
         )));
         let tool_registry = Arc::new(tool_registry);
 
@@ -145,7 +147,9 @@ impl AppState {
         let executor = Arc::new(DefaultExecutor::new(
             provider.clone(),
             strategies,
-        ).with_tool_registry(tool_registry.clone()));
+        )
+        .with_tool_registry(tool_registry.clone())
+        .with_allow_auto_exec(config.tools.allow_auto_exec));
 
         let scheduler = Arc::new(DefaultScheduler::new(
             config.resources.max_concurrent_nodes as usize,
@@ -445,6 +449,7 @@ fn error_response(request_id: Uuid, model: &str, error: &str) -> ChatCompletionR
             },
             finish_reason: "error".to_string(),
         }],
+        native_tool_calls: None,
         usage: None,
     }
 }
@@ -770,6 +775,7 @@ mod tests {
                 },
                 finish_reason: "stop".into(),
             }],
+            native_tool_calls: None,
             usage: Some(Usage {
                 prompt_tokens: 15,
                 completion_tokens: 8,

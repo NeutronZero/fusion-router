@@ -54,11 +54,14 @@ impl Model for OllamaModel {
         let mut headers = HashMap::new();
         headers.insert("Content-Type".to_string(), "application/json".to_string());
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": req.model,
             "messages": req.messages,
             "stream": req.stream,
         });
+        if let Some(tools) = &req.tools {
+            body["tools"] = serde_json::json!(tools);
+        }
 
         Ok(TransportRequest {
             url,
@@ -93,6 +96,8 @@ impl Model for OllamaModel {
             total_tokens: (body["prompt_eval_count"].as_u64().unwrap_or(0) + body["eval_count"].as_u64().unwrap_or(0)) as u32,
         };
 
+        let native_tool_calls = super::native_tool_calls_from(&body, "message", -1);
+
         Ok(ChatCompletionResponse {
             id,
             object: "chat.completion".to_string(),
@@ -100,6 +105,7 @@ impl Model for OllamaModel {
             model,
             choices,
             usage: Some(usage),
+            native_tool_calls,
         })
     }
 }

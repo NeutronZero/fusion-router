@@ -88,6 +88,7 @@ mod tests {
                 id: "test".into(), object: "chat.completion".into(), created: 0,
                 model: "test".into(),
                 choices: vec![Choice { index: 0, message: ChatMessage { role: "assistant".into(), content: "ok".into() }, finish_reason: "stop".into() }],
+                native_tool_calls: None,
                 usage: None,
             })
         }

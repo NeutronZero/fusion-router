@@ -22,6 +22,25 @@ The executor dispatches scheduled nodes to the appropriate handler:
 - **Connector nodes** → `Connector` trait (external service connectors)
 - **Capability nodes** → `CapabilityExecutor` (unified capability dispatch)
 
+## Tool Execution Trust Boundary (Law 7 / ADR-037)
+
+- **Model output is data, never commands.** The executor no longer parses
+  model output text for `{"tool": ...}` JSON — a model printing a tool-shaped
+  string returns it as TEXT and never executes it.
+- **Execution is fed only from provider-native `tool_calls`**, surfaced on
+  `ChatCompletionResponse.native_tool_calls` (structured `ToolCall { id,
+  name, arguments }`), normalized per provider in `native_tool_calls_from`.
+- **`DefaultExecutor.allow_auto_exec`** (config `tools.allow_auto_exec`,
+  default `false`): tool calls are executed only when enabled AND the
+  request names a non-empty per-request allowlist
+  (`node.config["tool_allowlist"]`). Empty/absent allowlist ⇒ nothing
+  executes (fail closed); non-allowlisted calls are returned as text with a
+  `reason`.
+- Tool definitions are advertised to the provider (`ChatCompletionRequest.tools`)
+  only when auto-exec is enabled with an allowlist — otherwise the provider
+  cannot emit tool calls at all.
+- Providers without native tool-call support execute no tools (no emulation).
+
 ## Execution State Machine (ADR-029)
 
 ```

@@ -337,6 +337,7 @@ mod tests {
                     },
                     finish_reason: "stop".into(),
                 }],
+                native_tool_calls: None,
                 usage: Some(crate::types::Usage {
                     prompt_tokens: 10,
                     completion_tokens: 5,

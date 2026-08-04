@@ -68,6 +68,7 @@ impl ChatProvider for FailingProvider {
                     },
                     finish_reason: "stop".into(),
                 }],
+                native_tool_calls: None,
                 usage: None,
             })
         } else {
@@ -114,6 +115,7 @@ impl ChatProvider for AlwaysOkProvider {
                 },
                 finish_reason: "stop".into(),
             }],
+            native_tool_calls: None,
             usage: None,
         })
     }

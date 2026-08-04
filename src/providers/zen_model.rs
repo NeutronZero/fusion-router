@@ -69,13 +69,16 @@ impl Model for ZenModel {
             "zen request"
         );
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": api_model,
             "messages": req.messages,
             "stream": req.stream,
             "temperature": req.temperature,
             "max_tokens": req.max_tokens,
         });
+        if let Some(tools) = &req.tools {
+            body["tools"] = serde_json::json!(tools);
+        }
 
         Ok(TransportRequest {
             url,
@@ -127,6 +130,8 @@ impl Model for ZenModel {
             total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
         });
 
+        let native_tool_calls = super::native_tool_calls_from(&body, "choices", 0);
+
         Ok(ChatCompletionResponse {
             id,
             object: "chat.completion".to_string(),
@@ -134,6 +139,7 @@ impl Model for ZenModel {
             model,
             choices,
             usage,
+            native_tool_calls,
         })
     }
 }

@@ -58,6 +58,7 @@ impl ChatProvider for WorkingEchoProvider {
                 },
                 finish_reason: "stop".into(),
             }],
+            native_tool_calls: None,
             usage: Some(fusion_router::types::Usage {
                 prompt_tokens: 10,
                 completion_tokens: 5,
@@ -375,5 +376,171 @@ fn law6_release_fails_closed() {
     assert!(
         insecure.validate_with_profile(true).is_ok(),
         "--unsafe-dev must be the escape hatch for insecure configuration"
+    );
+}
+
+/// Law 7 (ADR-037): tool execution is fed ONLY from provider-native
+/// `tool_calls` under a per-request allowlist. Model output containing a
+/// free-form tool JSON object is returned as TEXT and never executed, and
+/// native calls outside the allowlist are never executed either.
+#[tokio::test]
+async fn law7_no_freeform_tool_parsing() {
+use fusion_router::executor::{DefaultExecutor, Executor};
+    use fusion_router::providers::ChatProvider;
+    use fusion_router::strategies::single::SingleStrategy;
+    use fusion_router::tools::builtin::CalculatorTool;
+    use fusion_router::tools::ToolRegistry;
+    use fusion_router::types::{
+        ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice, ExecutionNode,
+        ExecutionNodeKind, RetryPolicy, StrategyKind, ToolCall, Usage,
+    };
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    struct ToolProvider {
+        content: String,
+        tool_calls: Option<Vec<ToolCall>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ChatProvider for ToolProvider {
+        fn name(&self) -> &str {
+            "tool-provider"
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
+            Ok(ChatCompletionResponse {
+                id: "t".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: "t".into(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: self.content.clone(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
+                usage: Some(Usage {
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                    total_tokens: 2,
+                }),
+                native_tool_calls: self.tool_calls.clone(),
+            })
+        }
+    }
+
+    fn registry() -> Arc<ToolRegistry> {
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(CalculatorTool));
+        Arc::new(reg)
+    }
+
+    fn node(config: serde_json::Value) -> ExecutionNode {
+        ExecutionNode {
+            id: Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMGenerate,
+            strategy: StrategyKind::Single,
+            model: "t".into(),
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
+            fallback: None,
+            config: serde_json::from_value(config).unwrap_or_default(),
+        }
+    }
+
+    // 1. Free-form tool JSON in model output: returned as text, never run.
+    let tool_json = r#"{"tool": "calculator", "args": {"expression": "2+2"}}"#;
+    let executor = Arc::new(
+        DefaultExecutor::new(
+            Arc::new(ToolProvider {
+                content: tool_json.to_string(),
+                tool_calls: None,
+            }),
+            HashMap::new(),
+        )
+        .with_tool_registry(registry())
+        .with_allow_auto_exec(true),
+    );
+    let result = executor
+        .execute_node(&node(serde_json::json!({
+            "tool_allowlist": ["calculator"]
+        })))
+        .await;
+    assert_eq!(result.state, fusion_router::types::NodeState::Succeeded);
+    let output = result.output.expect("output must be present");
+    assert_eq!(
+        output,
+        serde_json::Value::String(tool_json.to_string()),
+        "tool-shaped JSON in content must be returned as text"
+    );
+    assert!(
+        !output.to_string().contains("\"result\""),
+        "the calculator must never have run from free-form JSON"
+    );
+
+    // 2. Native tool_calls: only allowlisted tools execute.
+    let mut strategies: HashMap<StrategyKind, Box<dyn fusion_router::strategies::Strategy + Send + Sync>> =
+        HashMap::new();
+    strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
+    let executor = Arc::new(
+        DefaultExecutor::new(
+            Arc::new(ToolProvider {
+                content: String::new(),
+                tool_calls: Some(vec![ToolCall {
+                    id: "c1".into(),
+                    name: "calculator".into(),
+                    arguments: serde_json::json!({"expression": "2+2"}),
+                }]),
+            }),
+            strategies,
+        )
+        .with_tool_registry(registry())
+        .with_allow_auto_exec(true),
+    );
+    let result = executor
+        .execute_node(&node(serde_json::json!({
+            "tool_allowlist": ["calculator"]
+        })))
+        .await;
+    assert_eq!(result.state, fusion_router::types::NodeState::Succeeded);
+    let output = result.output.expect("tool call results must be produced");
+    assert_eq!(output["tool_calls"][0]["executed"], true);
+    assert_eq!(output["tool_calls"][0]["result"]["result"], 4.0);
+
+    // 3. Native tool_calls for a NON-allowlisted tool: never executed.
+    let executor = Arc::new(
+        DefaultExecutor::new(
+            Arc::new(ToolProvider {
+                content: String::new(),
+                tool_calls: Some(vec![ToolCall {
+                    id: "s1".into(),
+                    name: "search".into(),
+                    arguments: serde_json::json!({"query": "x"}),
+                }]),
+            }),
+            HashMap::new(),
+        )
+        .with_tool_registry(registry())
+        .with_allow_auto_exec(true),
+    );
+    let result = executor
+        .execute_node(&node(serde_json::json!({
+            "tool_allowlist": ["calculator"]
+        })))
+        .await;
+    assert_eq!(result.state, fusion_router::types::NodeState::Succeeded);
+    let output = result.output.expect("tool call results must be produced");
+    assert_eq!(output["tool_calls"][0]["executed"], false);
+    assert!(
+        output["tool_calls"][0]["reason"].as_str().unwrap_or("").contains("allowlist"),
+        "non-allowlisted calls must be surfaced as text with a reason"
     );
 }

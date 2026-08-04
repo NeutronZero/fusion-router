@@ -29,6 +29,7 @@ mod trigger;
 mod connectors;
 mod workflow;
 mod tools;
+mod security;
 mod cache;
 mod middleware;
 mod release;

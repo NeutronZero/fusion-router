@@ -158,6 +158,7 @@ mod tests {
             Ok(ChatCompletionResponse {
                 id: "dummy".into(), object: "chat.completion".into(), created: 0, model: "dummy".into(),
                 choices: vec![Choice { index: 0, message: ChatMessage { role: "assistant".into(), content: "dummy".into() }, finish_reason: "stop".into() }],
+                native_tool_calls: None,
                 usage: None,
             })
         }

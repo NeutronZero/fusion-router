@@ -19,6 +19,7 @@ impl ChatProvider for TestProvider {
         Ok(fusion_router::types::ChatCompletionResponse {
             id: "test".into(), object: "chat.completion".into(),
             created: 0, model: "test".into(), choices: vec![],
+            native_tool_calls: None,
             usage: None,
         })
     }

@@ -27,6 +27,7 @@ pub mod trigger;
 pub mod connectors;
 pub mod workflow;
 pub mod tools;
+pub mod security;
 pub mod cache;
 pub mod middleware;
 

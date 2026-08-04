@@ -94,6 +94,47 @@ pub fn ensure_non_truncated(choice: &serde_json::Value, content: &str) -> anyhow
     Ok(())
 }
 
+/// Extracts provider-native tool calls from a transport response body.
+///
+/// Law 7 / ADR-037: tool execution is fed ONLY from these structured
+/// `tool_calls` — model output text is never parsed for tool invocation.
+///
+/// `container` names the node holding the message: `"choices"` (OpenAI wire
+/// shape, index `choice_index`) or `"message"` (Ollama wire shape, index -1).
+pub fn native_tool_calls_from(
+    body: &serde_json::Value,
+    container: &str,
+    choice_index: i32,
+) -> Option<Vec<crate::types::ToolCall>> {
+    let holder = if container == "choices" {
+        body[container]
+            .as_array()
+            .and_then(|arr| arr.get(choice_index as usize))
+            .map(|c| &c["message"])
+            .unwrap_or(&serde_json::Value::Null)
+    } else {
+        &body[container]
+    };
+
+    let calls = holder["tool_calls"].as_array()?;
+    let parsed: Vec<crate::types::ToolCall> = calls
+        .iter()
+        .filter_map(|tc| {
+            let name = tc["function"]["name"].as_str()?;
+            let arguments = tc["function"]["arguments"]
+                .as_str()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            Some(crate::types::ToolCall {
+                id: tc["id"].as_str().unwrap_or("").to_string(),
+                name: name.to_string(),
+                arguments,
+            })
+        })
+        .collect();
+    if parsed.is_empty() { None } else { Some(parsed) }
+}
+
 #[async_trait]
 pub trait Model: Send + Sync {
     fn id(&self) -> &str;
@@ -291,5 +332,74 @@ mod tests {
             supports_json_mode: false,
         };
         assert!(req.matches(&minimal, &base_pricing()));
+    }
+
+    #[test]
+    fn test_native_tool_calls_openai_choices_shape() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "ok",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "calculator",
+                            "arguments": "{\"a\": 2, \"b\": 3}"
+                        }
+                    }]
+                }
+            }]
+        });
+        let calls = super::native_tool_calls_from(&body, "choices", 0).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "calculator");
+        assert_eq!(calls[0].arguments["a"], 2);
+        assert_eq!(calls[0].arguments["b"], 3);
+    }
+
+    #[test]
+    fn test_native_tool_calls_ollama_message_shape() {
+        let body = serde_json::json!({
+            "message": {
+                "content": "ok",
+                "tool_calls": [{
+                    "function": {
+                        "name": "calculator",
+                        "arguments": "{\"a\": 1, \"b\": 1}"
+                    }
+                }]
+            }
+        });
+        let calls = super::native_tool_calls_from(&body, "message", -1).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "calculator");
+        assert_eq!(calls[0].arguments["a"], 1);
+    }
+
+    #[test]
+    fn test_native_tool_calls_malformed_arguments_yield_empty_object() {
+        let body = serde_json::json!({
+            "message": {
+                "tool_calls": [{
+                    "function": {
+                        "name": "calculator",
+                        "arguments": "not-json"
+                    }
+                }]
+            }
+        });
+        let calls = super::native_tool_calls_from(&body, "message", -1).unwrap();
+        assert_eq!(calls[0].name, "calculator");
+        assert!(calls[0].arguments.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_native_tool_calls_none_when_absent() {
+        let body = serde_json::json!({ "choices": [{ "message": { "content": "plain" } }] });
+        assert!(super::native_tool_calls_from(&body, "choices", 0).is_none());
+        let empty = serde_json::json!({ "message": { "tool_calls": [] } });
+        assert!(super::native_tool_calls_from(&empty, "message", -1).is_none());
     }
 }

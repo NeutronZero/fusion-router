@@ -35,6 +35,7 @@ impl ChatProvider for MockProvider {
                 },
                 finish_reason: "stop".to_string(),
             }],
+            native_tool_calls: None,
             usage: Some(fusion_router::types::Usage {
                 prompt_tokens: 10,
                 completion_tokens: 5,
@@ -275,6 +276,7 @@ impl ChatProvider for MidMockProvider {
                 message: fusion_router::types::ChatMessage { role: "assistant".into(), content: "Hello!".into() },
                 finish_reason: "stop".into(),
             }],
+            native_tool_calls: None,
             usage: Some(fusion_router::types::Usage { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }),
         })
     }

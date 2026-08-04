@@ -108,6 +108,7 @@ mod tests {
                     },
                     finish_reason: "stop".into(),
                 }],
+                native_tool_calls: None,
                 usage: None,
             })
         }

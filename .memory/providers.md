@@ -72,6 +72,12 @@ Three-part split:
 - Circuit breaker prevents cascading failures
 - Provider selection can be policy-influenced
 - Transport abstractions enable heterogeneous backends
+- **Native tool calls (Law 7 / ADR-037):** request bodies include `tools`
+  definitions only when present on `ChatCompletionRequest`; responses
+  normalize `choices[0].message.tool_calls` (OpenAI shape) or
+  `message.tool_calls` (Ollama shape) into typed
+  `ChatCompletionResponse.native_tool_calls` via `native_tool_calls_from`
+  (arguments strings are JSON-parsed into structured values).
 
 ## Related ADRs
 

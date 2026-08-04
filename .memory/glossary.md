@@ -62,11 +62,17 @@
 
 ## L
 
+**Law 7 (Runtime)** — "Tool execution is fed only from provider-native `tool_calls`, never from model output text." Executor parses no free-form JSON for tool invocation; a model printing `{"tool": ...}` yields text only (ADR-037).
+
 **LifecycleManager** — Orchestrates session lifecycle: creation, checkpointing, suspension, resumption, teardown.
 
 ## M
 
 **Model** — Trait for LLM-specific behavior (prompt formatting, response parsing).
+
+## N
+
+**native_tool_calls** — Typed tool-call field on `ChatCompletionResponse` (`Option<Vec<ToolCall>>`), normalized from provider wire shape (`choices[0].message.tool_calls` or Ollama `message.tool_calls`) by `native_tool_calls_from`; the only source of tool execution (Law 7).
 
 ## P
 
@@ -113,6 +119,8 @@
 **StrategyIR** — Strategy-aware IR in the two-layer compiler model.
 
 ## T
+
+**ToolCall** — `{ id, name, arguments: Value }` structured tool invocation bound to the model response by the provider transport; the only source of tool execution (ADR-037).
 
 **TraceInspector** — DevEx tool for execution trace inspection and debugging.
 

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
-use serde_json::Value;
 use tracing::info;
 
 pub mod capability_executor;
@@ -15,7 +14,7 @@ use crate::strategies::Strategy;
 use crate::tools::ToolRegistry;
 use crate::types::{
     ChatCompletionRequest, ChatMessage, ExecutionGraph, ExecutionNode, ExecutionNodeKind,
-    ExecutionSubgraph, NodeExecutionResult, NodeState, StrategyKind, Usage,
+    ExecutionSubgraph, NodeExecutionResult, NodeState, StrategyKind, ToolCall, ToolDefinition, Usage,
 };
 
 #[async_trait]
@@ -30,6 +29,9 @@ pub struct DefaultExecutor {
     #[cfg(feature = "semantic-cache")]
     pub cache: Option<Arc<SemanticCache>>,
     pub tool_registry: Option<Arc<ToolRegistry>>,
+    /// Law 7 / ADR-037: when false (default), provider-native `tool_calls`
+    /// are surfaced as text and NEVER executed.
+    pub allow_auto_exec: bool,
 }
 
 impl DefaultExecutor {
@@ -43,6 +45,7 @@ impl DefaultExecutor {
             #[cfg(feature = "semantic-cache")]
             cache: None,
             tool_registry: None,
+            allow_auto_exec: false,
         }
     }
 
@@ -57,8 +60,120 @@ impl DefaultExecutor {
         self
     }
 
+    pub fn with_allow_auto_exec(mut self, allow: bool) -> Self {
+        self.allow_auto_exec = allow;
+        self
+    }
+
+    /// Request-scoped tool allowlist from the node config. An absent or
+    /// empty allowlist means NO tool may execute (fail closed).
+    fn request_tool_allowlist(node: &ExecutionNode) -> Vec<String> {
+        node.config
+            .get("tool_allowlist")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Tool definitions are advertised to the provider ONLY when auto
+    /// execution is enabled AND the request names an allowlist. Otherwise no
+    /// definitions are sent, so the provider cannot emit tool calls at all.
+    fn request_tool_definitions(&self, node: &ExecutionNode) -> Option<Vec<ToolDefinition>> {
+        if !self.allow_auto_exec {
+            return None;
+        }
+        let registry = self.tool_registry.as_ref()?;
+        let allowlist = Self::request_tool_allowlist(node);
+        if allowlist.is_empty() {
+            return None;
+        }
+        let defs: Vec<ToolDefinition> = allowlist
+            .iter()
+            .filter_map(|name| {
+                let tool = registry.get(name)?;
+                Some(ToolDefinition {
+                    name: tool.name().to_string(),
+                    description: tool.description().to_string(),
+                    parameters: Some(tool.schema()),
+                })
+            })
+            .collect();
+        if defs.is_empty() { None } else { Some(defs) }
+    }
+
+    /// Law 7 / ADR-037: executes provider-native tool calls under the
+    /// per-request allowlist. Calls that are not allowlisted, or that arrive
+    /// while auto-execution is disabled, are returned as text — never run.
+    async fn execute_native_tool_calls(
+        &self,
+        node: &ExecutionNode,
+        calls: &[ToolCall],
+    ) -> serde_json::Value {
+        let allowlist = Self::request_tool_allowlist(node);
+        let mut results = Vec::with_capacity(calls.len());
+        for call in calls {
+            let allowlisted = self.allow_auto_exec
+                && !allowlist.is_empty()
+                && allowlist.iter().any(|t| t == &call.name);
+            let registry_has = self
+                .tool_registry
+                .as_ref()
+                .map(|r| r.contains(&call.name))
+                .unwrap_or(false);
+
+            if allowlisted && registry_has {
+                let registry = self.tool_registry.as_ref().unwrap();
+                match registry
+                    .get(&call.name)
+                    .unwrap()
+                    .execute(call.arguments.clone())
+                    .await
+                {
+                    Ok(result) => {
+                        info!(tool = %call.name, "Tool executed successfully (native tool call)");
+                        results.push(serde_json::json!({
+                            "id": call.id,
+                            "tool": call.name,
+                            "arguments": call.arguments,
+                            "result": result,
+                            "executed": true,
+                        }));
+                    }
+                    Err(e) => {
+                        info!(tool = %call.name, error = %e, "Tool execution failed");
+                        results.push(serde_json::json!({
+                            "id": call.id,
+                            "tool": call.name,
+                            "arguments": call.arguments,
+                            "error": e,
+                            "executed": false,
+                        }));
+                    }
+                }
+            } else {
+                info!(
+                    tool = %call.name,
+                    auto_exec = self.allow_auto_exec,
+                    "Tool call not executed: outside per-request allowlist"
+                );
+                results.push(serde_json::json!({
+                    "id": call.id,
+                    "tool": call.name,
+                    "arguments": call.arguments,
+                    "executed": false,
+                    "reason": "tool not allowed by per-request allowlist",
+                }));
+            }
+        }
+        serde_json::json!({ "tool_calls": results })
+    }
+
     #[tracing::instrument(skip_all, fields(node_id = %node.id, model = %node.model))]
-    fn build_request(node: &ExecutionNode) -> ChatCompletionRequest {
+    fn build_request(&self, node: &ExecutionNode) -> ChatCompletionRequest {
         let mut messages: Vec<ChatMessage> = node
             .config
             .get("messages")
@@ -100,7 +215,7 @@ impl DefaultExecutor {
             stream: false,
             temperature,
             max_tokens,
-            tools: None,
+            tools: self.request_tool_definitions(node),
             files: None,
             execution: None,
             output: None,
@@ -170,7 +285,7 @@ impl Executor for DefaultExecutor {
                 ExecutionNodeKind::LLMGenerate
                 | ExecutionNodeKind::LLMReview
                 | ExecutionNodeKind::LLMJudge => {
-                    let mut request = Self::build_request(sub_node);
+                    let mut request = self.build_request(sub_node);
                     // Judges must see the output of every upstream member.
                     if sub_node.kind == ExecutionNodeKind::LLMJudge {
                         if let Some(froms) = incoming.get(&sub_node.id) {
@@ -239,36 +354,15 @@ impl Executor for DefaultExecutor {
                                 cache.put(&cache_key, serde_json::json!({ "content": content })).await;
                             }
 
-                            if let Some(ref tool_registry) = self.tool_registry {
-                                if let Some(content) = response.choices.first()
-                                    .map(|c| c.message.content.trim().to_string())
-                                    .filter(|s| !s.is_empty())
-                                {
-                                    if let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&content) {
-                                        if let Some(tool_name) = obj.get("tool").and_then(|v| v.as_str()) {
-                                            if tool_registry.contains(tool_name) {
-                                                let tool = tool_registry.get(tool_name).unwrap();
-                                                let tool_args = obj.get("args").cloned().unwrap_or(Value::Null);
-                                                match tool.execute(tool_args).await {
-                                                    Ok(result) => {
-                                                        info!(tool = %tool_name, "Tool executed successfully");
-                                                        output_value = Some(serde_json::json!({
-                                                            "tool": tool_name,
-                                                            "result": result,
-                                                        }));
-                                                    }
-                                                    Err(e) => {
-                                                        info!(tool = %tool_name, error = %e, "Tool execution failed");
-                                                    }
-                                                }
-                                            } else {
-                                                info!(tool = %tool_name, "Unknown tool requested");
-                                            }
-                                        }
-                                    }
+                            // Law 7 / ADR-037: tool execution is fed ONLY from
+                            // provider-native tool_calls. Model output text is
+                            // never parsed for tool invocation.
+                            if let Some(native_calls) = &response.native_tool_calls {
+                                if !native_calls.is_empty() {
+                                    output_value =
+                                        Some(self.execute_native_tool_calls(sub_node, native_calls).await);
                                 }
                             }
-
 
                             if let Some(usage) = response.usage {
                                 accumulated_usage = Some(match accumulated_usage {
@@ -496,6 +590,7 @@ mod tests {
                     },
                     finish_reason: "stop".into(),
                 }],
+                native_tool_calls: None,
                 usage: Some(Usage {
                     prompt_tokens: 10,
                     completion_tokens: 20,
@@ -531,6 +626,7 @@ mod tests {
                     },
                     finish_reason: "stop".into(),
                 }],
+                native_tool_calls: None,
                 usage: Some(Usage {
                     prompt_tokens: 10,
                     completion_tokens: 20,
@@ -736,6 +832,7 @@ mod tests {
                     },
                     finish_reason: "stop".into(),
                 }],
+                native_tool_calls: None,
                 usage: Some(Usage {
                     prompt_tokens: 10,
                     completion_tokens: 20,
@@ -796,6 +893,241 @@ mod tests {
             sees_member_outputs,
             "judge must see member outputs, not just the original prompt. Judge user messages: {:?}",
             judge_user_content
+        );
+    }
+
+    /// Provider with configurable content and provider-native tool_calls.
+    struct ToolCallProvider {
+        content: String,
+        tool_calls: Option<Vec<ToolCall>>,
+    }
+
+    #[async_trait]
+    impl ChatProvider for ToolCallProvider {
+        fn name(&self) -> &str {
+            "tool-call-provider"
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
+            Ok(ChatCompletionResponse {
+                id: "tool".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: "tool-model".into(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: self.content.clone(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
+                usage: None,
+                native_tool_calls: self.tool_calls.clone(),
+            })
+        }
+    }
+
+    fn calculator_registry() -> Arc<ToolRegistry> {
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(crate::tools::builtin::CalculatorTool));
+        registry.register(Arc::new(crate::tools::builtin::SearchTool));
+        Arc::new(registry)
+    }
+
+    fn single_strategies() -> HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> {
+        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
+        strategies
+    }
+
+    /// Law 7 / ADR-037: a model output containing a free-form tool JSON
+    /// object is returned as TEXT and never executed.
+    #[tokio::test]
+    async fn law7_no_freeform_tool_parsing() {
+        let tool_json = r#"{"tool": "calculator", "args": {"expression": "2+2"}}"#;
+        let provider = Arc::new(ToolCallProvider {
+            content: tool_json.to_string(),
+            tool_calls: None,
+        });
+        let executor = DefaultExecutor::new(provider, single_strategies())
+            .with_tool_registry(calculator_registry())
+            .with_allow_auto_exec(true);
+        let mut node = make_llm_node(StrategyKind::Single);
+        node.config.insert(
+            "tool_allowlist".into(),
+            serde_json::json!(["calculator"]),
+        );
+
+        let result = executor.execute_node(&node).await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        let output = result.output.expect("output must be present");
+        assert_eq!(
+            output,
+            serde_json::Value::String(tool_json.to_string()),
+            "tool-shaped JSON in content must be returned as text, never executed"
+        );
+        assert!(
+            !output.to_string().contains("\"result\""),
+            "the calculator must never have run"
+        );
+    }
+
+    /// Law 7: provider-native tool_calls execute ONLY allowlisted tools.
+    #[tokio::test]
+    async fn law7_native_tool_calls_execute_only_allowlisted() {
+        let provider = Arc::new(ToolCallProvider {
+            content: String::new(),
+            tool_calls: Some(vec![
+                ToolCall {
+                    id: "c1".into(),
+                    name: "calculator".into(),
+                    arguments: serde_json::json!({"expression": "2+2"}),
+                },
+                ToolCall {
+                    id: "s1".into(),
+                    name: "search".into(),
+                    arguments: serde_json::json!({"query": "x"}),
+                },
+            ]),
+        });
+        let executor = DefaultExecutor::new(provider, single_strategies())
+            .with_tool_registry(calculator_registry())
+            .with_allow_auto_exec(true);
+        let mut node = make_llm_node(StrategyKind::Single);
+        node.config.insert(
+            "tool_allowlist".into(),
+            serde_json::json!(["calculator"]),
+        );
+
+        let result = executor.execute_node(&node).await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        let output = result.output.expect("tool call results must be produced");
+        let calls = output["tool_calls"].as_array().expect("tool_calls array");
+        assert_eq!(calls.len(), 2);
+        let calc = &calls[0];
+        assert_eq!(calc["tool"], "calculator");
+        assert_eq!(calc["executed"], true);
+        assert_eq!(calc["result"]["result"], 4.0, "calculator must run 2+2");
+        let search = &calls[1];
+        assert_eq!(search["tool"], "search");
+        assert_eq!(search["executed"], false, "search is outside the allowlist");
+        assert!(
+            search["reason"].as_str().unwrap_or("").contains("allowlist"),
+            "non-allowlisted call must explain why it was not executed"
+        );
+    }
+
+    /// Law 7: with auto-execution disabled (default), native tool_calls are
+    /// never executed even when the request names an allowlist.
+    #[tokio::test]
+    async fn law7_native_tool_calls_not_executed_when_auto_exec_disabled() {
+        let provider = Arc::new(ToolCallProvider {
+            content: String::new(),
+            tool_calls: Some(vec![ToolCall {
+                id: "c1".into(),
+                name: "calculator".into(),
+                arguments: serde_json::json!({"expression": "2+2"}),
+            }]),
+        });
+        let executor = DefaultExecutor::new(provider, single_strategies())
+            .with_tool_registry(calculator_registry());
+        let mut node = make_llm_node(StrategyKind::Single);
+        node.config.insert(
+            "tool_allowlist".into(),
+            serde_json::json!(["calculator"]),
+        );
+
+        let result = executor.execute_node(&node).await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        let output = result.output.expect("tool call results must be produced");
+        assert_eq!(
+            output["tool_calls"][0]["executed"],
+            false,
+            "auto-exec disabled must never execute a tool"
+        );
+        assert!(
+            !output.to_string().contains("\"result\""),
+            "the calculator must never have run"
+        );
+    }
+
+    /// Law 7: an empty per-request allowlist blocks all tool execution
+    /// (fail closed), even with auto-exec enabled.
+    #[tokio::test]
+    async fn law7_empty_allowlist_blocks_all_tools() {
+        let provider = Arc::new(ToolCallProvider {
+            content: String::new(),
+            tool_calls: Some(vec![ToolCall {
+                id: "c1".into(),
+                name: "calculator".into(),
+                arguments: serde_json::json!({"expression": "2+2"}),
+            }]),
+        });
+        let executor = DefaultExecutor::new(provider, single_strategies())
+            .with_tool_registry(calculator_registry())
+            .with_allow_auto_exec(true);
+
+        let node = make_llm_node(StrategyKind::Single);
+
+        let result = executor.execute_node(&node).await;
+        assert_eq!(result.state, NodeState::Succeeded);
+        let output = result.output.expect("tool call results must be produced");
+        assert_eq!(
+            output["tool_calls"][0]["executed"],
+            false,
+            "absent allowlist must block all tool execution"
+        );
+    }
+
+    /// Law 7: when auto-exec is enabled with an allowlist, tool definitions
+    /// are advertised to the provider; otherwise the request carries none.
+    #[tokio::test]
+    async fn law7_tool_definitions_only_sent_with_allowlist() {
+        let captured = Arc::new(std::sync::Mutex::new(None::<ChatCompletionRequest>));
+        let provider = Arc::new(CapturingMockProvider(captured.clone()));
+        let executor = DefaultExecutor::new(provider.clone(), single_strategies())
+            .with_tool_registry(calculator_registry())
+            .with_allow_auto_exec(true);
+        let node = make_llm_node(StrategyKind::Single);
+
+        let _ = executor.execute_node(&node).await;
+        let request = captured.lock().unwrap().take().unwrap();
+        assert!(
+            request.tools.is_none(),
+            "no allowlist in request means no tool definitions may be advertised"
+        );
+
+        let mut node = make_llm_node(StrategyKind::Single);
+        node.config.insert(
+            "tool_allowlist".into(),
+            serde_json::json!(["calculator"]),
+        );
+        let _ = executor.execute_node(&node).await;
+        let request = captured.lock().unwrap().take().unwrap();
+        let tools = request.tools.expect("allowlist must advertise tool definitions");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "calculator");
+        assert!(tools[0].parameters.is_some(), "schema must be advertised");
+
+        let executor_disabled = DefaultExecutor::new(provider, single_strategies())
+            .with_tool_registry(calculator_registry());
+        let mut node = make_llm_node(StrategyKind::Single);
+        node.config.insert(
+            "tool_allowlist".into(),
+            serde_json::json!(["calculator"]),
+        );
+        let _ = executor_disabled.execute_node(&node).await;
+        let request = captured.lock().unwrap().take().unwrap();
+        assert!(
+            request.tools.is_none(),
+            "auto-exec disabled must not advertise tool definitions"
         );
     }
 }

@@ -49,6 +49,7 @@ impl ChatProvider for FailingProvider {
                     },
                     finish_reason: "stop".into(),
                 }],
+                native_tool_calls: None,
                 usage: None,
             })
         } else {
@@ -101,6 +102,7 @@ impl ChatProvider for RecoveringProvider {
                     },
                     finish_reason: "stop".into(),
                 }],
+                native_tool_calls: None,
                 usage: None,
             })
         } else if count < self.success_before_fail + self.fail_count {
@@ -119,6 +121,7 @@ impl ChatProvider for RecoveringProvider {
                     },
                     finish_reason: "stop".into(),
                 }],
+                native_tool_calls: None,
                 usage: None,
             })
         }
@@ -164,6 +167,7 @@ impl ChatProvider for AlwaysOkProvider {
                 },
                 finish_reason: "stop".into(),
             }],
+            native_tool_calls: None,
             usage: None,
         })
     }

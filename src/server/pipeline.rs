@@ -235,6 +235,7 @@ impl PipelineStep<ExecutionResult, ChatCompletionResponse> for ResponseBuilderSt
                 },
                 finish_reason: "stop".to_string(),
             }],
+            native_tool_calls: None,
             usage: Some(Usage {
                 prompt_tokens: 0,
                 completion_tokens: 0,

@@ -239,6 +239,14 @@ pub struct ToolsConfig {
     pub allowed_read_directories: Vec<String>,
     #[serde(default = "default_enable_http_tool")]
     pub enable_http_tool: bool,
+    /// Law 7 / ADR-037: provider-native tool_calls are auto-executed only
+    /// when true AND the request names a per-request tool allowlist.
+    #[serde(default = "default_allow_auto_exec")]
+    pub allow_auto_exec: bool,
+    /// Shell tool: skip per-command argument path policy (explicit operator
+    /// opt-out; never for production).
+    #[serde(default = "default_allow_unrestricted_args")]
+    pub allow_unrestricted_args: bool,
 }
 
 fn default_allowed_shell_commands() -> Vec<String> {
@@ -253,6 +261,10 @@ fn default_allowed_read_directories() -> Vec<String> {
 
 fn default_enable_http_tool() -> bool { false }
 
+fn default_allow_auto_exec() -> bool { false }
+
+fn default_allow_unrestricted_args() -> bool { false }
+
 impl Default for ToolsConfig {
     fn default() -> Self {
         Self {
@@ -260,6 +272,8 @@ impl Default for ToolsConfig {
             shell_timeout_secs: default_shell_timeout_secs(),
             allowed_read_directories: default_allowed_read_directories(),
             enable_http_tool: default_enable_http_tool(),
+            allow_auto_exec: default_allow_auto_exec(),
+            allow_unrestricted_args: default_allow_unrestricted_args(),
         }
     }
 }
@@ -525,6 +539,20 @@ resources:
         assert!(config.server.cors.allowed_origins.is_empty());
         assert!(config.tools.allowed_shell_commands.is_empty());
         assert!(!config.tools.enable_http_tool);
+        assert!(!config.tools.allow_auto_exec, "tool auto-execution must default to false");
+        assert!(
+            !config.tools.allow_unrestricted_args,
+            "unrestricted shell args must default to false"
+        );
+    }
+
+    #[test]
+    fn test_tools_config_defaults_are_fail_closed() {
+        let tools = ToolsConfig::default();
+        assert!(!tools.allow_auto_exec);
+        assert!(!tools.allow_unrestricted_args);
+        assert_eq!(default_allow_auto_exec(), false);
+        assert_eq!(default_allow_unrestricted_args(), false);
     }
 
     #[test]

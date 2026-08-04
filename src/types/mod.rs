@@ -381,6 +381,16 @@ pub struct ProviderLimit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// Runtime ABI contract between providers and executor.
+/// Tool execution is fed ONLY from provider-native `tool_calls`
+/// (Law 7 / ADR-037); model output text is never parsed for tool calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatCompletionResponse {
     pub id: String,
     pub object: String,
@@ -388,6 +398,8 @@ pub struct ChatCompletionResponse {
     pub model: String,
     pub choices: Vec<Choice>,
     pub usage: Option<Usage>,
+    #[serde(default)]
+    pub native_tool_calls: Option<Vec<ToolCall>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

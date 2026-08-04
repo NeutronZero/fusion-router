@@ -247,7 +247,7 @@ async fn test_shell_injection() {
         "zsh".to_string(),
         "echo".to_string(),
     ];
-    let tool = ShellCommandTool::new(allowed, 5);
+    let tool = ShellCommandTool::new(allowed, 5, vec![".".into()], false);
 
     // Unallowed command string
     let result = tool

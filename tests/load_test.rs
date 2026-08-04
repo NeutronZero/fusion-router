@@ -38,6 +38,7 @@ impl ChatProvider for LoadMockProvider {
                 },
                 finish_reason: "stop".to_string(),
             }],
+            native_tool_calls: None,
             usage: Some(fusion_router::types::Usage {
                 prompt_tokens: 10,
                 completion_tokens: 5,
@@ -631,6 +632,7 @@ async fn test_high_concurrency_scheduling() {
                     },
                     finish_reason: "stop".to_string(),
                 }],
+                native_tool_calls: None,
                 usage: Some(Usage {
                     prompt_tokens: 10,
                     completion_tokens: 5,

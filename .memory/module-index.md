@@ -110,6 +110,7 @@
 **NetworkConstraints** — `src/target/mod.rs` — Target egress constraints
 **NodeFusion** — `src/compiler/passes/legacy_passes.rs` — Node merging optimization pass
 **NormalizedIntent** — `src/intent/mod.rs` — Canonical goals and constraints (v0.13)
+**native_tool_calls** — `src/providers/mod.rs` — `native_tool_calls_from` helper; typed tool calls on `ChatCompletionResponse` (Law 7/ADR-037)
 
 ## O
 
@@ -159,6 +160,7 @@
 **SchemaBuilder** — `crates/fusion-capability-sdk/src/schema.rs` — JSON Schema builder
 **SchedulingHints** — `src/compiler/passes/legacy_passes.rs` — Scheduling annotation pass
 **SecurityPolicy** — `src/abi/mod.rs` — ABI node security policy
+**security::paths** — `src/security/paths.rs` — Law 10 canonicalize-within helpers (`canonicalize_within`, `is_path_within`, `PathError`)
 **SecurityProfile** — `src/target/mod.rs` — Target security profile
 **SessionSnapshot** — `src/session/types.rs` — Point-in-time execution state
 **SessionStore** (trait) — `src/session/store/mod.rs` — Session persistence interface

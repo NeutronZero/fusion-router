@@ -3,18 +3,39 @@ use serde_json::Value;
 use tokio::process::Command;
 
 use super::Tool;
+use crate::security::paths::canonicalize_within;
 
 const MAX_ARGS: usize = 32;
 const MAX_ARG_LEN: usize = 1024;
 
+/// Commands whose arguments are treated as file paths by convention. For
+/// these, every non-flag argument must canonicalize inside an allowed read
+/// directory (Law 10) unless `allow_unrestricted_args` is set.
+const FILE_READING_COMMANDS: &[&str] = &[
+    "cat", "head", "tail", "grep", "wc", "sort", "uniq", "cut", "sed", "awk",
+    "less", "more", "fold", "nl", "tac", "strings", "diff", "file",
+];
+
 pub struct ShellCommandTool {
     allowed_commands: Vec<String>,
     timeout_secs: u64,
+    allowed_read_directories: Vec<String>,
+    allow_unrestricted_args: bool,
 }
 
 impl ShellCommandTool {
-    pub fn new(allowed_commands: Vec<String>, timeout_secs: u64) -> Self {
-        Self { allowed_commands, timeout_secs }
+    pub fn new(
+        allowed_commands: Vec<String>,
+        timeout_secs: u64,
+        allowed_read_directories: Vec<String>,
+        allow_unrestricted_args: bool,
+    ) -> Self {
+        Self {
+            allowed_commands,
+            timeout_secs,
+            allowed_read_directories,
+            allow_unrestricted_args,
+        }
     }
 
     fn validate_args(args: &[String]) -> Result<(), String> {
@@ -33,6 +54,44 @@ impl ShellCommandTool {
             }
             if arg.contains('\0') {
                 return Err("arguments must not contain NUL bytes".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    /// Per-command argument policy (WP 3.2 / finding C3): for known
+    /// file-reading commands, every non-flag argument is treated as a file
+    /// path and must canonicalize inside an allowed read directory — a
+    /// `cat ../secret` chain cannot read outside the sandbox.
+    fn validate_path_args(&self, cmd: &str, args: &[String]) -> Result<(), String> {
+        if self.allow_unrestricted_args {
+            return Ok(());
+        }
+        if !FILE_READING_COMMANDS.contains(&cmd) {
+            return Ok(());
+        }
+        if self.allowed_read_directories.is_empty() {
+            return Err(format!(
+                "command '{}' reads files but no allowed_read_directories are configured",
+                cmd
+            ));
+        }
+        for arg in args {
+            if arg.starts_with('-') {
+                continue;
+            }
+            let candidate = std::path::PathBuf::from(arg);
+            let within = self
+                .allowed_read_directories
+                .iter()
+                .any(|dir| {
+                    canonicalize_within(std::path::Path::new(dir), &candidate).is_ok()
+                });
+            if !within {
+                return Err(format!(
+                    "argument '{}' for command '{}' is outside allowed read directories {:?}",
+                    arg, cmd, self.allowed_read_directories
+                ));
             }
         }
         Ok(())
@@ -117,6 +176,7 @@ impl Tool for ShellCommandTool {
             .unwrap_or_default();
 
         Self::validate_args(&cmd_args)?;
+        self.validate_path_args(cmd, &cmd_args)?;
 
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs),
@@ -138,12 +198,27 @@ impl Tool for ShellCommandTool {
 mod tests {
     use super::*;
 
+    fn tool(commands: Vec<&str>, timeout: u64) -> ShellCommandTool {
+        ShellCommandTool::new(
+            commands.into_iter().map(String::from).collect(),
+            timeout,
+            vec![".".into()],
+            false,
+        )
+    }
+
+    fn tool_with_dirs(commands: Vec<&str>, dirs: Vec<&str>, unrestricted: bool) -> ShellCommandTool {
+        ShellCommandTool::new(
+            commands.into_iter().map(String::from).collect(),
+            5,
+            dirs.into_iter().map(String::from).collect(),
+            unrestricted,
+        )
+    }
+
     #[tokio::test]
     async fn test_shell_tool_blocked_command() {
-        let tool = ShellCommandTool::new(
-            vec!["ls".to_string(), "echo".to_string()],
-            5,
-        );
+        let tool = tool(vec!["ls", "echo"], 5);
         let result = tool.execute(serde_json::json!({
             "command": "rm -rf /"
         })).await;
@@ -153,8 +228,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_tool_rejected_shell_interpreter_binaries() {
-        let tool = ShellCommandTool::new(
-            vec!["cmd".to_string(), "sh".to_string(), "bash".to_string(), "powershell".to_string(), "powershell.exe".to_string(), "pwsh".to_string(), "zsh".to_string()],
+        let tool = tool(
+            vec!["cmd", "sh", "bash", "powershell", "powershell.exe", "pwsh", "zsh"],
             5,
         );
 
@@ -167,10 +242,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_tool_allowed_command() {
-        let tool = ShellCommandTool::new(
-            vec!["echo".to_string()],
-            5,
-        );
+        let tool = tool(vec!["echo"], 5);
         #[cfg(not(windows))]
         let (cmd, args): (&str, Vec<&str>) = ("echo", vec!["hello world"]);
         #[cfg(windows)]
@@ -194,10 +266,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_tool_missing_args() {
-        let tool = ShellCommandTool::new(
-            vec!["echo".to_string()],
-            5,
-        );
+        let tool = tool(vec!["echo"], 5);
         let result = tool.execute(serde_json::json!({})).await;
         assert!(result.is_err());
     }
@@ -228,10 +297,103 @@ mod tests {
         assert!(ShellCommandTool::validate_args(&["hello".into(), "world".into()]).is_ok());
     }
 
+    #[test]
+    fn test_cat_parent_traversal_rejected() {
+        let tool = tool_with_dirs(vec!["cat"], vec!["."], false);
+        let result = tool.validate_path_args("cat", &["../secret".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("outside allowed read directories"));
+    }
+
+    #[test]
+    fn test_cat_absolute_escape_rejected() {
+        let tool = tool_with_dirs(vec!["cat"], vec!["."], false);
+        let result = tool.validate_path_args("cat", &["/etc/passwd".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cat_missing_path_rejected() {
+        let tool = tool_with_dirs(vec!["cat"], vec!["."], false);
+        let result = tool.validate_path_args("cat", &["no_such_file_anywhere".to_string()]);
+        assert!(result.is_err(), "non-canonicalizable paths must be rejected");
+    }
+
+    #[test]
+    fn test_cat_path_within_allowed_dir_ok() {
+        let tmp = std::env::temp_dir();
+        let unique = format!("_fusion_cat_ok_{}.txt", uuid::Uuid::new_v4());
+        let full = tmp.join(&unique);
+        std::fs::write(&full, "x").unwrap();
+        let result = tool_with_dirs(vec!["cat"], vec![tmp.to_str().unwrap()], false)
+            .validate_path_args("cat", &[full.to_str().unwrap().to_string()]);
+        let _ = std::fs::remove_file(&full);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_flags_are_not_path_checked() {
+        let tmp = std::env::temp_dir();
+        let unique = format!("_fusion_cat_n_{}.txt", uuid::Uuid::new_v4());
+        let full = tmp.join(&unique);
+        std::fs::write(&full, "x").unwrap();
+        let result = tool_with_dirs(vec!["cat"], vec![tmp.to_str().unwrap()], false)
+            .validate_path_args("cat", &["-n".to_string(), full.to_str().unwrap().to_string()]);
+        let _ = std::fs::remove_file(&full);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_non_file_commands_not_path_checked() {
+        let tool = tool_with_dirs(vec!["echo"], vec!["."], false);
+        assert!(tool.validate_path_args("echo", &["../anything".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn test_unrestricted_args_skips_path_policy() {
+        let tool = tool_with_dirs(vec!["cat"], vec!["."], true);
+        assert!(tool.validate_path_args("cat", &["../secret".to_string()]).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_symlink_escape_rejected() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("_fusion_shell_root_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let secret = root.parent().unwrap().join(format!("_fusion_shell_secret_{}", uuid::Uuid::new_v4()));
+        std::fs::write(&secret, "s").unwrap();
+        let link = root.join("link.txt");
+        symlink(&secret, &link).unwrap();
+
+        let result = tool_with_dirs(vec!["cat"], vec![root.to_str().unwrap()], false)
+            .validate_path_args("cat", &[link.to_str().unwrap().to_string()]);
+        let _ = std::fs::remove_file(&secret);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(result.is_err(), "symlink escape must be rejected");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn test_shell_timeout_enforced() {
+        let tool = ShellCommandTool::new(
+            vec!["sleep".to_string()],
+            1,
+            vec![".".into()],
+            false,
+        );
+        let result = tool.execute(serde_json::json!({
+            "command": "sleep",
+            "args": ["5"]
+        })).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("timed out"));
+    }
+
     #[cfg(not(windows))]
     #[tokio::test]
     async fn test_shell_tool_args_passed_verbatim_without_shell() {
-        let tool = ShellCommandTool::new(vec!["echo".to_string()], 5);
+        let tool = tool(vec!["echo"], 5);
         let marker = format!("injected_marker_{}", uuid::Uuid::new_v4());
 
         let result = tool.execute(serde_json::json!({

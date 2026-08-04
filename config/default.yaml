@@ -93,11 +93,15 @@ streaming:
   default_chunk_timeout_secs: 30
 
 tools:
+  # Fail-closed (ADR-035 / Law 7): no shell commands, no HTTP tool, no
+  # automatic tool execution, no unrestricted shell arguments by default.
   allowed_shell_commands: []
   shell_timeout_secs: 10
   allowed_read_directories:
     - "."
   enable_http_tool: false
+  allow_auto_exec: false
+  allow_unrestricted_args: false
 
 # Feature flags (runtime overridable)
 features:
