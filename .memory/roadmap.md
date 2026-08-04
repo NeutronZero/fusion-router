@@ -4,8 +4,8 @@
 |-----------|---------------------------------|--------------|
 | v0.12.x   | Capability Platform             | Complete     |
 | v0.13.0   | Architecture Freeze             | Complete     |
-| **v0.13.1** | **Compiler Core**              | **Next**     |
-| v0.13.2   | Intelligent Runtime             | Planned      |
+| v0.13.1   | Security Hardening              | Complete     |
+| v0.13.2   | Intelligent Runtime             | Next         |
 | v0.13.3   | Adaptive Optimization           | Planned      |
 | v0.14.0   | Distributed Execution           | Future       |
 

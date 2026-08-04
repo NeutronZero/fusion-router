@@ -1,6 +1,6 @@
 # FusionRouter Overview
 
-**Version:** 0.13.0
+**Version:** 0.13.1
 **License:** MIT OR Apache-2.0
 **Language:** Rust (2021 edition)
 

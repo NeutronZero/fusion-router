@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] – 0.13.1 (Security Hardening Milestone)
+## [0.13.1] – 2026-08-04
 
 - **Security Hardening (charter: `docs/implementation/security-hardening-v0.13.1.md`)** — milestone laws 1–10 verified by `tests/security_invariants.rs`
   - **Phase 1 — Compiler Contract Enforcement**: single `build_compiler()` factory (`src/compiler/mod.rs`); policy `Deny` enforced at compile time; capability policy applied on all resolution paths; laws 1/2/4/5 exit-criteria tests end to end
