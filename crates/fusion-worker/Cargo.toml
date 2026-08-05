@@ -6,4 +6,5 @@ edition = "2021"
 [dependencies]
 fusion-core = { path = "../fusion-core" }
 fusion-worker-protocol = { path = "../fusion-worker-protocol" }
+fusion-placement = { path = "../fusion-placement" }
 serde = { version = "1", features = ["derive"] }

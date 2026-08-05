@@ -1036,6 +1036,16 @@ async fn studio_replay_handler(axum::extract::Path(id): axum::extract::Path<Stri
         "bundle_file": format!("{id}.fusion"),
         "total_passes": 9,
         "replay_status": "Ready",
+        "placement_id": format!("PLC-{id}"),
+        "placement_policy": "locality-aware-v1",
+        "cluster_replay": {
+            "total_workers": 2,
+            "worker_assignments": {
+                "n1": "worker_us_east_1",
+                "n2": "worker_us_west_2"
+            },
+            "offline_simulation_side_effects": 0
+        },
         "steps": [
             { "pass_index": 1, "name": "Validation", "delta_nodes": 0 },
             { "pass_index": 2, "name": "Capability Resolution", "delta_nodes": 0 },
