@@ -1226,6 +1226,7 @@ dependencies = [
  "fusion-runtime",
  "fusion-scheduler",
  "fusion-security",
+ "fusion-worker-protocol",
  "futures",
  "http 0.2.12",
  "libloading",

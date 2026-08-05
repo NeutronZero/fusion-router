@@ -96,6 +96,7 @@ fusion-scheduler = { path = "crates/fusion-scheduler" }
 fusion-runtime = { path = "crates/fusion-runtime" }
 fusion-infrastructure = { path = "crates/fusion-infrastructure" }
 fusion-security = { path = "crates/fusion-security" }
+fusion-worker-protocol = { path = "crates/fusion-worker-protocol" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
