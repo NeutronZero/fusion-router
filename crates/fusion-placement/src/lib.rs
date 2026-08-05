@@ -31,6 +31,42 @@ pub struct WorkerCapabilities {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerStatus {
+    pub worker_id: String,
+    pub cpu_utilization_pct: f32,
+    pub memory_available_mb: u64,
+    pub active_executions: u32,
+    pub health_score: f64,
+    pub last_heartbeat_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ExecutionPlanId(pub uuid::Uuid);
+
+impl ExecutionPlanId {
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+}
+
+impl Default for ExecutionPlanId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionPlan {
+    pub plan_id: ExecutionPlanId,
+    pub placement_id: PlacementId,
+    pub execution_id: String,
+    pub execution_order: Vec<String>,
+    pub worker_assignments: HashMap<String, String>,
+    pub max_parallelism: u32,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodePlacementDecision {
     pub node_id: String,
     pub target_worker_id: String,

@@ -18,7 +18,7 @@ fn test_architectural_invariants_exist() {
     assert!(invariants_path.exists(), "docs/architecture/invariants.md must exist");
 
     let content = fs::read_to_string(invariants_path).expect("Read invariants.md");
-    for i in 1..=13 {
+    for i in 1..=15 {
         assert!(content.contains(&format!("Invariant {i}:")), "Must document Invariant {i}");
     }
 }

@@ -42,3 +42,9 @@ Every subsystem has exactly one authoritative implementation located in its desi
 
 ### Invariant 13: Single-Worker Lease Exclusivity
 Every `ExecutionGraph` node is leased by at most one worker at any instant. Workers execute tasks under explicit, time-bounded leases issued by the Placement Engine; expired or revoked leases revert to the Coordinator for crash recovery.
+
+### Invariant 14: Immutable PlacementGraph and ExecutionPlan
+`PlacementGraph` and `ExecutionPlan` are immutable after construction. Neither Placement Engine nor Scheduler mutates past execution plan graphs; retries or failovers generate new versioned plan instances under a new `ExecutionPlanId`.
+
+### Invariant 15: Deterministic Placement Engine
+Given identical `PlacementPolicy`, `ClusterState`, and `ExecutionGraph`, the Placement Engine produces an identical `PlacementGraph` and `PlacementReport`. Placement decisions are 100% deterministic to guarantee side-effect-free offline replay simulation.
