@@ -1284,6 +1284,7 @@ dependencies = [
  "fusion-api-internal",
  "fusion-core",
  "fusion-kernel",
+ "fusion-placement",
  "tokio",
 ]
 

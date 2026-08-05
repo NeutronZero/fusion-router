@@ -51,6 +51,17 @@ pub enum ExecutionState {
     Archived,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionOutcome {
+    pub execution_id: ExecutionId,
+    pub status: ExecutionState,
+    pub output_payload: serde_json::Value,
+    pub total_cost_usd: f64,
+    pub total_duration_ms: u64,
+    pub produced_artifacts: Vec<String>,
+    pub completed_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderLifecycleState {
     NotConfigured,

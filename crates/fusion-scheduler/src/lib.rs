@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use fusion_core::PlatformError;
+pub use fusion_placement::{ExecutionPlan, ExecutionPlanId};
 
 #[async_trait]
 pub trait Scheduler: Send + Sync {
