@@ -1,3 +1,7 @@
+//! **SIMULATION** — Studio-sandbox planner (v0.14 UI vertical).
+//!
+//! `PlannerService::plan` returns a fixed two-node workflow regardless of intent.
+//! NOT wired into the production `src/` monolith planner.
 use fusion_core::PlatformError;
 use fusion_ir::WorkflowIR;
 use fusion_kernel::{CapabilityRegistry, CapabilitySystem};

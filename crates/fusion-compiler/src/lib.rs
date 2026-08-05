@@ -1,3 +1,9 @@
+//! **SIMULATION** — Studio-sandbox compiler (v0.14 UI vertical).
+//!
+//! NOT wired into the production `src/` monolith compiler. Passes are no-ops and
+//! provider scores in `explain_route` / `compile` are hardcoded placeholder data
+//! for the Studio UI. Callers must pass `is_simulation = true` (see
+//! `fusion-studio-api`).
 use fusion_core::PlatformError;
 use fusion_ir::WorkflowIR;
 use serde::{Deserialize, Serialize};

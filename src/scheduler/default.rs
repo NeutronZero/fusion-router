@@ -166,7 +166,7 @@ impl DefaultScheduler {
             let mut handles = Vec::new();
 
             for node in node_clones {
-                let span = info_span!("exec_node", node_id = %node.id, kind = ?node.kind);
+                let span = info_span!("exec_node", node_id = %node.id, instance_id = %instance.instance_id, kind = ?node.kind);
                 let cancel_token = cancel.cloned();
                 handles.push(
                     async move {

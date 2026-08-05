@@ -1,3 +1,10 @@
+//! FusionRouter Studio API — **SIMULATION-ONLY sandbox** (v0.14 UI vertical).
+//!
+//! This BFF serves the Studio UI (embedded HTML and `ui/`) with placeholder data.
+//! Nothing here touches the production request path (`src/` monolith): there is no
+//! scheduler, executor, provider, or `ExecutionGraph` on this path. Provider health,
+//! latencies, scores, chat replies, and dashboards are hardcoded simulations for UI
+//! development. Every response below carries `"simulation": true`.
 use axum::{
     extract::Query as AxumQuery,
     routing::{get, post},
@@ -54,6 +61,7 @@ pub struct ChatResponse {
     pub timeline: Vec<TimelineStep>,
     pub route_scores: Vec<ExplainRouteScore>,
     pub passes_executed: Vec<String>,
+    pub simulated: bool,
 }
 
 use axum::response::Html;
@@ -237,9 +245,9 @@ async fn root_html_handler() -> Html<&'static str> {
             display: flex;
             align-items: center;
             gap: 8px;
-            background: rgba(16, 185, 129, 0.12);
-            color: var(--success);
-            border: 1px solid rgba(16, 185, 129, 0.25);
+            background: rgba(245, 158, 11, 0.12);
+            color: var(--warning);
+            border: 1px solid rgba(245, 158, 11, 0.35);
             padding: 0.4rem 0.75rem;
             border-radius: 20px;
             font-size: 12px;
@@ -404,8 +412,8 @@ async fn root_html_handler() -> Html<&'static str> {
 
         <div class="sidebar-footer">
             <div class="status-badge">
-                <span class="status-dot"></span>
-                v0.14 LTS Foundation
+                <span class="status-dot" style="background: var(--warning); box-shadow: 0 0 8px var(--warning);"></span>
+                SIMULATION SANDBOX
             </div>
         </div>
     </aside>
@@ -414,7 +422,7 @@ async fn root_html_handler() -> Html<&'static str> {
     <div class="content-area">
         <header>
             <div class="header-title" id="header-title">💬 Verification Chat</div>
-            <div class="header-tag">AF-005 Certified &bull; Zero Bypass</div>
+            <div class="header-tag">Simulation Only &bull; Not Production</div>
         </header>
 
         <!-- VIEW 1: CHAT (PRIMARY PRODUCT INTERFACE) -->
@@ -574,12 +582,15 @@ async fn health_handler() -> Json<Value> {
         "status": "Ready",
         "version": "0.14.0",
         "edition": "Studio",
+        "simulation": true,
+        "simulation_note": "SIMULATION-ONLY sandbox; not the production request path",
         "laws_active": 17
     }))
 }
 
 async fn dashboard_handler() -> Json<Value> {
     Json(json!({
+        "simulation": true,
         "overview": {
             "status": "Healthy",
             "active_providers": 6,
@@ -638,7 +649,19 @@ async fn chat_handler(Json(payload): Json<ChatRequest>) -> Json<ChatResponse> {
     });
 
     let compiler = CompilerEngine::new();
-    let compiler_report = compiler.compile(&payload.prompt, &ir, false).unwrap();
+    let compiler_report = compiler
+        .compile(&payload.prompt, &ir, true)
+        .unwrap_or_else(|_| fusion_compiler::CompilerReport {
+            intent: payload.prompt.clone(),
+            ir_version: 1,
+            graph_id: "fallback-graph".into(),
+            compilation_time_ms: 1,
+            route_scores: vec![],
+            passes_executed: vec!["DefaultFallbackPass".into()],
+            pass_diffs: vec![],
+            is_simulation: true,
+            provider_comparison: vec![],
+        });
 
     let timeline = vec![
         TimelineStep { name: "Planning".to_string(), status: "completed".to_string(), duration_ms: 1 },
@@ -661,6 +684,7 @@ async fn chat_handler(Json(payload): Json<ChatRequest>) -> Json<ChatResponse> {
         timeline,
         route_scores: compiler_report.route_scores,
         passes_executed: compiler_report.passes_executed,
+        simulated: true,
     })
 }
 
@@ -827,6 +851,7 @@ async fn studio_list_providers_handler() -> Json<Value> {
     ];
 
     Json(json!({
+        "simulation": true,
         "providers": providers,
         "default_provider_id": "prov_ollama"
     }))
@@ -865,6 +890,7 @@ async fn studio_test_provider_handler(Json(payload): Json<TestStudioProviderRequ
     };
 
     Json(json!({
+        "simulation": true,
         "provider_id": payload.provider_id,
         "status": "Healthy",
         "latency_ms": latency,
@@ -927,9 +953,10 @@ async fn studio_chat_handler(Json(payload): Json<ChatRequest>) -> Json<Value> {
     });
 
     let compiler = CompilerEngine::new();
-    let report = compiler.compile(&payload.prompt, &ir, false).unwrap();
+    let report = compiler.compile(&payload.prompt, &ir, true).unwrap();
 
     Json(json!({
+        "simulation": true,
         "execution_id": exec_id,
         "session_id": payload.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         "prompt": payload.prompt,
@@ -966,9 +993,10 @@ async fn studio_inspector_handler(axum::extract::Path(id): axum::extract::Path<S
         .unwrap();
 
     let compiler = CompilerEngine::new();
-    let report = compiler.compile("AST Inspector Inquiry", &ir, false).unwrap();
+    let report = compiler.compile("AST Inspector Inquiry", &ir, true).unwrap();
 
     Json(json!({
+        "simulation": true,
         "execution_id": id,
         "compiler_report": report,
         "workflow_ir": ir,
@@ -979,6 +1007,7 @@ async fn studio_inspector_handler(axum::extract::Path(id): axum::extract::Path<S
 
 async fn studio_dashboard_handler() -> Json<Value> {
     Json(json!({
+        "simulation": true,
         "overview": {
             "status": "Healthy",
             "active_executions": 2,
@@ -1004,6 +1033,7 @@ async fn studio_dashboard_handler() -> Json<Value> {
 async fn studio_executions_handler() -> Json<Value> {
     let now = chrono::Utc::now().to_rfc3339();
     Json(json!({
+        "simulation": true,
         "executions": [
             {
                 "execution_id": "FR-20260805-000384",
@@ -1031,6 +1061,7 @@ async fn studio_executions_handler() -> Json<Value> {
 
 async fn studio_replay_handler(axum::extract::Path(id): axum::extract::Path<String>) -> Json<Value> {
     Json(json!({
+        "simulation": true,
         "replay_id": format!("replay_{id}"),
         "execution_id": id,
         "bundle_file": format!("{id}.fusion"),

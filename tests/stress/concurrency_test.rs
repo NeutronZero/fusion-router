@@ -58,6 +58,7 @@ fn create_test_graph(nodes_count: usize) -> ExecutionGraph {
             },
             fallback: None,
             config: Default::default(),
+            subgraph: None,
         });
     }
 

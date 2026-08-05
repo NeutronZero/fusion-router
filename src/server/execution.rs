@@ -536,6 +536,7 @@ mod tests {
                     retry_policy: crate::types::RetryPolicy { max_retries: 0, backoff_ms: 0 },
                     fallback: None,
                     config: HashMap::new(),
+                    subgraph: None,
                 },
                 ExecutionNode {
                     id: second_id,
@@ -545,6 +546,7 @@ mod tests {
                     retry_policy: crate::types::RetryPolicy { max_retries: 0, backoff_ms: 0 },
                     fallback: None,
                     config: HashMap::new(),
+                    subgraph: None,
                 },
             ],
             edges: vec![ExecutionEdge {

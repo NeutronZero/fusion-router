@@ -12,7 +12,7 @@ use fusion_router::policy::ast::PolicyParser;
 use fusion_router::providers::ChatProvider;
 use fusion_router::resource::DefaultResourceManager;
 use fusion_router::server::execution::{build_execution_plane, execute_workflow_handler};
-use fusion_router::types::{ModelCatalog, Quota, WorkflowIR};
+use fusion_router::types::{ModelCatalog, Quota};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -453,6 +453,7 @@ use fusion_router::executor::{DefaultExecutor, Executor};
             },
             fallback: None,
             config: serde_json::from_value(config).unwrap_or_default(),
+            subgraph: None,
         }
     }
 

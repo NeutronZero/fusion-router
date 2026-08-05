@@ -207,6 +207,7 @@ impl PrimitiveGraph {
                 retry_policy: retry_policy.clone(),
                 fallback: fallback.clone(),
                 config,
+                subgraph: None,
             });
         }
 

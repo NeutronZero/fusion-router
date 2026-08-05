@@ -21,9 +21,19 @@ async fn main() {
         status: PlatformStatus::Ready,
     });
 
+    // SIMULATION-ONLY sandbox binary. This serves the Studio UI with placeholder
+    // data (see fusion-studio-api) and is NOT the production request path — the
+    // production server is the `fusion-router` monolith in src/main.rs.
+    //
+    // Default port 8787 (NOT 8080) to avoid clashing with the monolith's default.
+    let port: u16 = std::env::var("FUSION_STUDIO_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8787);
+
     let app = fusion_studio_api::router();
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
-    tracing::info!("FusionStudio server listening on http://{}", addr);
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    tracing::info!("FusionStudio SIMULATION server listening on http://{} (simulation-only)", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();

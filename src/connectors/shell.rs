@@ -6,7 +6,6 @@ use fusion_plugin_api::{
     ExecutionError, ExecutionResult, Permission, Plugin, PluginMetadata,
 };
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::Arc;
 use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 
@@ -29,7 +28,7 @@ impl CapabilityPlugin for ShellPlugin {
         vec![CapabilityContract {
             id: CapabilityId::new("shell.exec"),
             version: semver::Version::parse("0.1.0").unwrap(),
-            description: "Executes shell commands in a sandboxed runtime".into(),
+            description: "Executes shell commands (not implemented — fails closed until a sandboxed runtime exists)".into(),
             inputs_schema: json!({"type": "object", "properties": {"command": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"stdout": {"type": "string"}}}),
             permissions: vec![Permission::Filesystem("**".into())],
@@ -60,12 +59,12 @@ impl CapabilityExecutor for ShellPlugin {
                 retryable: false,
             })?;
 
-        let mut metrics = HashMap::new();
-        metrics.insert("latency_ms".to_string(), 5.0);
-
-        Ok(ExecutionResult {
-            outputs: json!({ "stdout": format!("Executing command: {}", cmd) }),
-            metrics,
+        let _ = cmd;
+        Err(ExecutionError {
+            connector: "shell".into(),
+            capability: instance.contract.id.clone(),
+            reason: "shell.exec is not implemented: no sandboxed runtime exists yet; refusing to fabricate command output".into(),
+            retryable: false,
         })
     }
 }
@@ -105,6 +104,27 @@ impl Connector for ShellConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fusion_plugin_api::CapabilityContract;
+
+    fn make_instance() -> CapabilityInstance {
+        CapabilityInstance {
+            contract: CapabilityContract {
+                id: CapabilityId::new("shell.exec"),
+                version: semver::Version::parse("0.1.0").unwrap(),
+                description: "test".into(),
+                inputs_schema: json!({}),
+                outputs_schema: json!({}),
+                permissions: vec![],
+                dependencies: vec![],
+                estimated_cost_usd: 0.0,
+                estimated_latency_ms: 1,
+                reliability_score: 1.0,
+                supports_streaming: false,
+                traits: vec![],
+            },
+            runtime_params: json!({}),
+        }
+    }
 
     #[test]
     fn test_shell_connector_descriptor() {
@@ -112,5 +132,20 @@ mod tests {
         let desc = connector.descriptor();
         assert_eq!(desc.name, "shell");
         assert_eq!(desc.supported_capabilities.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_execution_fails_closed_instead_of_fabricating() {
+        let plugin = ShellPlugin;
+        let err = plugin
+            .execute(&make_instance(), json!({ "command": "rm -rf /" }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.reason.contains("not implemented"),
+            "unexpected reason: {}",
+            err.reason
+        );
+        assert!(!err.retryable);
     }
 }

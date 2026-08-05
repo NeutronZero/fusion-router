@@ -20,11 +20,11 @@
 
 **ClientIdentity** — Authenticated client identifier set by the auth middleware (SHA-256 of the API key) and used by the rate limiter for bucket keying.
 
-**Compiler** — Pure deterministic pass pipeline that lowers `WorkflowIR` → `PrimitiveGraph` → `ExecutionGraph`.
+**Compiler** — Pure deterministic pass pipeline constructed via `build_compiler` that lowers `WorkflowIR` → `ExecutionGraph` through `lower_to_graph`.
 
 **Compiler Pass** — A single pure transformation or validation step in the compiler pipeline.
 
-**Connector** — An adapter for external services (GitHub, Browser, MCP, Filesystem, HTTP, Shell).
+**Connector** — An adapter for external services (GitHub, Browser, MCP, Filesystem, HTTP, Shell). Filesystem/HTTP/GitHub perform real work; Browser/MCP/Shell are honest stubs that fail closed with a "not implemented" error.
 
 **ContextAssembler** — Pipeline stage that builds `ContextSnapshot` from system prompt templates, conversation history, and tool definitions.
 
@@ -76,7 +76,7 @@
 
 ## P
 
-**PassRegistry** — Registry of available compiler passes, supporting plugin extensions.
+**PassManager** — Helper for composing compiler pass lists (`src/compiler/passes/mod.rs`); the production pipeline is the fixed `build_compiler` pass list.
 
 **Pipeline** — The 8-stage request processing pipeline: Server → Context → Requirements → Planner → Compiler → Scheduler → Executor → Providers.
 
@@ -86,7 +86,7 @@
 
 **Policy** — Declarative rules that influence compilation (retry, timeout, budget) and release governance (gates, environments).
 
-**PrimitiveGraph** — The canonical lowered IR form, strategy-expanded, from which `ExecutionGraph` is derived.
+**PrimitiveGraph** — Compiler-internal IR produced by `Strategy::lower`; used for per-node strategy expansion, materialized into `ExecutionSubgraph`s by the compiler's `strategy_expansion` at compile time.
 
 **ProjectionDispatcher** — Decouples event production from consumption in the event system.
 

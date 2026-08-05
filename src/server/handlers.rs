@@ -570,7 +570,7 @@ async fn anthropic_stream_response(
                         "stop_sequence": null,
                         "usage": { "input_tokens": 0, "output_tokens": 0 }
                     }
-                })).unwrap());
+                })).unwrap_or_default());
 
             let content_block_start = Event::default()
                 .event("content_block_start")
@@ -578,11 +578,11 @@ async fn anthropic_stream_response(
                     "type": "content_block_start",
                     "index": 0,
                     "content_block": { "type": "text", "text": "" }
-                })).unwrap());
+                })).unwrap_or_default());
 
             let ping = Event::default()
                 .event("ping")
-                .data(serde_json::to_string(&serde_json::json!({ "type": "ping" })).unwrap());
+                .data(serde_json::to_string(&serde_json::json!({ "type": "ping" })).unwrap_or_default());
 
             let header_stream = stream::iter(vec![Ok(message_start), Ok(content_block_start), Ok(ping)]);
 
@@ -596,7 +596,7 @@ async fn anthropic_stream_response(
                                 "type": "content_block_delta",
                                 "index": 0,
                                 "delta": { "type": "text_delta", "text": text }
-                            })).unwrap()))
+                            })).unwrap_or_default()))
                     }
                     Err(e) => {
                         Ok(Event::default()
@@ -604,7 +604,7 @@ async fn anthropic_stream_response(
                             .data(serde_json::to_string(&serde_json::json!({
                                 "type": "error",
                                 "error": { "type": "api_error", "message": e.to_string() }
-                            })).unwrap()))
+                            })).unwrap_or_default()))
                     }
                 }
             });
@@ -614,7 +614,7 @@ async fn anthropic_stream_response(
                 .data(serde_json::to_string(&serde_json::json!({
                     "type": "content_block_stop",
                     "index": 0
-                })).unwrap());
+                })).unwrap_or_default());
 
             let message_delta = Event::default()
                 .event("message_delta")
@@ -622,13 +622,13 @@ async fn anthropic_stream_response(
                     "type": "message_delta",
                     "delta": { "stop_reason": "end_turn", "stop_sequence": null },
                     "usage": { "output_tokens": 0 }
-                })).unwrap());
+                })).unwrap_or_default());
 
             let message_stop = Event::default()
                 .event("message_stop")
                 .data(serde_json::to_string(&serde_json::json!({
                     "type": "message_stop"
-                })).unwrap());
+                })).unwrap_or_default());
 
             let footer_stream = stream::iter(vec![
                 Ok(content_block_stop),
@@ -644,7 +644,7 @@ async fn anthropic_stream_response(
                 .data(serde_json::to_string(&serde_json::json!({
                     "type": "error",
                     "error": { "type": "api_error", "message": e.to_string() }
-                })).unwrap());
+                })).unwrap_or_default());
             Box::pin(stream::once(async move { Ok(error_evt) }))
         }
     };

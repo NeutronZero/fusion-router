@@ -5,14 +5,12 @@ pub mod passes;
 pub mod registry;
 pub mod optimization;
 pub mod pipeline;
+pub mod strategy_expansion;
 
 use async_trait::async_trait;
 use std::sync::Arc;
 use crate::types::{CompilerError, ExecutionGraph, WorkflowIR};
 pub use passes::CompilerPass;
-pub use fusion_compiler::{
-    CompilerEngine, CompilerReport, CompilerPassDiff, ExplainRouteScore, ProviderComparisonCandidate,
-};
 
 #[async_trait]
 pub trait Compiler: Send + Sync {
@@ -105,6 +103,7 @@ pub(crate) fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerE
             },
             fallback: None,
             config: ir_node.config.clone(),
+            subgraph: None,
         });
     }
 
@@ -114,6 +113,14 @@ pub(crate) fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerE
             to: ir_edge.to,
             condition: ir_edge.condition.clone(),
         });
+    }
+
+    // Compile-time strategy expansion: lower every non-passthrough strategy
+    // node into a prebuilt `ExecutionSubgraph` (pure, deterministic — see
+    // `strategy_expansion`). The executor executes these subgraphs directly
+    // and no longer lowers strategies on the live path.
+    for node in &mut exec_nodes {
+        node.subgraph = strategy_expansion::expanded_subgraph(node);
     }
 
     let total_cost = (ir.metadata.estimated_cost * 1000.0) as u64;

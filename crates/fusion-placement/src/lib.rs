@@ -67,6 +67,14 @@ pub struct ExecutionPlan {
     pub created_at: String,
 }
 
+impl ExecutionPlan {
+    pub fn plan_id(&self) -> &ExecutionPlanId { &self.plan_id }
+    pub fn placement_id(&self) -> &PlacementId { &self.placement_id }
+    pub fn execution_id(&self) -> &str { &self.execution_id }
+    pub fn execution_order(&self) -> &[String] { &self.execution_order }
+    pub fn worker_assignments(&self) -> &HashMap<String, String> { &self.worker_assignments }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodePlacementDecision {
     pub node_id: String,
@@ -80,6 +88,10 @@ pub struct NodePlacementDecision {
     pub total_score: f64,
 }
 
+impl NodePlacementDecision {
+    pub fn is_optimal(&self) -> bool { self.total_score >= 0.80 }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlacementReport {
     pub placement_id: PlacementId,
@@ -90,6 +102,15 @@ pub struct PlacementReport {
     pub rejected_workers: Vec<String>,
     pub generated_at: String,
     pub total_placement_time_ms: u64,
+}
+
+impl PlacementReport {
+    pub fn summary_log(&self) -> String {
+        format!(
+            "PlacementReport[id={}, exec={}, decisions={}]",
+            self.placement_id.0, self.execution_id, self.node_decisions.len()
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +126,10 @@ pub struct PlacementGraph {
     pub execution_id: String,
     pub nodes: Vec<PlacementNode>,
     pub placement_policy: String,
+}
+
+impl PlacementGraph {
+    pub fn nodes(&self) -> &[PlacementNode] { &self.nodes }
 }
 
 pub struct PlacementEngine {
@@ -154,7 +179,20 @@ impl PlacementEngine {
             });
         }
 
-        let placement_id = PlacementId::new();
+        // Deterministic Placement ID generation using standard hashing of execution context
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        exec_id.0.hash(&mut hasher);
+        ir.nodes().len().hash(&mut hasher);
+        self.policy_name.hash(&mut hasher);
+        let h1 = hasher.finish();
+        
+        let mut hasher2 = std::collections::hash_map::DefaultHasher::new();
+        h1.hash(&mut hasher2);
+        let h2 = hasher2.finish();
+        
+        let u128_val = ((h1 as u128) << 64) | (h2 as u128);
+        let placement_id = PlacementId(uuid::Uuid::from_u128(u128_val));
 
         let graph = PlacementGraph {
             placement_id: placement_id.clone(),
@@ -166,11 +204,11 @@ impl PlacementEngine {
         let report = PlacementReport {
             placement_id,
             execution_id: exec_id.0.to_string(),
-            graph_hash: 428912384,
+            graph_hash: h1,
             placement_policy: self.policy_name.clone(),
             node_decisions: decisions,
             rejected_workers: vec!["worker_eu_central_1".to_string()],
-            generated_at: chrono::Utc::now().to_rfc3339(),
+            generated_at: "2026-08-05T00:00:00Z".to_string(),
             total_placement_time_ms: 1,
         };
 
@@ -200,6 +238,12 @@ pub struct ExecutionLease {
     pub is_revoked: bool,
 }
 
+impl ExecutionLease {
+    pub fn is_expired(&self, current_time_ms: u64) -> bool {
+        self.is_revoked || (self.ttl_ms > 0 && current_time_ms >= self.granted_at_ms + self.ttl_ms)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionLeaseManager {
     leases: Arc<RwLock<HashMap<String, ExecutionLease>>>,
@@ -215,17 +259,28 @@ impl ExecutionLeaseManager {
     /// Grants an exclusive, single-worker lease under Invariant 13.
     pub fn grant_lease(&self, exec_id: &str, node_id: &str, worker_id: &str, ttl_ms: u64) -> Result<ExecutionLease, PlatformError> {
         let lease_key = format!("lease:{}:{}:{}", exec_id, node_id, worker_id);
-        let mut map = self.leases.write().unwrap();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
 
-        // Enforce Invariant 13: Single-Worker Lease Exclusivity
+        let mut map = self.leases.write().unwrap();
+        let mut prev_epoch = 0u64;
+
+        // Enforce Invariant 13: Single-Worker Lease Exclusivity & Expiration
         for existing in map.values() {
-            if existing.execution_id == exec_id && existing.node_id == node_id && !existing.is_revoked {
-                if existing.worker_id != worker_id {
-                    return Err(PlatformError::Runtime {
-                        code: "ERR_LEASE_VIOLATION".into(),
-                        message: format!("Node {} already leased to worker {}", node_id, existing.worker_id),
-                        recovery_suggestion: "Wait for existing lease to expire or revoke it before reissuing".into(),
-                    });
+            if existing.execution_id == exec_id && existing.node_id == node_id {
+                if !existing.is_expired(now_ms) {
+                    if existing.worker_id != worker_id {
+                        return Err(PlatformError::Runtime {
+                            code: "ERR_LEASE_VIOLATION".into(),
+                            message: format!("Node {} already leased to worker {}", node_id, existing.worker_id),
+                            recovery_suggestion: "Wait for existing lease to expire or revoke it before reissuing".into(),
+                        });
+                    }
+                    prev_epoch = existing.epoch;
+                } else if existing.epoch > prev_epoch {
+                    prev_epoch = existing.epoch;
                 }
             }
         }
@@ -235,8 +290,8 @@ impl ExecutionLeaseManager {
             execution_id: exec_id.to_string(),
             node_id: node_id.to_string(),
             worker_id: worker_id.to_string(),
-            epoch: 1,
-            granted_at_ms: 1000,
+            epoch: prev_epoch + 1,
+            granted_at_ms: now_ms,
             ttl_ms,
             is_revoked: false,
         };
@@ -247,9 +302,15 @@ impl ExecutionLeaseManager {
 
     pub fn renew_lease(&self, lease_key: &str) -> bool {
         let mut map = self.leases.write().unwrap();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
         if let Some(lease) = map.get_mut(lease_key) {
-            if !lease.is_revoked {
+            if !lease.is_expired(now_ms) {
                 lease.epoch += 1;
+                lease.granted_at_ms = now_ms;
                 return true;
             }
         }

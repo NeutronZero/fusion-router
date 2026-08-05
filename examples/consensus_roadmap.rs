@@ -39,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
         retry_policy: RetryPolicy { max_retries: 2, backoff_ms: 1000 },
         fallback: None,
         config: std::collections::HashMap::new(),
+        subgraph: None,
     };
     let execution_graph = graph.to_execution_graph(
         template.strategy.clone(),

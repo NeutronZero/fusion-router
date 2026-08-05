@@ -45,34 +45,35 @@ Planner ─── Produces WorkflowIR
 Compiler ─── Pure deterministic passes, no LLM calls
   src/compiler/
   │
-  ├── 1. ConstraintValidation ─── Validates WorkflowIR structure
+  ├── build_compiler ─── Sole production construction path (ADR-034)
+  │     src/compiler/mod.rs
+  │
+  ├── 1. ConstraintValidation ─── Validates WorkflowIR structure (non-empty)
   │     src/compiler/passes/legacy_passes.rs
   │
-  ├── 2. CapabilityResolution ─── Binds abstract capability → concrete instance
-  │     src/planner/resolver/capability/
-  │
-  ├── 3. BudgetOptimisation ─── Applies resource budgets from policy
+  ├── 2. ControlFlowValidation ─── Validates edges, control-flow node shapes, acyclicity
   │     src/compiler/passes/legacy_passes.rs
   │
-  ├── 4. NodeFusion ─── Merges compatible sequential nodes
+  ├── 3. ModelResolution ─── Binds models from ModelCatalog when unspecified
   │     src/compiler/passes/legacy_passes.rs
   │
-  ├── 5. RetryFallbackInsertion ─── Wraps nodes with retry/fallback
+  ├── 4. BudgetOptimisation ─── Applies resource budgets via ResourceManager
   │     src/compiler/passes/legacy_passes.rs
   │
-  ├── 6. SchedulingHints ─── Annotates nodes with scheduling metadata
-  │     src/compiler/passes/legacy_passes.rs
+  ├── 5. PolicyCompilerPass (optional) ─── Appended when PolicyIR supplied; deny = compile error
+  │     src/compiler/passes/policy.rs
   │
-  └── 7. GraphVerification ─── Validates final ExecutionGraph
-        src/compiler/passes/legacy_passes.rs
+  └── lower_to_graph ─── Direct structural lowering WorkflowIR → ExecutionGraph
+        src/compiler/mod.rs
       │
       ▼
 ┌──────────────────────────────────────────────────┐
 │  ExecutionGraph                                   │
-│  src/types/execution.rs                          │
-│  12 node kinds: LLMRequest, Strategy, ToolCall,  │
-│  Connector, Conditional, Loop, Split, Join,      │
-│  Barrier, Transform, Gate, Subgraph              │
+│  src/types/mod.rs                                │
+│  10 node kinds: LLMGenerate, LLMReview, LLMJudge,│
+│  Transform, Gate, Conditional, Loop, Split,      │
+│  Join, Barrier                                   │
+│  (strategy is a field on every node)             │
 │  docs/specifications/execution-graph.md          │
 │  docs/specifications/compiler-passes.md          │
 └──────────────────────────────────────────────────┘
@@ -133,6 +134,18 @@ Triggers                      Connectors
   src/trigger/                   src/connectors/
 ```
 
+## v0.13 Contract Bridges (frozen contracts ↔ live v0.12 path)
+
+```
+NormalizedIntent → WorkflowIR (fusion_ir)  src/intent/lowering.rs
+      ▼  ir::adapter::workflow_to_types     src/ir/adapter.rs   (deterministic id hashing)
+types::WorkflowIR → build_compiler → ExecutionGraph   (live path)
+      ▼  abi::from_graph::abi_from_graph   src/abi/from_graph.rs  (ABI generator, contract 3)
+ExecutionAbi → abi::to_graph::graph_from_abi         src/abi/to_graph.rs  (runtime binds providers)
+      ▼  eri::local_runtime::LocalEri      src/eri/local_runtime.rs  (contract 5 over scheduler/executor)
+Verified end-to-end by tests/contract_wiring.rs
+```
+
 ## External SDK Crates
 
 ```
@@ -156,7 +169,7 @@ fusion-capability-sdk (crates/fusion-capability-sdk/)
 ```
 Planner ───────────→ WorkflowIR ──────────→ Compiler
   May call LLMs       May reference          Pure, deterministic
-  (DynamicPlanner)    capabilities           7 passes
+  (DynamicPlanner)    capabilities           4 mandatory passes + optional policy pass
                        No provider refs       No LLM calls
 
 Compiler ──────────→ ExecutionGraph ──────→ Scheduler

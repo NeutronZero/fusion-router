@@ -88,6 +88,7 @@ impl CapabilityGraphLowerer {
                 },
                 fallback: None,
                 config,
+                subgraph: None,
             });
         }
 

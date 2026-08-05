@@ -33,4 +33,8 @@ impl StrategyRegistry {
     pub fn contains(&self, name: &str) -> bool {
         self.strategies.contains_key(&name.to_lowercase())
     }
+
+    pub fn strategy_count(&self) -> usize {
+        self.strategies.len()
+    }
 }

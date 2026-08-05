@@ -4,7 +4,6 @@ use fusion_plugin_api::{
     ExecutionError, ExecutionResult, Permission, Plugin, PluginMetadata,
 };
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::Arc;
 use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 
@@ -27,7 +26,7 @@ impl CapabilityPlugin for BrowserPlugin {
         vec![CapabilityContract {
             id: CapabilityId::new("browser.navigate"),
             version: semver::Version::parse("0.1.0").unwrap(),
-            description: "Navigates a browser to a URL".into(),
+            description: "Navigates a browser to a URL (not implemented — fails closed until a browser driver exists)".into(),
             inputs_schema: json!({"type": "object", "properties": {"url": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"content": {"type": "string"}}}),
             permissions: vec![Permission::Network],
@@ -58,12 +57,12 @@ impl CapabilityExecutor for BrowserPlugin {
                 retryable: false,
             })?;
 
-        let mut metrics = HashMap::new();
-        metrics.insert("latency_ms".to_string(), 500.0);
-
-        Ok(ExecutionResult {
-            outputs: json!({ "content": format!("Content of {}", url) }),
-            metrics,
+        let _ = url;
+        Err(ExecutionError {
+            connector: "browser".into(),
+            capability: instance.contract.id.clone(),
+            reason: "browser.navigate is not implemented: no browser driver exists; refusing to fabricate page content".into(),
+            retryable: false,
         })
     }
 }
@@ -103,6 +102,27 @@ impl Connector for BrowserConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fusion_plugin_api::CapabilityContract;
+
+    fn make_instance() -> CapabilityInstance {
+        CapabilityInstance {
+            contract: CapabilityContract {
+                id: CapabilityId::new("browser.navigate"),
+                version: semver::Version::parse("0.1.0").unwrap(),
+                description: "test".into(),
+                inputs_schema: json!({}),
+                outputs_schema: json!({}),
+                permissions: vec![],
+                dependencies: vec![],
+                estimated_cost_usd: 0.0,
+                estimated_latency_ms: 1,
+                reliability_score: 1.0,
+                supports_streaming: false,
+                traits: vec![],
+            },
+            runtime_params: json!({}),
+        }
+    }
 
     #[test]
     fn test_browser_connector_descriptor() {
@@ -110,5 +130,20 @@ mod tests {
         let desc = connector.descriptor();
         assert_eq!(desc.name, "browser");
         assert_eq!(desc.supported_capabilities.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_execution_fails_closed_instead_of_fabricating() {
+        let plugin = BrowserPlugin;
+        let err = plugin
+            .execute(&make_instance(), json!({ "url": "https://example.com" }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.reason.contains("not implemented"),
+            "unexpected reason: {}",
+            err.reason
+        );
+        assert!(!err.retryable);
     }
 }

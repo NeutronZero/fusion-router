@@ -5,10 +5,26 @@ use fusion_plugin_api::{
 };
 use serde_json::json;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
+use crate::security::paths::canonicalize_within;
 
-pub struct FilesystemPlugin;
+/// Reads files from the filesystem (real I/O, Law 10 path containment).
+///
+/// The trust root defaults to the process working directory; any candidate
+/// path must canonicalize inside it. Missing or escaping paths fail closed.
+pub struct FilesystemPlugin {
+    root: PathBuf,
+}
+
+impl Default for FilesystemPlugin {
+    fn default() -> Self {
+        Self {
+            root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        }
+    }
+}
 
 impl Plugin for FilesystemPlugin {
     fn metadata(&self) -> PluginMetadata {
@@ -58,11 +74,28 @@ impl CapabilityExecutor for FilesystemPlugin {
                 retryable: false,
             })?;
 
+        let canonical = canonicalize_within(&self.root, std::path::Path::new(path)).map_err(
+            |err| ExecutionError {
+                connector: "filesystem".into(),
+                capability: instance.contract.id.clone(),
+                reason: format!("path rejected (Law 10): {err}"),
+                retryable: false,
+            },
+        )?;
+
+        let started = std::time::Instant::now();
+        let content = tokio::fs::read_to_string(&canonical).await.map_err(|err| ExecutionError {
+            connector: "filesystem".into(),
+            capability: instance.contract.id.clone(),
+            reason: format!("failed to read {}: {err}", canonical.display()),
+            retryable: false,
+        })?;
+
         let mut metrics = HashMap::new();
-        metrics.insert("latency_ms".to_string(), 1.0);
+        metrics.insert("latency_ms".to_string(), started.elapsed().as_secs_f64() * 1000.0);
 
         Ok(ExecutionResult {
-            outputs: json!({ "content": format!("Content of {}", path) }),
+            outputs: json!({ "content": content }),
             metrics,
         })
     }
@@ -75,7 +108,7 @@ pub struct FilesystemConnector {
 impl FilesystemConnector {
     pub fn new() -> Self {
         Self {
-            plugin: Arc::new(FilesystemPlugin),
+            plugin: Arc::new(FilesystemPlugin::default()),
         }
     }
 }
@@ -103,6 +136,33 @@ impl Connector for FilesystemConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fusion_plugin_api::CapabilityContract;
+
+    fn make_instance() -> CapabilityInstance {
+        CapabilityInstance {
+            contract: CapabilityContract {
+                id: CapabilityId::new("fs.read"),
+                version: semver::Version::parse("0.1.0").unwrap(),
+                description: "test".into(),
+                inputs_schema: json!({}),
+                outputs_schema: json!({}),
+                permissions: vec![],
+                dependencies: vec![],
+                estimated_cost_usd: 0.0,
+                estimated_latency_ms: 1,
+                reliability_score: 1.0,
+                supports_streaming: false,
+                traits: vec![],
+            },
+            runtime_params: json!({}),
+        }
+    }
+
+    fn temp_root() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("_fusion_fs_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn test_filesystem_connector_descriptor() {
@@ -110,5 +170,49 @@ mod tests {
         let desc = connector.descriptor();
         assert_eq!(desc.name, "filesystem");
         assert_eq!(desc.supported_capabilities.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_reads_real_file_content() {
+        let root = temp_root();
+        let file = root.join("a.txt");
+        std::fs::write(&file, "hello from disk").unwrap();
+        let plugin = FilesystemPlugin { root };
+        let result = plugin
+            .execute(
+                &make_instance(),
+                json!({ "path": file.to_str().unwrap() }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.outputs["content"], "hello from disk");
+        let _ = std::fs::remove_dir_all(&file.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_rejects_path_escaping_trust_root() {
+        let root = temp_root();
+        std::fs::write(root.join("inside.txt"), "x").unwrap();
+        let escape = format!("{}\\..\\..\\escape.txt", root.display());
+        let plugin = FilesystemPlugin { root };
+        let err = plugin
+            .execute(&make_instance(), json!({ "path": escape }))
+            .await
+            .unwrap_err();
+        assert!(err.reason.contains("Law 10"), "unexpected reason: {}", err.reason);
+        std::fs::remove_dir_all(plugin.root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_missing_file_returns_error() {
+        let root = temp_root();
+        let plugin = FilesystemPlugin { root };
+        let missing = format!("{}\\nope.txt", plugin.root.display());
+        let err = plugin
+            .execute(&make_instance(), json!({ "path": missing }))
+            .await
+            .unwrap_err();
+        assert!(!err.reason.is_empty());
+        let _ = std::fs::remove_dir_all(&plugin.root);
     }
 }

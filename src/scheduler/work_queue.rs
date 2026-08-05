@@ -225,6 +225,7 @@ mod tests {
             retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
             fallback: None,
             config: HashMap::new(),
+            subgraph: None,
         }
     }
 

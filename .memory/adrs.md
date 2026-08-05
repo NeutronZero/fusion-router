@@ -22,7 +22,7 @@
 | 016 | Intent-Oriented Execution | Approved | Clients express intent/mode/constraints, not mechanics |
 | 017 | Execution Runtime ABI | Accepted | ExecutionResult formal ABI, single scheduler loop, compiler owns graphs |
 | 018 | Strategy SDK | Proposed | Two-layer IR (StrategyIR, PrimitiveIR), deterministic replay |
-| 019 | Primitive Execution Graph Alignment | Accepted | PrimitiveGraph canonical, ExecutionGraph derived via to_execution_graph() |
+| 019 | Primitive Execution Graph Alignment | Accepted | PrimitiveGraph canonical; ExecutionGraph derived via `to_execution_graph()` — used for strategy expansion (executor-side today, not a compiler stage) |
 | 020 | Compiler Optimization Framework | Accepted | 6-pass taxonomy, 7 selection criteria, legality rules, rollback safety |
 | 021 | Capability Platform | Proposed | Immutable CapabilityRegistry, unified execution, freeze at startup |
 | 022 | Plugin ABI | Proposed | Version negotiation, metadata/execution separation |

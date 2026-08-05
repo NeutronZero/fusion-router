@@ -71,7 +71,7 @@ Each entry specifies:
 |---|---|
 | **Read** | `capability-system.md`, `adrs.md` (ADR-021, 022, 023, 028) |
 | **Files** | `src/capability/`, `src/planner/resolver/capability/`, `crates/fusion-capability-sdk/`, `crates/fusion-capability-macros/`, `crates/fusion-plugin-api/` |
-| **May affect** | Compiler (Capability Resolution pass), Execution (CapabilityExecutor), Plugin system |
+| **May affect** | Compiler (pass pipeline), Execution (CapabilityExecutor), Plugin system |
 | **Never modify** | Planner intent types. Scheduler output selection. |
 | **Tests** | `tests/`, crate-level tests in SDK crates |
 | **Check** | Registry freezes after startup. Late-bound resolution. ABI version compatibility. |
@@ -134,12 +134,14 @@ Each entry specifies:
 ### "Add a new compiler pass"
 
 ```
-Read:  compiler.md, adrs.md (ADR-003, 020, 027)
+Read:  compiler.md, adrs.md (ADR-003, 020, 027, 034)
 Edit:  src/compiler/passes/ (new pass file)
        src/compiler/passes/mod.rs (register)
-       src/compiler/pipeline.rs (add to pipeline order)
+       src/compiler/mod.rs (add to build_compiler pass order)
 Check: Pass must be pure (no I/O, no LLM). Deterministic.
        Must declare "May Do" / "Must Not Do" per ADR-027.
+       If mandatory, it must be added to build_compiler — no production
+       path constructs DefaultCompiler outside it (ADR-034).
 Tests: tests/ (compiler integration)
 ```
 
@@ -150,8 +152,10 @@ Read:  architecture.md (strategy table), adrs.md (ADR-018)
 Edit:  src/strategies/ (new strategy file)
        src/strategies/mod.rs (register)
        src/compiler/ir/strategy_ir.rs (StrategyIR variant)
-Check: Strategy implements lowering (StrategyIR → PrimitiveIR subgraph).
-       Strategy does not execute — compiler expands it.
+Check: Strategy implements lowering (StrategyIR → PrimitiveGraph).
+       Strategy does not execute — lowering happens in the compiler's
+       strategy_expansion (default_strategy_registry) at compile time;
+       the executor consumes the prebuilt node.subgraph verbatim.
 Tests: tests/ (strategy), src/strategies/{name}.rs (unit)
 ```
 

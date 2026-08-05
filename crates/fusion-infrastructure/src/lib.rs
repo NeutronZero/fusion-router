@@ -574,18 +574,28 @@ pub struct CoordinatorNodeStatus {
     pub last_synced_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FencingToken {
+    pub term: u64,
+    pub leader_id: String,
+    pub issued_at_ms: u64,
+}
+
 pub struct CoordinatorHaEngine {
     coordinator_id: String,
     current_term: Arc<Mutex<u64>>,
     state: Arc<Mutex<CoordinatorState>>,
+    active_fencing_token: Arc<Mutex<Option<FencingToken>>>,
 }
 
 impl CoordinatorHaEngine {
     pub fn new(coordinator_id: impl Into<String>) -> Self {
+        let cid = coordinator_id.into();
         Self {
-            coordinator_id: coordinator_id.into(),
+            coordinator_id: cid.clone(),
             current_term: Arc::new(Mutex::new(1)),
-            state: Arc::new(Mutex::new(CoordinatorState::Leader)),
+            state: Arc::new(Mutex::new(CoordinatorState::Follower)),
+            active_fencing_token: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -603,11 +613,39 @@ impl CoordinatorHaEngine {
         }
     }
 
-    pub fn promote_to_leader(&self) {
+    /// Attempts to promote the coordinator to leader using fencing tokens (Invariant 13).
+    /// Requires proposing a term strictly greater than the current term.
+    pub fn promote_to_leader_with_term(&self, proposed_term: u64) -> Result<FencingToken, PlatformError> {
         let mut term = self.current_term.lock();
-        *term += 1;
+        if proposed_term <= *term {
+            return Err(PlatformError::Security {
+                code: "ERR_FENCING_STALE_TERM".into(),
+                message: format!("Proposed term {} is stale; current active term is {}", proposed_term, *term),
+                recovery_suggestion: "Obtain a newer term number before attempting leadership promotion".into(),
+            });
+        }
+        *term = proposed_term;
         let mut state = self.state.lock();
         *state = CoordinatorState::Leader;
+
+        let token = FencingToken {
+            term: proposed_term,
+            leader_id: self.coordinator_id.clone(),
+            issued_at_ms: Utc::now().timestamp_millis() as u64,
+        };
+        *self.active_fencing_token.lock() = Some(token.clone());
+        Ok(token)
+    }
+
+    pub fn validate_fencing_token(&self, token: &FencingToken) -> bool {
+        let current = *self.current_term.lock();
+        let state = self.state.lock().clone();
+        state == CoordinatorState::Leader && token.term == current && token.leader_id == self.coordinator_id
+    }
+
+    pub fn promote_to_leader(&self) {
+        let next_term = *self.current_term.lock() + 1;
+        let _ = self.promote_to_leader_with_term(next_term);
     }
 }
 
@@ -633,15 +671,19 @@ mod tests {
     }
 
     #[test]
-    fn test_coordinator_ha_engine_leader_promotion() {
+    fn test_coordinator_ha_engine_leader_promotion_and_fencing() {
         let ha = CoordinatorHaEngine::new("coord-us-east-1a");
         let status1 = ha.get_status();
         assert_eq!(status1.term, 1);
-        assert!(status1.is_active_leader);
+        assert!(!status1.is_active_leader, "Newly instantiated node defaults to Follower state");
 
-        ha.promote_to_leader();
+        let token = ha.promote_to_leader_with_term(2).expect("Promote with term 2");
         let status2 = ha.get_status();
         assert_eq!(status2.term, 2);
         assert!(status2.is_active_leader);
+        assert!(ha.validate_fencing_token(&token));
+
+        // Stale term promotion must fail
+        assert!(ha.promote_to_leader_with_term(2).is_err());
     }
 }

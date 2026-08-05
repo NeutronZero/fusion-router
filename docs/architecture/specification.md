@@ -284,57 +284,44 @@ pub struct ExecutionResult {
 
 ## 6. Compiler Pass Pipeline
 
-The compiler transforms `WorkflowIR` into `ExecutionGraph` through **seven pure passes**:
+The compiler transforms `WorkflowIR` into `ExecutionGraph` through a fixed pipeline constructed exclusively by `build_compiler` (ADR-034): **four mandatory pure passes**, an **optional policy pass** appended when a `PolicyIR` is supplied, then a direct structural `lower_to_graph`:
 
 ```text
 WorkflowIR
    │
    ▼
 1. Constraint Validation
-   ├─ Verify hard constraints
-   ├─ Check capability requirements
-   └─ Validate control flow structure
+   ├─ Reject empty IR (at least one node required)
    │
    ▼
-2. Capability Resolution
-   ├─ Query model registry
-   ├─ Apply hard constraints → eligible models
-   └─ Select best model (weighted scoring)
+2. Control Flow Validation
+   ├─ Validate edge targets reference known nodes
+   ├─ Validate Conditional/Loop/Split/Join/Barrier shape
+   └─ Detect illegal cycles (loop back-edges exempt)
    │
    ▼
-3. Budget Optimisation
-   ├─ Estimate cost/tokens
+3. Model Resolution
+   ├─ Fill model: None from ModelCatalog by requirements
+   └─ (tools → code model, high reasoning → architecture, else fast)
+   │
+   ▼
+4. Budget Optimisation
    ├─ Query Resource Manager (can_afford?)
-   └─ Downgrade models if needed
+   └─ Reject when estimated budget is exceeded
    │
    ▼
-4. Node Fusion
-   ├─ Merge adjacent nodes
-   └─ Reduce overhead
+5. Policy Compiler Pass (optional)
+   ├─ Apply compiled PolicyIR
+   └─ Any matched Deny rule is a compile error
    │
    ▼
-5. Retry & Fallback Insertion
-   ├─ Add fallback nodes
-   └─ Attach retry policies
-   │
-   ▼
-6. Scheduling Hints
-   ├─ Attach parallelism hints
-   ├─ Assign priority
-   └─ Resource requirements
-   │
-   ▼
-7. Graph Verification
-   ├─ Check acyclicity
-   ├─ Verify reachability
-   ├─ Validate resource bounds
-   └─ Confirm determinism
+lower_to_graph ─── direct structural lowering (1:1 node-kind mapping)
    │
    ▼
 ExecutionGraph
 ```
 
-**All passes are pure** – no I/O, no network calls, no side effects. This guarantees deterministic compilation and enables golden‑test replay.
+**All passes are pure** – no I/O, no network calls, no side effects. This guarantees deterministic compilation and enables golden‑test replay. There is no `PrimitiveGraph` stage on this path; strategy expansion is done by the compiler (`strategy_expansion`) after lowering, which pre-builds each strategy node's `ExecutionSubgraph` into `node.subgraph` — the executor consumes it verbatim. The `PrimitiveGraph`/optimization framework in `src/compiler/ir` and `src/compiler/optimization` is compiler-internal and not wired into the production pipeline.
 
 ---
 
@@ -365,7 +352,7 @@ sequenceDiagram
     API->>Planner: plan(Requirements, Policies)
     Planner-->>API: WorkflowIR
     API->>Compiler: compile(WorkflowIR)
-    Compiler->>Compiler: 7 passes
+    Compiler->>Compiler: 4 passes + policy
     Compiler->>Resource: can_afford?
     Resource-->>Compiler: yes/no
     alt can afford

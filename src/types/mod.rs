@@ -175,6 +175,13 @@ pub struct ExecutionNode {
     pub retry_policy: RetryPolicy,
     pub fallback: Option<FallbackConfig>,
     pub config: HashMap<String, serde_json::Value>,
+    /// Pre-lowered strategy subgraph, attached at compile time by the
+    /// strategy expansion in `lower_to_graph`. `None` for passthrough
+    /// (Single strategy, unexpanded legacy graphs, or strategy lowering
+    /// fallback). When `Some`, the executor executes this subgraph directly
+    /// instead of lowering the strategy at runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subgraph: Option<ExecutionSubgraph>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

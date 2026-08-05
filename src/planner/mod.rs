@@ -7,7 +7,6 @@ mod workflow;
 pub mod resolver;
 
 pub use intent_planner::IntentPlanner;
-pub use fusion_planner::{PlannerService, ExecutionIntent, PlannerKind, PlannerContract};
 
 use crate::types::{EvidenceSnapshot, Policy, Requirements, WorkflowIR};
 

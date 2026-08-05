@@ -29,12 +29,12 @@ Compiler pipeline: NormalizedIntent → WorkflowIR → Compiler (Semantic / Opti
 Implementation priority:
 
 1. - [x] Workflow IR data model and builder — Implemented: Workflow IR data model + builder (crates/fusion-ir) — Tasks 1-8 of the fusion-ir plan.
-2. Execution ABI v1 schema
-3. Compiler pass pipeline and pass registration
-4. ABI generation pass
+2. - [x] Execution ABI v1 schema — Implemented with `abi::from_graph` (ABI generator) + `abi::to_graph` (runtime binding).
+3. - [x] Compiler pass pipeline and pass registration — Implemented as `build_compiler` (ADR-034, live v0.12 path).
+4. - [x] ABI generation pass — `abi::from_graph::abi_from_graph` bridges the compiled `ExecutionGraph` to the contract.
 5. Capability Registry execution and lookup
-6. Runtime contract implementation consuming the ABI (ERI integration)
-7. End-to-end compile path: NormalizedIntent → WorkflowIR → ExecutionAbi → Runtime
+6. - [x] Runtime contract implementation consuming the ABI (ERI integration) — `eri::local_runtime::LocalEri` executes ABIs on the live scheduler/executor.
+7. - [x] End-to-end compile path: NormalizedIntent → WorkflowIR → ExecutionAbi → Runtime — verified by `tests/contract_wiring.rs` (intent → IR adapter → compile → ABI → ERI execution).
 
 Deliverable: first complete compile-and-execute path (optimizations may remain stubbed).
 

@@ -4,7 +4,6 @@ use fusion_plugin_api::{
     ExecutionError, ExecutionResult, Permission, Plugin, PluginMetadata,
 };
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::Arc;
 use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 
@@ -27,7 +26,7 @@ impl CapabilityPlugin for McpPlugin {
         vec![CapabilityContract {
             id: CapabilityId::new("mcp.tool.invoke"),
             version: semver::Version::parse("0.1.0").unwrap(),
-            description: "Invokes an MCP tool".into(),
+            description: "Invokes an MCP tool (not implemented — fails closed until an MCP client exists)".into(),
             inputs_schema: json!({"type": "object", "properties": {"tool": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"result": {"type": "string"}}}),
             permissions: vec![Permission::Network],
@@ -58,12 +57,12 @@ impl CapabilityExecutor for McpPlugin {
                 retryable: false,
             })?;
 
-        let mut metrics = HashMap::new();
-        metrics.insert("latency_ms".to_string(), 100.0);
-
-        Ok(ExecutionResult {
-            outputs: json!({ "result": format!("Result of {}", tool) }),
-            metrics,
+        let _ = tool;
+        Err(ExecutionError {
+            connector: "mcp".into(),
+            capability: instance.contract.id.clone(),
+            reason: "mcp.tool.invoke is not implemented: no MCP client exists; refusing to fabricate a tool result".into(),
+            retryable: false,
         })
     }
 }
@@ -103,6 +102,27 @@ impl Connector for McpConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fusion_plugin_api::CapabilityContract;
+
+    fn make_instance() -> CapabilityInstance {
+        CapabilityInstance {
+            contract: CapabilityContract {
+                id: CapabilityId::new("mcp.tool.invoke"),
+                version: semver::Version::parse("0.1.0").unwrap(),
+                description: "test".into(),
+                inputs_schema: json!({}),
+                outputs_schema: json!({}),
+                permissions: vec![],
+                dependencies: vec![],
+                estimated_cost_usd: 0.0,
+                estimated_latency_ms: 1,
+                reliability_score: 1.0,
+                supports_streaming: false,
+                traits: vec![],
+            },
+            runtime_params: json!({}),
+        }
+    }
 
     #[test]
     fn test_mcp_connector_descriptor() {
@@ -110,5 +130,20 @@ mod tests {
         let desc = connector.descriptor();
         assert_eq!(desc.name, "mcp");
         assert_eq!(desc.supported_capabilities.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_execution_fails_closed_instead_of_fabricating() {
+        let plugin = McpPlugin;
+        let err = plugin
+            .execute(&make_instance(), json!({ "tool": "whatever" }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.reason.contains("not implemented"),
+            "unexpected reason: {}",
+            err.reason
+        );
+        assert!(!err.retryable);
     }
 }

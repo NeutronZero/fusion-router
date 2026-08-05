@@ -87,7 +87,6 @@
 
 ## G
 
-**GraphVerification** — `src/compiler/passes/legacy_passes.rs` — Final graph validation pass
 **GraphVisualizer** — `src/devex/visualizer.rs` — ExecutionGraph visualization
 
 ## I
@@ -108,7 +107,6 @@
 ## N
 
 **NetworkConstraints** — `src/target/mod.rs` — Target egress constraints
-**NodeFusion** — `src/compiler/passes/legacy_passes.rs` — Node merging optimization pass
 **NormalizedIntent** — `src/intent/mod.rs` — Canonical goals and constraints (v0.13)
 **native_tool_calls** — `src/providers/mod.rs` — `native_tool_calls_from` helper; typed tool calls on `ChatCompletionResponse` (Law 7/ADR-037)
 
@@ -120,7 +118,7 @@
 
 ## P
 
-**PassRegistry** — `src/compiler/registry/mod.rs` — Compiler pass registry
+**PassManager** — `src/compiler/passes/mod.rs` — Pass list composition helper (production pipeline is the fixed `build_compiler` list)
 **PackageLoader** — `src/package/loader.rs` — WASM compilation and contract registration
 **PackageVerifier** — `src/package/verifier.rs` — .fusionpkg structural and attestation verification
 **Permission** (enum) — `crates/fusion-plugin-api/src/lib.rs` — 5 permission variants with scoping
@@ -131,7 +129,7 @@
 **PluginMetadata** — `crates/fusion-plugin-api/src/lib.rs` — Version compatibility metadata
 **PluginScaffolder** — `src/devex/scaffold.rs` — Plugin project generator
 **PolicyCompilerPass** — `src/compiler/passes/policy.rs` — Policy compilation in compiler
-**PrimitiveGraph** — `src/compiler/ir/primitive_ir.rs` — Canonical lowered IR
+**PrimitiveGraph** — `src/compiler/ir/primitive_ir.rs` — Compiler-internal IR for strategy expansion (executor-side today)
 **ProjectionDispatcher** — `src/events/projection.rs` — Event projection framework
 **Provider** (trait) — `src/providers/mod.rs` — Unified LLM interface
 **ProviderRegistry** — `src/providers/registry.rs` — Provider registration
@@ -145,7 +143,6 @@
 **ResourceGuard** — `src/resource/guard.rs` — RAII resource cleanup
 **ResourceLimits** — `src/target/mod.rs` — Target resource limits
 **ResourceManager** — `src/resource/mod.rs` — Central resource tracking
-**RetryFallbackInsertion** — `src/compiler/passes/legacy_passes.rs` — Retry/fallback pass
 **RouterError** — `src/types/error.rs` — Centralized error type with PipelineStage
 **RuntimeError** — `src/runtime/mod.rs` — Capability runtime error type
 **RuntimeModuleCache** — `src/runtime/module_cache.rs` — Compiled module cache
@@ -158,7 +155,6 @@
 **Scheduler** (trait) — `src/scheduler/mod.rs` — Core scheduler interface
 **SchedulerKind** — `src/target/mod.rs` — Preferred scheduler enumeration
 **SchemaBuilder** — `crates/fusion-capability-sdk/src/schema.rs` — JSON Schema builder
-**SchedulingHints** — `src/compiler/passes/legacy_passes.rs` — Scheduling annotation pass
 **SecurityPolicy** — `src/abi/mod.rs` — ABI node security policy
 **security::paths** — `src/security/paths.rs` — Law 10 canonicalize-within helpers (`canonicalize_within`, `is_path_within`, `PathError`)
 **SecurityProfile** — `src/target/mod.rs` — Target security profile

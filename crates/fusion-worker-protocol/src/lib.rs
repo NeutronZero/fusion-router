@@ -65,7 +65,27 @@ impl WorkerRegistryStore {
 
     pub fn get_active_nodes(&self) -> Vec<ClusterNodeInfo> {
         let map = self.nodes.read().unwrap();
-        map.values().cloned().collect()
+        map.values().filter(|n| n.is_online).cloned().collect()
+    }
+
+    pub fn evict_stale_workers(&self, timeout_secs: u64) -> usize {
+        let mut map = self.nodes.write().unwrap();
+        let now = chrono::Utc::now();
+        let mut evicted = 0;
+
+        for node in map.values_mut() {
+            if !node.is_online {
+                continue;
+            }
+            if let Ok(last_hb) = chrono::DateTime::parse_from_rfc3339(&node.status.last_heartbeat_at) {
+                let elapsed = (now - last_hb.with_timezone(&chrono::Utc)).num_seconds();
+                if elapsed > timeout_secs as i64 {
+                    node.is_online = false;
+                    evicted += 1;
+                }
+            }
+        }
+        evicted
     }
 }
 

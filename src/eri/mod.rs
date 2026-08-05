@@ -6,6 +6,8 @@ use uuid::Uuid;
 use crate::abi::ExecutionAbi;
 use crate::target::ExecutionTarget;
 
+pub mod local_runtime;
+
 /// Runtime execution contract (v0.13 contract 5).
 /// The runtime executes ABIs; it never interprets user intent.
 #[async_trait]

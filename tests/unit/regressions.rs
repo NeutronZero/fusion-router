@@ -60,6 +60,7 @@ async fn test_scheduler_parity_and_budget_enforcement() {
         },
         fallback: None,
         config: HashMap::new(),
+        subgraph: None,
     };
 
     let graph = ExecutionGraph {
@@ -116,6 +117,7 @@ async fn test_terminal_node_response_selection() {
         retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
         fallback: None,
         config: HashMap::new(),
+        subgraph: None,
     };
     let reflect_node = ExecutionNode {
         id: reflect_id,
@@ -125,6 +127,7 @@ async fn test_terminal_node_response_selection() {
         retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
         fallback: None,
         config: HashMap::new(),
+        subgraph: None,
     };
     let judge_node = ExecutionNode {
         id: judge_id,
@@ -134,6 +137,7 @@ async fn test_terminal_node_response_selection() {
         retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
         fallback: None,
         config: HashMap::new(),
+        subgraph: None,
     };
 
     let edges = vec![
@@ -200,6 +204,7 @@ async fn test_compiler_model_resolution_preservation() {
         retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
         fallback: None,
         config: HashMap::new(),
+        subgraph: None,
     };
 
     let ctx = PipelineContext::new(

@@ -180,6 +180,7 @@ async fn test_dag_split_join_workflow() {
                     m.insert("messages".into(), serde_json::json!([{"role": "user", "content": "hello"}]));
                     m
                 },
+                subgraph: None,
             },
             ExecutionNode {
                 id: a_id, kind: ExecutionNodeKind::LLMGenerate,
@@ -191,6 +192,7 @@ async fn test_dag_split_join_workflow() {
                     m.insert("messages".into(), serde_json::json!([{"role": "user", "content": "hello"}]));
                     m
                 },
+                subgraph: None,
             },
             ExecutionNode {
                 id: b_id, kind: ExecutionNodeKind::LLMGenerate,
@@ -202,6 +204,7 @@ async fn test_dag_split_join_workflow() {
                     m.insert("messages".into(), serde_json::json!([{"role": "user", "content": "hello"}]));
                     m
                 },
+                subgraph: None,
             },
             ExecutionNode {
                 id: join_id, kind: ExecutionNodeKind::Join,
@@ -209,6 +212,7 @@ async fn test_dag_split_join_workflow() {
                 retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
                 fallback: None,
                 config: HashMap::new(),
+                subgraph: None,
             },
             ExecutionNode {
                 id: final_id, kind: ExecutionNodeKind::LLMGenerate,
@@ -220,6 +224,7 @@ async fn test_dag_split_join_workflow() {
                     m.insert("messages".into(), serde_json::json!([{"role": "user", "content": "hello"}]));
                     m
                 },
+                subgraph: None,
             },
         ],
         edges: vec![

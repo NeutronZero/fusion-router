@@ -25,8 +25,8 @@ Planner
     WorkflowIR
     ▼
 Compiler
-    │  Pass pipeline (7 standard passes + optimizations)
-    │  PrimitiveGraph → ExecutionGraph derivation
+    │  Pass pipeline (4 mandatory passes + optional policy pass)
+    │  lower_to_graph: direct structural lowering
     ▼
     ExecutionGraph
     ▼
@@ -46,20 +46,22 @@ Executor
 | `ContextSnapshot` | After Context Assembly | System prompt, conversation history, tool definitions |
 | `Requirements` | After Requirements Extraction | Intent classification, complexity score |
 | `WorkflowIR` | After Planning | Abstract plan: nodes (Generate, Review, Judge, Transform, Gate, Conditional, Loop, Split, Join, Barrier), edges with conditions |
-| `PrimitiveGraph` | After Lowering | Canonical lowered IR, strategy-expanded subgraphs |
-| `ExecutionGraph` | After Compilation | Executable form: 12 node kinds, resolved models, retry policies, deterministic UUIDs |
+| `PrimitiveGraph` | Compiler-internal | Lowered IR produced by `Strategy::lower`; expanded into an `ExecutionSubgraph` per node by `strategy_expansion` during compilation |
+| `ExecutionGraph` | After Compilation | Executable form: 10 node kinds, resolved models, retry policies, deterministic UUIDs |
 | `ExecutionInstance` | During Execution | Bound node + runtime params |
 | `ExecutionResult` | After Execution | Standardized output + metrics |
 
-## Compiler Pipeline (7 Standard Passes)
+## Compiler Pipeline (build_compiler)
 
-1. **Constraint Validation** — Validates WorkflowIR invariants: cycles, entry/exit points, edge types
-2. **Capability Resolution** — Resolves capability references to concrete `CapabilityInstance` bindings
-3. **Budget Optimization** — Applies resource budgets from policy
-4. **Node Fusion** — Merges compatible sequential nodes
-5. **Retry & Fallback Insertion** — Wraps nodes with retry/fallback logic from policy
-6. **Scheduling Hints** — Annotates nodes with scheduling metadata
-7. **Graph Verification** — Validates final ExecutionGraph invariants
+Constructed exclusively via `build_compiler` (ADR-034) — no production path builds `DefaultCompiler` with an empty pass list. One mandatory pass order, plus an optional policy pass appended when a `PolicyIR` is supplied:
+
+1. **Constraint Validation** — Rejects empty IR (at least one node required)
+2. **Control Flow Validation** — Validates edge targets, Conditional/Loop/Split/Join/Barrier node shapes, and acyclicity (loop back-edges exempt)
+3. **Model Resolution** — Fills `model: None` from the `ModelCatalog` based on requirements (tools → code model, high reasoning → architecture model, else fast)
+4. **Budget Optimisation** — Checks `ResourceManager::can_afford`; rejects when the estimated budget is exceeded
+5. **Policy Compiler Pass** *(optional)* — Applies a compiled `PolicyIR`; any matched Deny rule blocks compilation
+
+`lower_to_graph` (`src/compiler/mod.rs`) then performs a direct structural lowering of `WorkflowIR` → `ExecutionGraph` (1:1 node-kind mapping; strategy carried as a field on each node; `primitive_graph_hash` is set to 0 — no PrimitiveGraph is produced on the live path). A final compile step (`src/compiler/strategy_expansion.rs`) pre-builds each strategy node's `ExecutionSubgraph` and attaches it to `node.subgraph`; the executor consumes it verbatim (runtime `resolve_strategy` lowering remains only as a legacy fallback).
 
 ## Strategy Types
 
@@ -95,6 +97,7 @@ From `docs/architecture/invariants.md`:
 16. ADR-027 compiler phase invariants matrix: each phase has "May Do" / "Must Not Do" rules
 17. All compiler construction (chat path, execution plane, tests) goes through `build_compiler()`; no production code builds `DefaultCompiler { passes: vec![] }` (ADR-034, v0.13.1)
 18. `AppState` and the execution plane (`build_execution_plane`) share the same compiler pipeline and resource manager; deny policy blocks compilation before any graph exists (ADR-034, v0.13.1)
+19. The frozen v0.13 contracts connect to the live path only through deterministic adapters: `intent::lowering::intent_to_workflow` (NormalizedIntent → fusion_ir WorkflowIR), `ir::adapter::workflow_to_types` (→ v0.12 WorkflowIR), `abi::from_graph` (ExecutionGraph → ExecutionAbi, provider-free), `abi::to_graph` (ABI → graph with runtime-supplied model binding), and `eri::local_runtime::LocalEri` (contract 5 over DefaultScheduler/DefaultExecutor). The runtime never interprets intent; it executes ABIs (contract 5).
 
 ## Feature Flags
 

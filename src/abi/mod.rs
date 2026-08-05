@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+pub mod from_graph;
+pub mod to_graph;
+
 pub const EXECUTION_ABI_VERSION: u16 = 1;
 
 /// Stable executable workflow contract between compiler and runtime (v0.13 contract 3).

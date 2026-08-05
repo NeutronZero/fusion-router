@@ -353,6 +353,7 @@ async fn test_concurrent_dag_workflows() {
             id, kind, strategy: StrategyKind::Single, model: "test".into(),
             retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
             fallback: None, config,
+            subgraph: None,
         }
     }
 
@@ -447,18 +448,21 @@ async fn test_loop_iteration_stress() {
                 strategy: StrategyKind::Single, model: "test".into(),
                 retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
                 fallback: None, config: loop_config,
+                subgraph: None,
             },
             ExecutionNode {
                 id: body_id, kind: ExecutionNodeKind::LLMGenerate,
                 strategy: StrategyKind::Single, model: "test".into(),
                 retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
                 fallback: None, config: body_config,
+                subgraph: None,
             },
             ExecutionNode {
                 id: exit_id, kind: ExecutionNodeKind::LLMGenerate,
                 strategy: StrategyKind::Single, model: "test".into(),
                 retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
                 fallback: None, config: HashMap::new(),
+                subgraph: None,
             },
         ],
         edges: vec![
@@ -660,6 +664,7 @@ async fn test_high_concurrency_scheduling() {
                     retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
                     fallback: None,
                     config,
+                    subgraph: None,
                 }
             })
             .collect();

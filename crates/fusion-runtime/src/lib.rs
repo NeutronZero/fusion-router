@@ -1,3 +1,7 @@
+//! **SIMULATION** — Studio-sandbox runtime (v0.14 UI vertical).
+//!
+//! `RuntimeEngine::execute` returns `Completed` unconditionally; nothing is
+//! scheduled or executed. NOT wired into the production `src/` monolith runtime.
 use fusion_core::{ExecutionId, ExecutionState, PlatformError};
 use serde::{Deserialize, Serialize};
 

@@ -8,7 +8,7 @@ pub mod capability_executor;
 #[cfg(feature = "semantic-cache")]
 use crate::cache::SemanticCache;
 use crate::compiler::context::CompilationContext;
-use crate::compiler::ir::{DebateRole, StrategyIR};
+use crate::compiler::ir::StrategyIR;
 use crate::providers::ChatProvider;
 use crate::strategies::Strategy;
 use crate::tools::ToolRegistry;
@@ -443,6 +443,14 @@ impl Executor for DefaultExecutor {
 
     #[tracing::instrument(skip(self, node), fields(node_id = %node.id, strategy = ?node.strategy))]
     async fn resolve_strategy(&self, node: &ExecutionNode) -> ExecutionSubgraph {
+        // Compile-time expansion (production path): `lower_to_graph` attaches
+        // the prebuilt subgraph; the executor executes it as-is. Runtime
+        // lowering below is only a fallback for legacy graphs that were not
+        // compiled through `build_compiler`.
+        if let Some(prebuilt) = &node.subgraph {
+            return prebuilt.clone();
+        }
+
         let strategy = self.strategies.get(&node.strategy);
         if let Some(s) = strategy {
             let mut ctx = CompilationContext::new();
@@ -492,60 +500,7 @@ impl Executor for DefaultExecutor {
 }
 
 fn strategy_ir_from_node(node: &ExecutionNode) -> StrategyIR {
-    match node.strategy {
-        StrategyKind::Single => StrategyIR::Single,
-        StrategyKind::Consensus => StrategyIR::Consensus {
-            count: node.config.get("count").and_then(|v| v.as_u64()).unwrap_or(3) as u32,
-        },
-        StrategyKind::Debate => StrategyIR::Debate {
-            roles: node
-                .config
-                .get("roles")
-                .and_then(|v| {
-                    v.as_array().map(|items| {
-                        items
-                            .iter()
-                            .map(|item| {
-                                serde_json::from_value::<DebateRole>(item.clone()).or_else(|_| {
-                                    item.as_str().map(|s| DebateRole {
-                                        name: s.to_string(),
-                                        model: node.model.clone(),
-                                        stance: s.to_string(),
-                                    })
-                                    .ok_or(serde_json::Error::io(std::io::Error::new(
-                                        std::io::ErrorKind::InvalidData,
-                                        "roles must be role objects or strings",
-                                    )))
-                                })
-                            })
-                            .filter_map(Result::ok)
-                            .collect()
-                    })
-                })
-                .unwrap_or_default(),
-        },
-        StrategyKind::Reflection => StrategyIR::Reflection {
-            max_cycles: node.config.get("max_reflection_cycles")
-                .and_then(|v| v.as_u64()).unwrap_or(3) as u32,
-        },
-        StrategyKind::ReAct => StrategyIR::ReAct {
-            max_iterations: node.config.get("max_iterations")
-                .and_then(|v| v.as_u64()).unwrap_or(10) as u32,
-        },
-        StrategyKind::Chain => StrategyIR::Chain {
-            stages: node.config.get("stages")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .unwrap_or_default(),
-        },
-        StrategyKind::Fusion => StrategyIR::Custom {
-            name: "fusion".into(),
-            config: serde_json::json!({}),
-        },
-        StrategyKind::Custom(ref name) => StrategyIR::Custom {
-            name: name.clone(),
-            config: node.config.get("config").cloned().unwrap_or(serde_json::json!({})),
-        },
-    }
+    crate::compiler::strategy_expansion::strategy_ir_from_node(node)
 }
 
 fn execution_graph_to_subgraph(eg: &ExecutionGraph, template: &ExecutionNode) -> ExecutionSubgraph {
@@ -652,6 +607,7 @@ mod tests {
             },
             fallback: None,
             config: HashMap::new(),
+            subgraph: None,
         }
     }
 
@@ -667,6 +623,7 @@ mod tests {
             },
             fallback: None,
             config: HashMap::new(),
+            subgraph: None,
         }
     }
 

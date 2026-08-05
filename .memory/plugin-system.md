@@ -12,7 +12,7 @@ The plugin system provides extension points for providers, strategies, compiler 
 |-----------------|-------|-------------|
 | Providers | `Provider` | `ProviderRegistry` |
 | Strategies | `Strategy` | Strategy loader |
-| Compiler Passes | `CompilerPass` | `PassRegistry` |
+| Compiler Passes | `CompilerPass` | fixed `build_compiler` list (ADR-034) |
 | Tools | `Tool` | `ToolRegistry` |
 | Capabilities | `CapabilityPlugin` | `CapabilityRegistry` |
 
