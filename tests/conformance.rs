@@ -45,6 +45,7 @@ fn test_governance_specs_exist() {
         "docs/governance/architecture-process.md",
         "docs/governance/adr-process.md",
         "docs/governance/release-policy.md",
+        "docs/governance/AF-006-distributed-runtime.md",
     ];
 
     for file in &gov_files {

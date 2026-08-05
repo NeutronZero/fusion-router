@@ -1148,6 +1148,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fusion-placement"
+version = "0.14.3"
+dependencies = [
+ "chrono",
+ "fusion-core",
+ "fusion-ir",
+ "fusion-kernel",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "fusion-planner"
 version = "0.14.0"
 dependencies = [
@@ -1205,6 +1219,7 @@ dependencies = [
  "fusion-infrastructure",
  "fusion-ir",
  "fusion-kernel",
+ "fusion-placement",
  "fusion-planner",
  "fusion-plugin-api",
  "fusion-plugin-echo",

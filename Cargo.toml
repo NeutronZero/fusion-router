@@ -11,6 +11,7 @@ members = [
     "crates/fusion-api-internal",
     "crates/fusion-planner",
     "crates/fusion-compiler",
+    "crates/fusion-placement",
     "crates/fusion-scheduler",
     "crates/fusion-runtime",
     "crates/fusion-infrastructure",
@@ -89,6 +90,7 @@ fusion-core = { path = "crates/fusion-core" }
 fusion-kernel = { path = "crates/fusion-kernel" }
 fusion-api-internal = { path = "crates/fusion-api-internal" }
 fusion-compiler = { path = "crates/fusion-compiler" }
+fusion-placement = { path = "crates/fusion-placement" }
 fusion-planner = { path = "crates/fusion-planner" }
 fusion-scheduler = { path = "crates/fusion-scheduler" }
 fusion-runtime = { path = "crates/fusion-runtime" }
