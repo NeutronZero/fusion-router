@@ -1308,12 +1308,14 @@ name = "fusion-studio-api"
 version = "0.14.0"
 dependencies = [
  "axum",
+ "chrono",
  "fusion-api-public",
  "fusion-compiler",
  "fusion-core",
  "fusion-ir",
  "fusion-kernel",
  "fusion-planner",
+ "fusion-security",
  "serde",
  "serde_json",
  "tokio",

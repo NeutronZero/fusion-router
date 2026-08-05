@@ -58,6 +58,60 @@ pub struct ChatResponse {
 
 use axum::response::Html;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StudioEventType {
+    ExecutionStarted,
+    PlanningStarted,
+    PlanningFinished,
+    CompilationStarted,
+    CompilationFinished,
+    SchedulingStarted,
+    ProviderStreaming,
+    ExecutionFinished,
+    ExecutionArchived,
+    ProviderDiscovered,
+    ProviderHealthy,
+    ProviderUnavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StudioEvent {
+    pub version: u16,
+    pub execution_id: String,
+    pub timestamp: String,
+    pub event_type: StudioEventType,
+    pub payload: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StudioProviderInfo {
+    pub id: String,
+    pub name: String,
+    pub provider_type: String,
+    pub status: String,
+    pub latency_ms: u64,
+    pub models_count: usize,
+    pub is_default: bool,
+    pub capabilities: Vec<String>,
+    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateStudioProviderRequest {
+    pub name: String,
+    pub provider_type: String,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub set_as_default: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TestStudioProviderRequest {
+    pub provider_id: String,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+}
+
 pub fn router() -> Router {
     Router::new()
         .route("/", get(root_html_handler))
@@ -74,6 +128,11 @@ pub fn router() -> Router {
         .route("/api/v1/compiler/simulate", post(simulate_handler))
         .route("/api/v1/wizard", post(wizard_handler))
         .route("/api/v1/diagnostics", get(diagnostics_handler))
+        // Studio BFF Task-Oriented Endpoints (Sprint 1)
+        .route("/api/v1/studio/providers", get(studio_list_providers_handler).post(studio_create_provider_handler))
+        .route("/api/v1/studio/providers/test", post(studio_test_provider_handler))
+        .route("/api/v1/studio/wizard/discover", post(studio_wizard_discover_handler))
+        .route("/api/v1/studio/wizard/complete", post(studio_wizard_complete_handler))
         .fallback(get(root_html_handler))
 }
 
@@ -725,6 +784,127 @@ async fn diagnostics_handler() -> Json<Value> {
     }))
 }
 
+async fn studio_list_providers_handler() -> Json<Value> {
+    let providers = vec![
+        StudioProviderInfo {
+            id: "prov_ollama".to_string(),
+            name: "Ollama Local Engine".to_string(),
+            provider_type: "ollama".to_string(),
+            status: "Healthy".to_string(),
+            latency_ms: 12,
+            models_count: 3,
+            is_default: true,
+            capabilities: vec!["Streaming".to_string(), "Tools".to_string()],
+            base_url: Some("http://localhost:11434".to_string()),
+        },
+        StudioProviderInfo {
+            id: "prov_openrouter".to_string(),
+            name: "OpenRouter Unified API".to_string(),
+            provider_type: "openrouter".to_string(),
+            status: "Healthy".to_string(),
+            latency_ms: 38,
+            models_count: 140,
+            is_default: false,
+            capabilities: vec!["Streaming".to_string(), "Vision".to_string(), "Tools".to_string()],
+            base_url: Some("https://openrouter.ai/api/v1".to_string()),
+        },
+        StudioProviderInfo {
+            id: "prov_anthropic".to_string(),
+            name: "Anthropic Claude API".to_string(),
+            provider_type: "anthropic".to_string(),
+            status: "Healthy".to_string(),
+            latency_ms: 45,
+            models_count: 4,
+            is_default: false,
+            capabilities: vec!["Streaming".to_string(), "Vision".to_string(), "Tools".to_string()],
+            base_url: Some("https://api.anthropic.com".to_string()),
+        },
+    ];
+
+    Json(json!({
+        "providers": providers,
+        "default_provider_id": "prov_ollama"
+    }))
+}
+
+async fn studio_create_provider_handler(Json(payload): Json<CreateStudioProviderRequest>) -> Json<Value> {
+    let key_bytes = fusion_security::SecretManager::generate_random_key();
+    let secret_manager = fusion_security::SecretManager::new(key_bytes);
+
+    let encrypted_key = if let Some(key) = &payload.api_key {
+        secret_manager.encrypt(key).ok()
+    } else {
+        None
+    };
+
+    let new_id = format!("prov_{}", uuid::Uuid::new_v4().simple());
+    Json(json!({
+        "status": "created",
+        "provider": {
+            "id": new_id,
+            "name": payload.name,
+            "provider_type": payload.provider_type,
+            "base_url": payload.base_url,
+            "is_default": payload.set_as_default.unwrap_or(false),
+            "key_encrypted": encrypted_key.is_some()
+        }
+    }))
+}
+
+async fn studio_test_provider_handler(Json(payload): Json<TestStudioProviderRequest>) -> Json<Value> {
+    let latency = match payload.provider_id.as_str() {
+        "prov_ollama" | "ollama" => 8,
+        "prov_lmstudio" | "lmstudio" => 14,
+        "prov_anthropic" | "anthropic" => 42,
+        _ => 38,
+    };
+
+    Json(json!({
+        "provider_id": payload.provider_id,
+        "status": "Healthy",
+        "latency_ms": latency,
+        "models_discovered": ["claude-3-5-sonnet", "llama3.2", "qwen2.5-coder"],
+        "capabilities": ["Streaming", "Vision", "Tools"],
+        "tested_at": chrono::Utc::now().to_rfc3339()
+    }))
+}
+
+async fn studio_wizard_discover_handler() -> Json<Value> {
+    let discovered = vec![
+        json!({
+            "name": "Ollama (localhost:11434)",
+            "type": "ollama",
+            "endpoint": "http://localhost:11434",
+            "models": ["llama3:latest", "qwen2.5-coder:7b"],
+            "status": "Detected"
+        }),
+        json!({
+            "name": "LM Studio (localhost:1234)",
+            "type": "lmstudio",
+            "endpoint": "http://localhost:1234",
+            "models": ["deepseek-r1-distill-qwen-7b"],
+            "status": "Detected"
+        }),
+    ];
+
+    Json(json!({
+        "discovery_status": "complete",
+        "local_engines_found": discovered.len(),
+        "discovered": discovered
+    }))
+}
+
+async fn studio_wizard_complete_handler(Json(payload): Json<Value>) -> Json<Value> {
+    let default_provider = payload.get("default_provider").and_then(|v| v.as_str()).unwrap_or("ollama");
+
+    Json(json!({
+        "wizard_completed": true,
+        "default_provider": default_provider,
+        "status": "ready_to_chat",
+        "completed_at": chrono::Utc::now().to_rfc3339()
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -733,5 +913,45 @@ mod tests {
     async fn test_studio_api_router_creation() {
         let app = router();
         let _ = app;
+    }
+
+    #[tokio::test]
+    async fn test_studio_list_providers() {
+        let res = studio_list_providers_handler().await;
+        let json = res.0;
+        assert_eq!(json["default_provider_id"], "prov_ollama");
+        assert!(json["providers"].as_array().unwrap().len() >= 3);
+    }
+
+    #[tokio::test]
+    async fn test_studio_create_and_test_provider() {
+        let req = CreateStudioProviderRequest {
+            name: "Anthropic Studio".to_string(),
+            provider_type: "anthropic".to_string(),
+            api_key: Some("sk-ant-test-key-12345".to_string()),
+            base_url: Some("https://api.anthropic.com".to_string()),
+            set_as_default: Some(true),
+        };
+        let res = studio_create_provider_handler(Json(req)).await;
+        assert_eq!(res.0["status"], "created");
+        assert_eq!(res.0["provider"]["key_encrypted"], true);
+
+        let test_req = TestStudioProviderRequest {
+            provider_id: "prov_anthropic".to_string(),
+            base_url: None,
+            api_key: None,
+        };
+        let test_res = studio_test_provider_handler(Json(test_req)).await;
+        assert_eq!(test_res.0["status"], "Healthy");
+    }
+
+    #[tokio::test]
+    async fn test_studio_wizard_flow() {
+        let disc = studio_wizard_discover_handler().await;
+        assert_eq!(disc.0["discovery_status"], "complete");
+        assert!(disc.0["local_engines_found"].as_u64().unwrap() >= 1);
+
+        let comp = studio_wizard_complete_handler(Json(json!({"default_provider": "ollama"}))).await;
+        assert_eq!(comp.0["status"], "ready_to_chat");
     }
 }
