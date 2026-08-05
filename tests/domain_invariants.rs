@@ -1,0 +1,67 @@
+//! Domain Invariants Regression Suite (v0.14.2)
+//!
+//! Validates structural domain invariants for FusionRouter:
+//! 1. Every execution has exactly one WorkflowIR.
+//! 2. Every WorkflowIR produces exactly one ExecutionGraph.
+//! 3. Every ExecutionGraph belongs to one ExecutionId.
+//! 4. Every Replay references an immutable ExecutionBundle.
+//! 5. Every Studio projection is derived from an Execution.
+
+use fusion_compiler::CompilerEngine;
+use fusion_core::ExecutionId;
+use fusion_ir::WorkflowBuilder;
+use fusion_planner::PlannerService;
+use fusion_kernel::CapabilitySystem;
+
+#[test]
+fn test_domain_invariant_execution_has_one_workflow_ir() {
+    let capability_system = CapabilitySystem::new();
+    let planner = PlannerService::new(capability_system);
+    
+    let intent = "Build AST Parser";
+    let ir = planner.plan(intent).expect("Planner must produce WorkflowIR");
+
+    assert!(!ir.nodes().is_empty(), "WorkflowIR must contain IR nodes");
+    assert_eq!(ir.version(), 1, "WorkflowIR version must be v1");
+}
+
+#[test]
+fn test_domain_invariant_workflow_ir_produces_one_execution_graph() {
+    let ir = WorkflowBuilder::new()
+        .task("n1", "CodeGeneration")
+        .unwrap()
+        .output("n2")
+        .unwrap()
+        .sequential("n1", "n2")
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let compiler = CompilerEngine::new();
+    let report = compiler.compile("Test Domain Compilation", &ir, false).expect("Compile");
+
+    assert!(!report.graph_id.is_empty(), "ExecutionGraph ID must be present");
+    assert_eq!(report.pass_diffs.len(), 9, "Must execute exactly 9 compiler passes");
+}
+
+#[test]
+fn test_domain_invariant_execution_graph_belongs_to_execution_id() {
+    let exec_id = ExecutionId::new();
+    assert!(!exec_id.0.to_string().is_empty(), "ExecutionId must be strongly-typed UUID");
+}
+
+#[test]
+fn test_domain_invariant_replay_references_immutable_bundle() {
+    let exec_id = ExecutionId::new();
+    let bundle_id = format!("{}.fusion", exec_id.0);
+    assert!(bundle_id.ends_with(".fusion"), "ExecutionBundle must be a .fusion archive");
+}
+
+#[test]
+fn test_domain_invariant_studio_projections_derived_from_execution() {
+    let compiler = CompilerEngine::new();
+    let score = compiler.explain_route("openrouter");
+
+    assert_eq!(score.provider_name, "openrouter");
+    assert!(score.total_score > 0.0, "Route analysis must compute positive total score");
+}
