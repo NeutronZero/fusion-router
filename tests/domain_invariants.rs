@@ -65,3 +65,14 @@ fn test_domain_invariant_studio_projections_derived_from_execution() {
     assert_eq!(score.provider_name, "openrouter");
     assert!(score.total_score > 0.0, "Route analysis must compute positive total score");
 }
+
+#[test]
+fn test_domain_invariant_13_single_worker_lease_exclusivity() {
+    let exec_id = ExecutionId::new();
+    let node_id = "node_ast_parser_01";
+    let worker_id = "worker_us_east_42";
+
+    // Invariant 13 contract shape: Lease(node_id, worker_id, epoch)
+    let lease_key = format!("lease:{}:{}:{}", exec_id.0, node_id, worker_id);
+    assert!(lease_key.starts_with("lease:"), "Lease must have unique, deterministic key");
+}

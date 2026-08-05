@@ -39,3 +39,6 @@ Performance contracts (SLOs for Planner <10ms, Compiler <20ms, Scheduler <5ms, R
 
 ### Invariant 12: Single Source of Truth (Migration Law)
 Every subsystem has exactly one authoritative implementation located in its designated workspace crate (`crates/fusion-*`). Compatibility modules in `src/` may re-export workspace symbols but must never duplicate business logic. No parallel implementations, mirrored logic, or temporary copies are permitted.
+
+### Invariant 13: Single-Worker Lease Exclusivity
+Every `ExecutionGraph` node is leased by at most one worker at any instant. Workers execute tasks under explicit, time-bounded leases issued by the Placement Engine; expired or revoked leases revert to the Coordinator for crash recovery.
