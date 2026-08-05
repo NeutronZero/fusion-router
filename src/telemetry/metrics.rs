@@ -123,7 +123,8 @@ mod tests {
 
     #[test]
     fn test_metrics_render_uses_prometheus_format() {
-        let _ = FusionMetrics::instance();
+        let metrics = FusionMetrics::instance();
+        metrics.request_duration_seconds.with_label_values(&["test"]).observe(0.01);
         let output = render_metrics();
 
         // Standard prometheus text format: HELP and TYPE declarations

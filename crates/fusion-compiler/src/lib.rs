@@ -49,6 +49,36 @@ pub trait CompilerPass: Send + Sync {
     fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError>;
 }
 
+#[async_trait::async_trait]
+pub trait Compiler: Send + Sync {
+    async fn compile(&self, ir: WorkflowIR) -> Result<CompilerReport, PlatformError>;
+}
+
+pub struct DefaultCompiler {
+    engine: CompilerEngine,
+}
+
+impl DefaultCompiler {
+    pub fn new() -> Self {
+        Self {
+            engine: CompilerEngine::new(),
+        }
+    }
+}
+
+impl Default for DefaultCompiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl Compiler for DefaultCompiler {
+    async fn compile(&self, ir: WorkflowIR) -> Result<CompilerReport, PlatformError> {
+        self.engine.compile("Default Compilation", &ir, false)
+    }
+}
+
 pub struct ValidationPass;
 impl CompilerPass for ValidationPass {
     fn name(&self) -> &str { "Validation" }

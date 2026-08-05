@@ -5,3 +5,4 @@
 //! argument policy, and plugin extraction.
 
 pub mod paths;
+pub use fusion_security::{SecretManager, SharedSecretManager};

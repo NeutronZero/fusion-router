@@ -1086,12 +1086,14 @@ dependencies = [
 name = "fusion-compiler"
 version = "0.14.0"
 dependencies = [
+ "async-trait",
  "fusion-api-internal",
  "fusion-core",
  "fusion-ir",
  "fusion-kernel",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1206,6 +1208,7 @@ dependencies = [
  "fusion-planner",
  "fusion-plugin-api",
  "fusion-plugin-echo",
+ "fusion-runtime",
  "fusion-scheduler",
  "fusion-security",
  "futures",

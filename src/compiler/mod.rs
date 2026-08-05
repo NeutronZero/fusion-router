@@ -10,6 +10,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use crate::types::{CompilerError, ExecutionGraph, WorkflowIR};
 pub use passes::CompilerPass;
+pub use fusion_compiler::{
+    CompilerEngine, CompilerReport, CompilerPassDiff, ExplainRouteScore, ProviderComparisonCandidate,
+};
 
 #[async_trait]
 pub trait Compiler: Send + Sync {

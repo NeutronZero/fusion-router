@@ -51,6 +51,7 @@ pub use policy::{check_http_access, check_secret_access};
 pub use sandbox_instance::SandboxInstance;
 pub use sandbox_runtime::SandboxRuntime;
 pub use telemetry_context::TelemetryContext;
+pub use fusion_runtime::{RuntimeEngine, RuntimeCheckpoint, RuntimeExecutionStep};
 
 #[cfg(feature = "wasm-plugins")]
 pub use linker::configure_linker;

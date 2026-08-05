@@ -85,16 +85,17 @@ flate2 = "1"
 tar = "0.4"
 ctrlc = "3"
 http = "0.2"
-
-[dev-dependencies]
 fusion-core = { path = "crates/fusion-core" }
 fusion-kernel = { path = "crates/fusion-kernel" }
 fusion-api-internal = { path = "crates/fusion-api-internal" }
 fusion-compiler = { path = "crates/fusion-compiler" }
 fusion-planner = { path = "crates/fusion-planner" }
 fusion-scheduler = { path = "crates/fusion-scheduler" }
+fusion-runtime = { path = "crates/fusion-runtime" }
 fusion-infrastructure = { path = "crates/fusion-infrastructure" }
 fusion-security = { path = "crates/fusion-security" }
+
+[dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 fusion-plugin-echo = { path = "plugins/fusion-plugin-echo" }
 fusion-capability-sdk = { path = "crates/fusion-capability-sdk" }

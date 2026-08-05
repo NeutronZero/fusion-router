@@ -7,6 +7,7 @@ pub mod connector_health;
 pub mod connector_resolver;
 pub mod connector_subscriber;
 pub mod distributed;
+pub use fusion_scheduler::{SequentialScheduler, ParallelScheduler, CostOptimizedScheduler};
 
 #[async_trait]
 pub trait Scheduler: Send + Sync {
