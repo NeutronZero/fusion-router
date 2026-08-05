@@ -3,6 +3,33 @@ use fusion_ir::WorkflowIR;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PlacementId(pub uuid::Uuid);
+
+impl PlacementId {
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+}
+
+impl Default for PlacementId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerCapabilities {
+    pub llm_models: Vec<String>,
+    pub memory_mb: u64,
+    pub has_gpu: bool,
+    pub tools: Vec<String>,
+    pub max_parallelism: u32,
+    pub locality_zone: String,
+    pub labels: HashMap<String, String>,
+    pub protocol_version: u16,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodePlacementDecision {
     pub node_id: String,
@@ -18,6 +45,7 @@ pub struct NodePlacementDecision {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlacementReport {
+    pub placement_id: PlacementId,
     pub execution_id: String,
     pub graph_hash: u64,
     pub placement_policy: String,
@@ -36,6 +64,7 @@ pub struct PlacementNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlacementGraph {
+    pub placement_id: PlacementId,
     pub execution_id: String,
     pub nodes: Vec<PlacementNode>,
     pub placement_policy: String,
@@ -79,13 +108,17 @@ impl PlacementEngine {
             });
         }
 
+        let placement_id = PlacementId::new();
+
         let graph = PlacementGraph {
+            placement_id: placement_id.clone(),
             execution_id: exec_id.0.to_string(),
             nodes,
             placement_policy: self.policy_name.clone(),
         };
 
         let report = PlacementReport {
+            placement_id,
             execution_id: exec_id.0.to_string(),
             graph_hash: 428912384,
             placement_policy: self.policy_name.clone(),

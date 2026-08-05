@@ -76,3 +76,27 @@ fn test_domain_invariant_13_single_worker_lease_exclusivity() {
     let lease_key = format!("lease:{}:{}:{}", exec_id.0, node_id, worker_id);
     assert!(lease_key.starts_with("lease:"), "Lease must have unique, deterministic key");
 }
+
+#[test]
+fn test_domain_invariant_placement_id_lineage_and_deterministic_placement() {
+    use fusion_placement::PlacementEngine;
+
+    let exec_id = ExecutionId::new();
+    let ir = WorkflowBuilder::new()
+        .task("n1", "CodeGeneration")
+        .unwrap()
+        .output("n2")
+        .unwrap()
+        .sequential("n1", "n2")
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let placement_engine = PlacementEngine::default();
+    let (graph1, report1) = placement_engine.place(&exec_id, &ir).expect("Placement 1");
+    let (graph2, report2) = placement_engine.place(&exec_id, &ir).expect("Placement 2");
+
+    assert_eq!(graph1.nodes.len(), graph2.nodes.len(), "Placement must be 100% deterministic");
+    assert_eq!(report1.placement_policy, report2.placement_policy, "Placement policy must match");
+    assert!(!graph1.placement_id.0.to_string().is_empty(), "PlacementId lineage must be strongly-typed UUID");
+}

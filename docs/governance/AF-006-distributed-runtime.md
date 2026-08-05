@@ -29,3 +29,5 @@ AF-006 formalizes the elevation of **Placement** into FusionRouter's **4th Core 
 3. **PlacementReport v1**: Detailed score breakdown (`execution_id`, `graph_hash`, `placement_policy`, `node_decisions`, `rejected_workers`, `score_breakdown`).
 4. **Cluster State Contract v1**: Single authoritative worker registry (`ClusterNodeInfo`) shared across Scheduler, Placement Engine, and Studio.
 5. **Execution Lease Contract v1**: Explicit time-bounded lease mechanism governing task execution and failover under **Invariant 13 (Single-Worker Lease Exclusivity)**.
+6. **Worker Capabilities Contract v1**: Standardized `WorkerCapabilities` schema (`llm_models`, `memory_mb`, `has_gpu`, `tools`, `max_parallelism`, `locality_zone`, `labels`, `protocol_version`).
+7. **PlacementId Lineage v1**: Strongly-typed `PlacementId` linking `ExecutionId` → `WorkflowId` → `GraphId` → `PlacementId` → `TimelineId`.
