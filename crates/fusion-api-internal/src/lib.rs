@@ -101,7 +101,7 @@ impl DeterministicReplayEngine {
 
         ReplayResult {
             mode,
-            execution_id: bundle.record.execution_id.clone(),
+            execution_id: bundle.record.execution_id,
             is_deterministic: true,
             replay_fidelity: 1.0,
             steps_replayed: steps,
@@ -169,7 +169,7 @@ mod tests {
     fn test_execution_bundle_export_import_roundtrip() {
         let exec_id = ExecutionId::new();
         let record = ExecutionRecord {
-            execution_id: exec_id.clone(),
+            execution_id: exec_id,
             session_id: "session-1".to_string(),
             entry_point: "REST_CHAT".to_string(),
             prompt: "Refactor to AST".to_string(),

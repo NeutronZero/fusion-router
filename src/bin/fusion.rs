@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_parse_trace_timeline() {
-        let cli = Cli::try_parse_from(&["fusion", "trace", "timeline", "exec-123"]).unwrap();
+        let cli = Cli::try_parse_from(["fusion", "trace", "timeline", "exec-123"]).unwrap();
         if let Commands::Trace(TraceCmd::Timeline { execution_id, .. }) = cli.command {
             assert_eq!(execution_id, "exec-123");
         } else {
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_parse_trace_events() {
-        let cli = Cli::try_parse_from(&["fusion", "trace", "events", "exec-123"]).unwrap();
+        let cli = Cli::try_parse_from(["fusion", "trace", "events", "exec-123"]).unwrap();
         if let Commands::Trace(TraceCmd::Events { execution_id, .. }) = cli.command {
             assert_eq!(execution_id, "exec-123");
         } else {
@@ -399,25 +399,25 @@ mod tests {
 
     #[test]
     fn test_parse_capability_new() {
-        let cli = Cli::try_parse_from(&["fusion", "capability", "new", "my-cap"]).unwrap();
+        let cli = Cli::try_parse_from(["fusion", "capability", "new", "my-cap"]).unwrap();
         assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::New { .. })));
     }
 
     #[test]
     fn test_parse_capability_build() {
-        let cli = Cli::try_parse_from(&["fusion", "capability", "build"]).unwrap();
+        let cli = Cli::try_parse_from(["fusion", "capability", "build"]).unwrap();
         assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Build { .. })));
     }
 
     #[test]
     fn test_parse_capability_test() {
-        let cli = Cli::try_parse_from(&["fusion", "capability", "test"]).unwrap();
+        let cli = Cli::try_parse_from(["fusion", "capability", "test"]).unwrap();
         assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Test { .. })));
     }
 
     #[test]
     fn test_parse_capability_publish() {
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "fusion", "capability", "publish", "pkg.fusionpkg",
             "--registry", "http://localhost",
         ]).unwrap();
@@ -426,13 +426,13 @@ mod tests {
 
     #[test]
     fn test_parse_capability_dev() {
-        let cli = Cli::try_parse_from(&["fusion", "capability", "dev"]).unwrap();
+        let cli = Cli::try_parse_from(["fusion", "capability", "dev"]).unwrap();
         assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Dev { .. })));
     }
 
     #[test]
     fn test_parse_capability_inspect() {
-        let cli = Cli::try_parse_from(&["fusion", "capability", "inspect"]).unwrap();
+        let cli = Cli::try_parse_from(["fusion", "capability", "inspect"]).unwrap();
         assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Inspect)));
     }
 }

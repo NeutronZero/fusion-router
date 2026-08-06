@@ -65,7 +65,7 @@ mod tests {
     fn test_publish_passes_file_check() {
         let dir = tempfile::tempdir().unwrap();
         let pkg_path = dir.path().join("my-cap-0.1.0.fusionpkg");
-        fs::write(&pkg_path, &[0u8; 32]).unwrap();
+        fs::write(&pkg_path, [0u8; 32]).unwrap();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(execute_publish(

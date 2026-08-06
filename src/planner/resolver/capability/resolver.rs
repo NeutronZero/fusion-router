@@ -221,7 +221,7 @@ impl CapabilityResolver {
                     })?;
 
                     if let Some(policy) = policy {
-                        self.apply_policy(dep_id, &dep_contract, policy)?;
+                        self.apply_policy(dep_id, dep_contract, policy)?;
                     }
 
                     result_map.insert(dep_id.clone(), Arc::new(dep_contract.clone()));

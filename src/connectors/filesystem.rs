@@ -186,7 +186,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.outputs["content"], "hello from disk");
-        let _ = std::fs::remove_dir_all(&file.parent().unwrap());
+        let _ = std::fs::remove_dir_all(file.parent().unwrap());
     }
 
     #[tokio::test]

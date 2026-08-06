@@ -38,7 +38,7 @@ pub fn workflow_to_types(ir: &WorkflowIR) -> Result<TypesWorkflowIR, String> {
     let mut nodes = Vec::with_capacity(ir.nodes().len());
     for node in ir.nodes() {
         let config: std::collections::HashMap<String, serde_json::Value> =
-            node.config().clone().into_iter().map(|(k, v)| (k, v)).collect();
+            node.config().clone().into_iter().collect();
         nodes.push(crate::types::IRNode {
             id: uuid_for(node.id()),
             kind: node_kind_of(&node.kind()),
@@ -96,7 +96,7 @@ mod tests {
                 estimated_cost: 1.5,
                 estimated_tokens: 100,
             })
-            .add_node("n1", WorkflowNodeKind::Task, Some("CodeGeneration".into()))
+            .add_node("n1", WorkflowNodeKind::Task, Some("CodeGeneration"))
             .unwrap()
             .with_config("n1", config)
             .unwrap()

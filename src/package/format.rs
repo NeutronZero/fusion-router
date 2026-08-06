@@ -158,8 +158,8 @@ pub(crate) mod tests {
         std::fs::write(tmp.path(), &pkg_bytes).unwrap();
         let archive = extract_package(tmp.path()).unwrap();
         assert!(String::from_utf8_lossy(&archive.manifest).contains("name"));
-        assert!(archive.wasm.len() > 0);
-        assert!(archive.attestation.len() > 0);
+        assert!(!archive.wasm.is_empty());
+        assert!(!archive.attestation.is_empty());
     }
 
     #[test]

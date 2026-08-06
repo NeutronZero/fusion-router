@@ -134,10 +134,8 @@ impl ConfigVersionRepository {
             })?;
 
         let mut history = Vec::new();
-        for r in rows {
-            if let Ok(rec) = r {
-                history.push(rec);
-            }
+        for rec in rows.flatten() {
+            history.push(rec);
         }
         Ok(history)
     }
@@ -254,10 +252,8 @@ impl ProviderRepository {
             })?;
 
         let mut providers = Vec::new();
-        for r in rows {
-            if let Ok(rec) = r {
-                providers.push(rec);
-            }
+        for rec in rows.flatten() {
+            providers.push(rec);
         }
         Ok(providers)
     }

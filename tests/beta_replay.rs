@@ -11,7 +11,7 @@ async fn test_beta_execution_intelligence_and_replay_journey() {
 
     // 1. Construct ExecutionRecord
     let record1 = ExecutionRecord {
-        execution_id: exec_id_1.clone(),
+        execution_id: exec_id_1,
         session_id: "session-100".to_string(),
         entry_point: "REST_CHAT".to_string(),
         prompt: "Build compiler pass".to_string(),

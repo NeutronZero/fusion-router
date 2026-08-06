@@ -58,7 +58,7 @@ mod tests {
         let root = temp_dir();
         let file = write(&root, "a.txt", "x");
         let canonical = canonicalize_within(&root, &file).unwrap();
-        assert!(canonical.starts_with(&std::fs::canonicalize(&root).unwrap()));
+        assert!(canonical.starts_with(std::fs::canonicalize(&root).unwrap()));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -77,7 +77,7 @@ mod tests {
     fn test_absolute_path_splice_rejected() {
         let root = temp_dir();
         std::fs::create_dir_all(&root).unwrap();
-        let outside = write(&root.parent().unwrap(), "outside.txt", "x");
+        let outside = write(root.parent().unwrap(), "outside.txt", "x");
         let err = canonicalize_within(&root, &outside).unwrap_err();
         assert!(matches!(err, PathError::Escape(_)));
         let _ = std::fs::remove_file(&outside);
@@ -90,7 +90,7 @@ mod tests {
         use std::os::unix::fs::symlink;
         let root = temp_dir();
         std::fs::create_dir_all(&root).unwrap();
-        let outside = write(&root.parent().unwrap(), "secret.txt", "s");
+        let outside = write(root.parent().unwrap(), "secret.txt", "s");
         let link = root.join("link.txt");
         symlink(&outside, &link).unwrap();
         let err = canonicalize_within(&root, &link).unwrap_err();

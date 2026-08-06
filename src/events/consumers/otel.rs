@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn test_default_equivalent_to_new() {
-        let default = OpenTelemetryProjection::default();
+        let default = OpenTelemetryProjection;
         assert_eq!(default.name(), OpenTelemetryProjection::new().name());
     }
 }

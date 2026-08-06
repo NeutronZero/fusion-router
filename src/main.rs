@@ -1,4 +1,4 @@
-#![cfg_attr(not(test), allow(dead_code))] // Intentional: stubs for future production wiring (CircuitBreakingProvider, WorkflowPlanner, DynamicPlanner)
+#![allow(dead_code)] // Intentional: binary crate exposes no public API; pub items in module tree are stubs for future production wiring (CircuitBreakingProvider, WorkflowPlanner, DynamicPlanner)
 use std::path::PathBuf;
 use std::sync::Arc;
 

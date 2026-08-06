@@ -78,29 +78,6 @@ impl Default for HttpTransport {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_with_backoff_stores_settings() {
-        let transport = HttpTransport::with_backoff(Duration::from_secs(5), 250, 4_000, 3);
-
-        assert_eq!(transport.backoff_base_ms, 250);
-        assert_eq!(transport.backoff_max_ms, 4_000);
-        assert_eq!(transport.max_retries, 3);
-    }
-
-    #[test]
-    fn test_new_uses_default_backoff_settings() {
-        let transport = HttpTransport::new(Duration::from_secs(30));
-
-        assert_eq!(transport.backoff_base_ms, DEFAULT_BACKOFF_BASE_MS);
-        assert_eq!(transport.backoff_max_ms, DEFAULT_BACKOFF_MAX_MS);
-        assert_eq!(transport.max_retries, DEFAULT_MAX_RETRIES);
-    }
-}
-
 #[async_trait]
 impl Transport for HttpTransport {
     #[tracing::instrument(skip(self, req), fields(url = %req.url, method = %req.method))]
@@ -164,5 +141,28 @@ impl Transport for HttpTransport {
         });
         
         Ok(Box::pin(stream))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_with_backoff_stores_settings() {
+        let transport = HttpTransport::with_backoff(Duration::from_secs(5), 250, 4_000, 3);
+
+        assert_eq!(transport.backoff_base_ms, 250);
+        assert_eq!(transport.backoff_max_ms, 4_000);
+        assert_eq!(transport.max_retries, 3);
+    }
+
+    #[test]
+    fn test_new_uses_default_backoff_settings() {
+        let transport = HttpTransport::new(Duration::from_secs(30));
+
+        assert_eq!(transport.backoff_base_ms, DEFAULT_BACKOFF_BASE_MS);
+        assert_eq!(transport.backoff_max_ms, DEFAULT_BACKOFF_MAX_MS);
+        assert_eq!(transport.max_retries, DEFAULT_MAX_RETRIES);
     }
 }

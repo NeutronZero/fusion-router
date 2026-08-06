@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn test_api_key_matches_rejects_oversize_key() {
         let oversized = "x".repeat(MAX_API_KEY_BYTES + 1);
-        assert!(!api_key_matches(&oversized, &[oversized.clone()]));
+        assert!(!api_key_matches(&oversized, std::slice::from_ref(&oversized)));
         let oversized_configured = "y".repeat(MAX_API_KEY_BYTES + 1);
         assert!(!api_key_matches("y", &[oversized_configured]));
     }

@@ -595,7 +595,7 @@ async fn test_cache_contention() {
     for h in handles {
         h.await.unwrap();
     }
-    assert!(cache.len() > 0, "Cache should have entries after contention");
+    assert!(!cache.is_empty(), "Cache should have entries after contention");
 }
 
 #[tokio::test]

@@ -113,7 +113,7 @@ async fn test_metered_stream_counts_tokens() {
     let cancel = CancellationToken::new();
     let (mut stream, meter) = metered_stream(inner, guard, cancel, None);
 
-    while let Some(_) = stream.next().await {}
+    while stream.next().await.is_some() {}
 
     let mut m = meter.lock().unwrap();
     let report = m.finalize(None);
@@ -153,7 +153,7 @@ async fn test_metered_stream_reports_ttfb() {
     // Wait before consuming so TTFB is non-trivial
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    while let Some(_) = stream.next().await {}
+    while stream.next().await.is_some() {}
 
     let mut m = meter.lock().unwrap();
     let report = m.finalize(None);
@@ -189,7 +189,7 @@ async fn test_cancelling_stream_stops_early() {
     let (mut stream, _meter) = metered_stream(inner, guard, cancel, None);
 
     let mut count = 0;
-    while let Some(_) = stream.next().await {
+    while stream.next().await.is_some() {
         count += 1;
     }
 
@@ -226,7 +226,7 @@ async fn test_stream_resource_guard_released_on_exhaustion() {
     let cancel = CancellationToken::new();
     let (mut stream, _meter) = metered_stream(inner, guard, cancel, None);
 
-    while let Some(_) = stream.next().await {}
+    while stream.next().await.is_some() {}
 
     // The guard's drop spawns an async release — yield so it can run
     tokio::time::sleep(Duration::from_millis(50)).await;

@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(node.node_id, "n1");
         assert_eq!(node.capability, "CodeGeneration");
         assert_eq!(node.retry_policy.as_ref().unwrap().max_retries, 2);
-        assert_eq!(node.security_policy.as_ref().unwrap().sandbox_required, true);
+        assert!(node.security_policy.as_ref().unwrap().sandbox_required);
         assert_eq!(node.telemetry_hooks.len(), 1);
         assert_eq!(back.edges[0].kind, AbiEdgeKind::Sequential);
     }

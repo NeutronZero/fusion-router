@@ -551,8 +551,8 @@ resources:
         let tools = ToolsConfig::default();
         assert!(!tools.allow_auto_exec);
         assert!(!tools.allow_unrestricted_args);
-        assert_eq!(default_allow_auto_exec(), false);
-        assert_eq!(default_allow_unrestricted_args(), false);
+        assert!(!default_allow_auto_exec());
+        assert!(!default_allow_unrestricted_args());
     }
 
     #[test]
