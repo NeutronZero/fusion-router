@@ -67,3 +67,64 @@ pub async fn check_gates(runner: &GateRunner, context: &GateContext) -> String {
     let report = GateReport::new(results, version);
     report.to_text()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::release::gate::{GateCategory, GateMetadata, MockGate};
+
+    fn sample_runner() -> GateRunner {
+        let meta = GateMetadata {
+            id: GateId::Sdk1,
+            category: GateCategory::Compatibility,
+            required: true,
+            introduced: semver::Version::new(1, 0, 0),
+        };
+        let mock_gate = MockGate::new(
+            GateId::Sdk1,
+            "SDK Test Gate",
+            "Validates SDK compatibility",
+            meta,
+            GateExecution::Success(GateResult {
+                gate_id: GateId::Sdk1,
+                passed: true,
+                summary: "SDK gate passed".into(),
+                details: vec![],
+                duration: Duration::from_millis(10),
+            }),
+        );
+        let mut runner = GateRunner::new();
+        runner.register(Box::new(mock_gate));
+        runner
+    }
+
+    #[test]
+    fn test_list_gates_empty() {
+        let runner = GateRunner::new();
+        let output = list_gates(&runner);
+        assert_eq!(output, "No gates registered.");
+    }
+
+    #[test]
+    fn test_list_gates_with_entries() {
+        let runner = sample_runner();
+        let output = list_gates(&runner);
+        assert!(output.contains("Registered release gates:"));
+        assert!(output.contains("SDK Test Gate"));
+    }
+
+    #[test]
+    fn test_explain_gate_found() {
+        let runner = sample_runner();
+        let output = explain_gate(&runner, GateId::Sdk1);
+        assert!(output.contains("Gate: SDK Test Gate"));
+        assert!(output.contains("Validates SDK compatibility"));
+    }
+
+    #[test]
+    fn test_explain_gate_not_found() {
+        let runner = sample_runner();
+        let output = explain_gate(&runner, GateId::Upgrade1);
+        assert!(output.contains("Gate 'UPG-1' not found."));
+    }
+}

@@ -223,4 +223,33 @@ mod tests {
 
         assert!(graph.validate().is_err());
     }
+
+    #[test]
+    fn test_topological_sort_empty() {
+        let graph = CapabilityGraph::new();
+        let order = graph.topological_sort().expect("Empty graph should sort successfully");
+        assert!(order.is_empty());
+    }
+
+    #[test]
+    fn test_topological_sort_single_node() {
+        let mut graph = CapabilityGraph::new();
+        graph.add_node(make_contract("single"));
+        let order = graph.topological_sort().expect("Single node graph should sort successfully");
+        assert_eq!(order.len(), 1);
+        assert_eq!(order[0].as_str(), "single");
+    }
+
+    #[test]
+    fn test_topological_sort_cycle_returns_err() {
+        let mut graph = CapabilityGraph::new();
+        graph.add_node(make_contract("node_x"));
+        graph.add_node(make_contract("node_y"));
+        graph.add_dependency(CapabilityId::new("node_x"), CapabilityId::new("node_y"));
+        graph.add_dependency(CapabilityId::new("node_y"), CapabilityId::new("node_x"));
+
+        let res = graph.topological_sort();
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Cyclic dependency"));
+    }
 }

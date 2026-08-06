@@ -99,41 +99,13 @@ impl EvidenceRepository for SqliteEvidenceRepository {
             }
 
             let mut avg_latencies: HashMap<String, f64> = HashMap::new();
-            {
-                let mut stmt = tx.prepare(
-                    "SELECT model, AVG(latency_ms) FROM execution_records GROUP BY model",
-                )?;
-                let rows = stmt.query_map([], |row| {
-                    let model: String = row.get(0)?;
-                    let avg: f64 = row.get(1)?;
-                    Ok((model, avg))
-                })?;
-                for row in rows {
-                    let (model, avg) = row?;
-                    avg_latencies.insert(model, avg);
-                }
-            }
-
             let mut avg_costs: HashMap<String, f64> = HashMap::new();
-            {
-                let mut stmt = tx.prepare(
-                    "SELECT model, AVG(cost) FROM execution_records GROUP BY model",
-                )?;
-                let rows = stmt.query_map([], |row| {
-                    let model: String = row.get(0)?;
-                    let avg: f64 = row.get(1)?;
-                    Ok((model, avg))
-                })?;
-                for row in rows {
-                    let (model, avg) = row?;
-                    avg_costs.insert(model, avg);
-                }
-            }
-
             let mut model_rankings: Vec<String> = Vec::new();
             {
                 let mut stmt = tx.prepare(
                     "SELECT model,
+                            AVG(latency_ms),
+                            AVG(cost),
                             CAST(SUM(success) AS REAL) / CAST(COUNT(*) AS REAL) AS rate
                      FROM execution_records
                      GROUP BY model
@@ -141,10 +113,15 @@ impl EvidenceRepository for SqliteEvidenceRepository {
                 )?;
                 let rows = stmt.query_map([], |row| {
                     let model: String = row.get(0)?;
-                    Ok(model)
+                    let avg_lat: f64 = row.get(1)?;
+                    let avg_cost: f64 = row.get(2)?;
+                    Ok((model, avg_lat, avg_cost))
                 })?;
                 for row in rows {
-                    model_rankings.push(row?);
+                    let (model, avg_lat, avg_cost) = row?;
+                    avg_latencies.insert(model.clone(), avg_lat);
+                    avg_costs.insert(model.clone(), avg_cost);
+                    model_rankings.push(model);
                 }
             }
 

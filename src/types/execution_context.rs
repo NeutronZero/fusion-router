@@ -182,4 +182,56 @@ mod tests {
         ctx.trace.record(ExecutionEvent::ExecutionStarted { timestamp_ms: 100 });
         assert_eq!(ctx.trace.events().len(), 2); // ConnectorBound + ExecutionStarted
     }
+
+    #[test]
+    fn test_set_state_transitions() {
+        let instance = fusion_plugin_api::CapabilityInstance {
+            contract: fusion_plugin_api::CapabilityContract {
+                id: fusion_plugin_api::CapabilityId::new("test.op"),
+                version: semver::Version::parse("1.0.0").unwrap(),
+                description: "Test".into(),
+                inputs_schema: json!({}),
+                outputs_schema: json!({}),
+                permissions: vec![],
+                dependencies: vec![],
+                estimated_cost_usd: 0.0,
+                estimated_latency_ms: 1,
+                reliability_score: 1.0,
+                supports_streaming: false,
+                traits: vec![],
+            },
+            runtime_params: json!({}),
+        };
+        let ctx = ExecutionContext::new(instance, "test_conn".into(), json!({}));
+        assert_eq!(ctx.state(), ExecutionState::Pending);
+
+        ctx.set_state(ExecutionState::Running);
+        assert_eq!(ctx.state(), ExecutionState::Running);
+
+        ctx.set_state(ExecutionState::Succeeded);
+        assert_eq!(ctx.state(), ExecutionState::Succeeded);
+
+        ctx.set_state(ExecutionState::Failed);
+        assert_eq!(ctx.state(), ExecutionState::Failed);
+    }
+
+    #[test]
+    fn test_execution_trace_record() {
+        let trace = ExecutionTrace::new(Uuid::new_v4());
+        assert!(trace.events().is_empty());
+
+        trace.record(ExecutionEvent::ExecutionStarted { timestamp_ms: 12345 });
+        assert_eq!(trace.events().len(), 1);
+
+        trace.record(ExecutionEvent::ExecutionFinished {
+            final_state: ExecutionState::Succeeded,
+            timestamp_ms: 12399,
+        });
+        let events = trace.events();
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            ExecutionEvent::ExecutionStarted { timestamp_ms } => assert_eq!(*timestamp_ms, 12345),
+            _ => panic!("unexpected event"),
+        }
+    }
 }

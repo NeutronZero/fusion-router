@@ -52,8 +52,8 @@ impl ShellCommandTool {
                     "argument exceeds max length of {MAX_ARG_LEN} bytes"
                 ));
             }
-            if arg.contains('\0') {
-                return Err("arguments must not contain NUL bytes".to_string());
+            if arg.contains('\0') || arg.contains('\n') || arg.contains('\r') {
+                return Err("arguments must not contain NUL or newline characters".to_string());
             }
         }
         Ok(())

@@ -264,7 +264,7 @@ impl ExecutionLeaseManager {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        let mut map = self.leases.write().unwrap();
+        let mut map = self.leases.write().unwrap_or_else(|e| e.into_inner());
         let mut prev_epoch = 0u64;
 
         // Enforce Invariant 13: Single-Worker Lease Exclusivity & Expiration
@@ -301,7 +301,7 @@ impl ExecutionLeaseManager {
     }
 
     pub fn renew_lease(&self, lease_key: &str) -> bool {
-        let mut map = self.leases.write().unwrap();
+        let mut map = self.leases.write().unwrap_or_else(|e| e.into_inner());
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -318,7 +318,7 @@ impl ExecutionLeaseManager {
     }
 
     pub fn revoke_lease(&self, lease_key: &str) -> bool {
-        let mut map = self.leases.write().unwrap();
+        let mut map = self.leases.write().unwrap_or_else(|e| e.into_inner());
         if let Some(lease) = map.get_mut(lease_key) {
             lease.is_revoked = true;
             return true;

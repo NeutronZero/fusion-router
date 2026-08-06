@@ -156,6 +156,10 @@ impl SemanticCache {
         *self.index.lock().unwrap_or_else(|e| e.into_inner()) = new_index;
         self.next_label.store(0, Ordering::Relaxed);
     }
+
+    pub fn set_capacity(&mut self, new_capacity: usize) {
+        self.max_entries = new_capacity;
+    }
 }
 
 #[cfg(test)]
@@ -186,5 +190,13 @@ mod tests {
         cache.put("key2", serde_json::json!("r2")).await;
         cache.put("key3", serde_json::json!("r3")).await;
         assert_eq!(cache.len(), 2, "Should evict oldest entry leaving newest 2");
+    }
+
+    #[test]
+    fn test_set_capacity() {
+        let mut cache = SemanticCache::new(Arc::new(MockEmbedder), 0.9, 100, 384);
+        assert_eq!(cache.max_entries, 100);
+        cache.set_capacity(50);
+        assert_eq!(cache.max_entries, 50);
     }
 }

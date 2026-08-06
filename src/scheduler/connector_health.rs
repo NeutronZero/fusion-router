@@ -60,10 +60,20 @@ impl ConnectorHealthChecker {
         let mut interval = tokio::time::interval(Duration::from_secs(self.check_interval_secs));
         loop {
             interval.tick().await;
-            let connectors = resolver.connectors.read().clone();
-            for (name, connector) in &connectors {
-                let health = self.check_connector_health(name, connector.as_ref()).await;
-                self.health_map.write().await.insert(name.clone(), health);
+            let connector_pairs: Vec<(String, Arc<dyn Connector>)> = {
+                let guard = resolver.connectors.read();
+                guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            };
+
+            let futures = connector_pairs.into_iter().map(|(name, connector)| async move {
+                let health = self.check_connector_health(&name, connector.as_ref()).await;
+                (name, health)
+            });
+
+            let results = futures::future::join_all(futures).await;
+            let mut map = self.health_map.write().await;
+            for (name, health) in results {
+                map.insert(name, health);
             }
         }
     }

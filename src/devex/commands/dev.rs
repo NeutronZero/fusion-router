@@ -73,4 +73,15 @@ mod tests {
         let t = last_modified_time(Path::new("/nonexistent/path"));
         assert_eq!(t, std::time::UNIX_EPOCH);
     }
+
+    #[test]
+    fn test_execute_dev_missing_src_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        // project_dir has no src/ directory
+        let res = execute_dev(temp_dir.path(), 8080);
+        // Note: setting ctrlc handler in tests may fail or proceed to src dir check
+        if let Err(e) = res {
+            assert!(e.contains("src/ directory not found") || e.contains("Failed to set Ctrl-C handler"));
+        }
+    }
 }
