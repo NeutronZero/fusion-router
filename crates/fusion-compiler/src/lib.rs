@@ -92,7 +92,7 @@ impl CompilerPass for ConstraintValidationPass {
     }
 
     fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        if ir.nodes.is_empty() {
+        if ir.nodes().is_empty() {
             return Err(PlatformError::Compiler {
                 code: "EMPTY_IR".to_string(),
                 message: "IR must have at least one node".to_string(),
@@ -174,7 +174,7 @@ pub struct CompilerEngine {
 impl CompilerEngine {
     pub fn new() -> Self {
         let passes: Vec<Box<dyn CompilerPass>> = vec![
-            Box::new(ValidationPass),
+            Box::new(ConstraintValidationPass),
             Box::new(CapabilityResolutionPass),
             Box::new(ConstraintSolverPass),
             Box::new(ConstantFoldingPass),
