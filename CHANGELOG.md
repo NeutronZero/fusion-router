@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.14.5] – 2026-08-08 — Multi-Model Review & Remediation
+
+- **Multi-Model Ensemble Review (ADR-038)** — `review` CLI now runs a per-member
+  consensus ensemble: each member model independently reviews the commit/spec
+  with its own tool loop, and a judge consolidates the member outputs
+  (`src/review.rs`, `docs/reviews/2026-08-08-ensemble-findings.md`)
+  - Ensemble configuration via `--members`/`--count`; fixed default-member
+    handling when `--members` is supplied
+- **Ensemble remediation batch** — 7 findings fixed, 9 refuted with quoted
+  evidence against current source:
+  - **Fixed:** tool-registry panic path (`execute_native_tool_calls` fails
+    closed instead of unwrapping); double stream-meter finalization in
+    `cancelling_stream` (finish hook fires once, error + drop covered);
+    semantic-cache pollution (only non-empty text outputs are cached);
+    `ProviderRegistry::commit` now bumps `version` so subscribers observe
+    reloads; `ProviderConfig.base_url` honored (config wins over env default,
+    additive `with_base_url` constructors on OpenRouter/Zen models); UTF-8
+    multi-byte reassembly across chunk boundaries in `transport/http.rs`
+    stream(); tool-loop budget stop keeps the model's final text instead of
+    discarding it for raw tool-call JSON
+  - **Hardened:** `RouterError::user_message()` added — pipeline failures,
+    stream errors, and provider-open failures no longer echo internal strings
+    to clients (full detail stays in server logs)
+  - **Refuted (evidence in findings doc):** no token-estimation OOM (#2);
+    tool allowlist survives strategy override (#5); stream admission estimate
+    is replaced by measured usage (#6); ADR-035 debug relaxation is
+    intentional and tested (#9); no-op execution-kind arms are routing
+    markers (semantics live in scheduler/compiler, #10); retry/fallback
+    policies are enforced by `DefaultScheduler` (#11); boot/reload always
+    validate (#16); no external cancellation source by design (#15)
+- **Test & build hygiene** — `cargo test` and `cargo test --all-features`
+  fully green (zero warnings); pre-existing compile drift in 10
+  test/example literals (`strategy`/`members` struct fields) repaired;
+  `.memory/` validated (`check-memory.py` ALL CHECKS PASSED)
+
 ## [0.14.0] – 2026-08-04 — FusionRouter v0.14 LTS Foundation
 
 - **Platform Architecture & Governance (AF-003, AF-004, AF-005 Freezes)**
