@@ -134,7 +134,19 @@ impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
             }
             if matches!(node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
                 if let Some(ctx_snapshot) = &ctx.assembled_context {
-                    node.config.insert("messages".to_string(), serde_json::to_value(&ctx_snapshot.messages).unwrap_or_default());
+                    let messages = serde_json::to_value(&ctx_snapshot.messages).unwrap_or_default();
+                    node.config.insert("messages".to_string(), messages.clone());
+                    // Strategy sub-nodes (consensus members, judge, etc.) are
+                    // prebuilt at compile time and never see the request
+                    // context. Propagate the assembled messages into every LLM
+                    // sub-node so their requests carry the user's input.
+                    if let Some(subgraph) = node.subgraph.as_mut() {
+                        for sub_node in &mut subgraph.nodes {
+                            if matches!(sub_node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
+                                sub_node.config.insert("messages".to_string(), messages.clone());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -161,8 +173,29 @@ impl PipelineStep<ExecutionGraph, ResourceGuard> for ResourceReservationStep {
         // Initialize per-request budget envelope from global quota
         let q = self.resource_manager.quota();
         let max_cost = ((q.max_daily_cost * 0.2 * 1000.0) as u64).max(10_000);
-        let max_tokens = (q.max_daily_tokens / 5).max(10_000);
-        ctx.budget_envelope = Some(BudgetEnvelope::new(max_cost, max_tokens, 10));
+        // The envelope must never be smaller than the request itself needs:
+        // every LLM node re-sends the full assembled context, so the minimum
+        // workable budget is (input + output) x number of LLM nodes.
+        let input_tokens: u64 = ctx
+            .assembled_context
+            .as_ref()
+            .map(|c| {
+                c.messages
+                    .iter()
+                    .map(|m| (m.content.len() / 4) as u64)
+                    .sum()
+            })
+            .unwrap_or(0);
+        let llm_node_count = graph
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge))
+            .count()
+            .max(1) as u64;
+        let max_output = ctx.request.max_tokens.unwrap_or(4096) as u64;
+        let request_min = (input_tokens + max_output).saturating_mul(llm_node_count);
+        let max_tokens = (q.max_daily_tokens / 5).max(request_min).max(10_000);
+        ctx.budget_envelope = Some(BudgetEnvelope::new(max_cost, max_tokens, 100));
 
         let guard = ResourceGuard::new(ctx.request_id, graph, self.resource_manager.clone());
         ctx.resource_guard = None;

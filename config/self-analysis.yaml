@@ -1,0 +1,107 @@
+server:
+  host: "127.0.0.1"
+  port: 8080
+  shutdown_timeout_secs: 30
+  cors:
+    allowed_origins: []
+    allowed_methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed_headers:
+      - content-type
+      - authorization
+      - x-api-key
+      - x-request-id
+
+resources:
+  max_daily_cost: 10.0
+  max_daily_tokens: 1000000
+  max_concurrent: 5
+  max_concurrent_nodes: 16
+  provider_limits:
+    opencode-zen:
+      max_daily_cost: 5.0
+      max_rpm: 60
+      max_tpm: 500000
+    openrouter:
+      max_daily_cost: 5.0
+      max_rpm: 60
+      max_tpm: 500000
+
+policies:
+  - name: default
+    priority: 1
+    conditions: []
+    actions:
+      - action_type: set_strategy
+        params:
+          strategy: "auto"
+
+strategies:
+  consensus_count: 3
+
+providers:
+  zen:
+    base_url: "https://opencode.ai/zen/v1"
+    api_key_env: "OPENCODEZEN_API_KEY"
+    failure_threshold: 5
+    cooldown_secs: 30
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    failure_threshold: 5
+    cooldown_secs: 30
+
+connectors:
+  my-github:
+    connector_type: github
+    config:
+      token_env: GITHUB_TOKEN
+  my-filesystem:
+    connector_type: filesystem
+    config:
+      allowed_paths: ["./data"]
+
+auth:
+  enabled: false
+  api_keys: []
+
+rate_limiting:
+  enabled: true
+  requests_per_minute: 60
+  burst_size: 10
+  cleanup_interval_secs: 300
+
+logging:
+  format: "text"
+  level: "info"
+  directory: ~
+
+streaming:
+  enabled: false
+  checkpoint_interval_chunks: 100
+  default_chunk_timeout_secs: 30
+
+tools:
+  allowed_shell_commands: []
+  shell_timeout_secs: 10
+  allowed_read_directories:
+    - "."
+  enable_http_tool: false
+  allow_auto_exec: true
+  allow_unrestricted_args: false
+
+features:
+  streaming:
+    enabled: true
+  replay:
+    enabled: false
+  connector-health:
+    enabled: true
+  semantic-cache:
+    enabled: false
+  wasm-plugins:
+    enabled: false
