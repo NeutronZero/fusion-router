@@ -406,6 +406,51 @@ async fn process_request(
             node.model = Some(request.model.trim().to_string());
         }
     }
+
+    // Strategy override: the caller may skip the plan's workflow shape and
+    // run one ensemble node — e.g. a multi-model consensus where each
+    // member (a different model) reviews the same task with its own tool
+    // loop and the judge consolidates the member outputs.
+    if let Some(strategy) = &request.strategy {
+        let kind = match strategy.kind.as_str() {
+            "Single" | "single" => crate::types::StrategyKind::Single,
+            "Consensus" | "consensus" => crate::types::StrategyKind::Consensus,
+            "Reflection" | "reflection" => crate::types::StrategyKind::Reflection,
+            "Debate" | "debate" => crate::types::StrategyKind::Debate,
+            "ReAct" | "react" => crate::types::StrategyKind::ReAct,
+            "Chain" | "chain" => crate::types::StrategyKind::Chain,
+            "Fusion" | "fusion" => crate::types::StrategyKind::Fusion,
+            other => crate::types::StrategyKind::Custom(other.to_string()),
+        };
+        let mut config: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+        if kind == crate::types::StrategyKind::Consensus {
+            config.insert("count".into(), serde_json::json!(strategy.count));
+            if !strategy.members.is_empty() {
+                config.insert(
+                    "members".into(),
+                    serde_json::json!(strategy.members),
+                );
+            }
+        }
+        config.insert(
+            "max_tool_rounds".into(),
+            serde_json::json!(strategy.max_tool_rounds),
+        );
+        tracing::info!(
+            request_id = %request_id,
+            strategy = %strategy.kind,
+            count = strategy.count,
+            members = ?strategy.members,
+            "request strategy override applied"
+        );
+        ir.nodes = vec![crate::types::IRNode {
+            id: Uuid::new_v4(),
+            kind: crate::types::IRNodeKind::Generate,
+            strategy: kind,
+            model: Some(request.model.clone()),
+            config,
+        }];
+    }
     tracing::debug!(plan_id = %ir.plan_id, nodes = ir.nodes.len(), request_id = %request_id, "plan created");
 
     // 5. Compilation

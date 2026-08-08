@@ -211,6 +211,40 @@ mod tests {
     }
 
     #[test]
+    fn test_chat_completion_request_with_ensemble_strategy() {
+        let json = r#"{
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "review"}],
+            "strategy": {
+                "kind": "Consensus",
+                "count": 3,
+                "members": ["zen/model-a", "openrouter/model-b", "openrouter/model-c"],
+                "max_tool_rounds": 5
+            }
+        }"#;
+        let request: ChatCompletionRequest = serde_json::from_str(json).unwrap();
+        let strategy = request.strategy.expect("strategy present");
+        assert_eq!(strategy.kind, "Consensus");
+        assert_eq!(strategy.count, 3);
+        assert_eq!(strategy.members, vec!["zen/model-a", "openrouter/model-b", "openrouter/model-c"]);
+        assert_eq!(strategy.max_tool_rounds, 5);
+    }
+
+    #[test]
+    fn test_chat_completion_request_strategy_defaults() {
+        let json = r#"{
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "review"}],
+            "strategy": {"kind": "Consensus", "members": ["a", "b"]}
+        }"#;
+        let request: ChatCompletionRequest = serde_json::from_str(json).unwrap();
+        let strategy = request.strategy.expect("strategy present");
+        assert_eq!(strategy.kind, "Consensus");
+        assert_eq!(strategy.count, 3, "count defaults to 3");
+        assert_eq!(strategy.max_tool_rounds, 8, "max_tool_rounds defaults to 8");
+    }
+
+    #[test]
     fn test_execution_intent_default_is_balanced() {
         let intent = ExecutionIntent::default();
         assert!(matches!(intent, ExecutionIntent::Balanced));

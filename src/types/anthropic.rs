@@ -133,6 +133,7 @@ impl AnthropicMessagesRequest {
             files: None,
             execution: None,
             output: None,
+            strategy: None,
         }
     }
 }

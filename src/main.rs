@@ -39,6 +39,7 @@ mod events;
 #[cfg(feature = "wasm-plugins")]
 mod wasm;
 mod operations;
+mod review;
 
 use config::AppConfig;
 use providers::circuit_breaker::CircuitBreaker;
@@ -85,6 +86,20 @@ async fn main() {
              == networks.                                                   ==\n\
              =================================================================="
         );
+    }
+
+    // Offline mode: `fusion-router review [args]` runs a multi-model code
+    // review entirely in-process (no HTTP server, no lifecycle binding).
+    if std::env::args().nth(1).as_deref() == Some("review") {
+        let env_filter = tracing_subscriber::EnvFilter::default()
+            .add_directive("info".parse().expect("invalid log level"));
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
+        let args = review::ReviewArgs::from_args();
+        if let Err(e) = review::run(args).await {
+            eprintln!("review failed: {e:?}");
+            std::process::exit(1);
+        }
+        return;
     }
 
     telemetry::tracing::init_console();

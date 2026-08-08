@@ -329,6 +329,7 @@ mod tests {
             files: None,
             execution: None,
             output: None,
+            strategy: None,
         }
     }
 

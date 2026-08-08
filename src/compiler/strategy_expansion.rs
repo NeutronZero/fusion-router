@@ -65,6 +65,18 @@ pub(crate) fn strategy_ir_from_node(node: &ExecutionNode) -> StrategyIR {
         StrategyKind::Single => StrategyIR::Single,
         StrategyKind::Consensus => StrategyIR::Consensus {
             count: node.config.get("count").and_then(|v| v.as_u64()).unwrap_or(3) as u32,
+            members: node
+                .config
+                .get("members")
+                .and_then(|v| {
+                    v.as_array().map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default(),
         },
         StrategyKind::Debate => StrategyIR::Debate {
             roles: node
@@ -242,5 +254,53 @@ mod tests {
         let sb = expanded_subgraph(&b).unwrap();
         assert_eq!(sa.nodes.len(), sb.nodes.len());
         assert_eq!(sa.nodes[0].id, sb.nodes[0].id);
+    }
+
+    #[test]
+    fn consensus_node_members_flow_into_ir() {
+        let mut node = make_node(StrategyKind::Consensus);
+        node.config.insert("count".into(), serde_json::json!(3));
+        node.config.insert(
+            "members".into(),
+            serde_json::json!(["zen/model-a", "openrouter/model-b", "openrouter/model-c"]),
+        );
+        let ir = strategy_ir_from_node(&node);
+        match ir {
+            StrategyIR::Consensus { count, members } => {
+                assert_eq!(count, 3);
+                assert_eq!(members, vec!["zen/model-a", "openrouter/model-b", "openrouter/model-c"]);
+            }
+            _ => panic!("expected Consensus IR"),
+        }
+    }
+
+    #[test]
+    fn consensus_without_members_defaults_to_empty_ir() {
+        let node = make_node(StrategyKind::Consensus);
+        let ir = strategy_ir_from_node(&node);
+        match ir {
+            StrategyIR::Consensus { count, members } => {
+                assert_eq!(count, 3);
+                assert!(members.is_empty());
+            }
+            _ => panic!("expected Consensus IR"),
+        }
+    }
+
+    #[test]
+    fn consensus_expansion_carries_per_member_models() {
+        let mut node = make_node(StrategyKind::Consensus);
+        node.config.insert(
+            "members".into(),
+            serde_json::json!(["zen/model-a", "openrouter/model-b", "openrouter/model-c"]),
+        );
+        let subgraph = expanded_subgraph(&node).expect("consensus expands");
+        let models: Vec<String> = subgraph
+            .nodes
+            .iter()
+            .filter(|n| n.kind == ExecutionNodeKind::LLMGenerate)
+            .map(|n| n.model.clone())
+            .collect();
+        assert_eq!(models, vec!["zen/model-a", "openrouter/model-b", "openrouter/model-c"]);
     }
 }

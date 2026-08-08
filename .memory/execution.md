@@ -35,6 +35,66 @@ request carries the user's input:
   — applied to both prebuilt subgraphs and runtime-lowered legacy subgraphs.
 - Regression covered by `test_resolve_strategy_propagates_parent_messages_to_subnodes`.
 
+### Multi-Model Consensus (per-member models)
+
+`StrategyKind::Consensus` supports assigning **distinct models per member**:
+
+- `StrategyIR::Consensus { count, members: Vec<String> }` — `members` is
+  `#[serde(default)]`; absent ⇒ all members share the node's model.
+- `ConsensusStrategy::lower` maps member index `i` to
+  `members[(i-1) % members.len()]` (the fan-out members start at index 1),
+  falling back to the node model when the vector is empty; the **judge
+  (reducer) uses the last member's model**.
+- `strategy_expansion` reads `node.config["count"]` (default 3) and
+  `node.config["members"]` (string array).
+- Regression tests: `test_consensus_members_assign_distinct_models`,
+  `test_consensus_members_cycle_when_shorter_than_count`,
+  `test_consensus_no_members_uses_node_model`.
+
+### Request-Level Strategy Override
+
+`ChatCompletionRequest.strategy: Option<RequestStrategy>` lets a caller
+bypass the workflow shape and run a single ensemble node:
+
+```json
+{
+  "model": "openrouter/auto",
+  "messages": [...],
+  "tools": [{"type": "function", "function": {"name": "file_read"}}],
+  "strategy": {
+    "kind": "Consensus",
+    "count": 3,
+    "members": ["zen/deepseek-v4-flash-free", "openrouter/openai/gpt-oss-20b:free"],
+    "max_tool_rounds": 8
+  }
+}
+```
+
+- `RequestStrategy` fields (all serde-defaulted): `kind` (`"Consensus"`),
+  `count` (3), `members` (empty ⇒ each member uses the provider's routed
+  default), `max_tool_rounds` (8).
+- `process_request` (`src/server/handlers.rs`) maps the kind to
+  `StrategyKind` and replaces the plan with one `IRNodeKind::Generate`
+  carrying `count`/`members`/`max_tool_rounds`. Messages and the tool
+  allowlist are restored by `CompilationStep` (see above).
+
+### Offline Review CLI (`fusion-router review`)
+
+`src/review.rs` runs the same ensemble machinery fully in-process (no HTTP
+server): it builds the provider registry + tool registry from config,
+constructs one `StrategyKind::Consensus` node with `members` (default 3
+free models), `messages` (file list + review prompt), `tool_allowlist`
+(`file_read`, `calculator`), and a bounded tool loop, attaches the
+compile-time `expanded_subgraph`, and executes via `DefaultScheduler`.
+The judge (last member) consolidates member reviews into the final report.
+
+- Usage: `fusion-router review [--config PATH] [--members MODEL]...
+  [--max-tool-rounds N] [--files FILE]... [--message TEXT]`
+- Lives entirely in-process — immune to the 30 s process-lifecycle
+  `shutdown_timeout_secs` bound that kills backgrounded HTTP servers.
+- Validated on 2026-08-08: 3 free models × 6 files, $1.14 total cost,
+  17 consolidated findings in ~13 minutes.
+
 ## Tool Execution Trust Boundary (Law 7 / ADR-037)
 
 - **Model output is data, never commands.** The executor no longer parses

@@ -256,6 +256,7 @@ impl DefaultExecutor {
             files: None,
             execution: None,
             output: None,
+            strategy: None,
         }
     }
 
@@ -1432,6 +1433,7 @@ mod tests {
                 files: None,
                 execution: None,
                 output: None,
+                strategy: None,
             };
             let cache_key = DefaultExecutor::cache_key(&member_request);
 

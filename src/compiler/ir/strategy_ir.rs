@@ -10,7 +10,11 @@ pub struct DebateRole {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StrategyIR {
     Single,
-    Consensus { count: u32 },
+    Consensus {
+        count: u32,
+        #[serde(default)]
+        members: Vec<String>,
+    },
     Reflection { max_cycles: u32 },
     Debate { roles: Vec<DebateRole> },
     ReAct { max_iterations: u32 },

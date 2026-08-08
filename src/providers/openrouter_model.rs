@@ -214,6 +214,7 @@ mod tests {
             files: None,
             execution: None,
             output: None,
+            strategy: None,
         };
         let transport_req = model.format_request(&req, "k").unwrap();
         assert_eq!(transport_req.body["tools"][0]["type"], "function");

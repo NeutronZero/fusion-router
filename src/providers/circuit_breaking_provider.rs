@@ -109,7 +109,7 @@ mod tests {
         let req = ChatCompletionRequest {
             model: "test".into(), messages: vec![], stream: false,
             temperature: None, max_tokens: None, tools: None, files: None,
-            execution: None, output: None,
+            execution: None, output: None, strategy: None,
         };
         let result = wrapped.chat_completion(&req).await;
         assert!(result.is_ok());
@@ -121,7 +121,7 @@ mod tests {
         let req = ChatCompletionRequest {
             model: "test".into(), messages: vec![], stream: false,
             temperature: None, max_tokens: None, tools: None, files: None,
-            execution: None, output: None,
+            execution: None, output: None, strategy: None,
         };
         for _ in 0..3 {
             let result = wrapped.chat_completion(&req).await;

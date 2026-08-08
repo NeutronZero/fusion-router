@@ -31,6 +31,54 @@ pub struct ChatCompletionRequest {
     pub execution: Option<execution::ExecutionIntent>,
     #[serde(default)]
     pub output: Option<execution::OutputPreferences>,
+    /// Optional strategy override. When set, the planned workflow is replaced
+    /// by a single node executing the named strategy — e.g. a multi-model
+    /// consensus that fans out to `count` reviewers, each on its own
+    /// `members[i]` model, with a judge consolidating the reviews.
+    #[serde(default)]
+    pub strategy: Option<RequestStrategy>,
+}
+
+/// Ensemble strategy declared at the request level.
+///
+/// Example — have three different models review the code and a judge merge
+/// their reports:
+///
+/// ```json
+/// "strategy": {
+///   "kind": "Consensus",
+///   "count": 3,
+///   "members": ["zen/deepseek-v4-flash-free", "openrouter/moonshotai/kimi-k3-free", "openrouter/deepseek/deepseek-r1-0528:free"],
+///   "max_tool_rounds": 8
+/// }
+/// ```
+///
+/// `members` per model can come from any registered provider (routing is by
+/// model key prefix); members beyond the list length cycle. `kind` supports
+/// the built-in strategy kinds when lowerable; `max_tool_rounds` bounds the
+/// tool loop for every member.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestStrategy {
+    #[serde(default = "default_strategy_kind")]
+    pub kind: String,
+    #[serde(default = "default_strategy_count")]
+    pub count: u32,
+    #[serde(default)]
+    pub members: Vec<String>,
+    #[serde(default = "default_tool_rounds")]
+    pub max_tool_rounds: u64,
+}
+
+fn default_strategy_kind() -> String {
+    "Consensus".into()
+}
+
+fn default_strategy_count() -> u32 {
+    3
+}
+
+fn default_tool_rounds() -> u64 {
+    8
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

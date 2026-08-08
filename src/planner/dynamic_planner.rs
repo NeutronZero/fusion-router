@@ -96,6 +96,7 @@ impl DynamicPlanner {
             files: None,
             execution: None,
             output: None,
+            strategy: None,
         };
 
         match tokio::time::timeout(
