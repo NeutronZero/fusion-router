@@ -49,6 +49,11 @@ request carries the user's input:
   (`node.config["tool_allowlist"]`). Empty/absent allowlist ⇒ nothing
   executes (fail closed); non-allowlisted calls are returned as text with a
   `reason`.
+- **Allowlist wiring**: `CompilationStep` copies the request's declared
+  `tools` names into `node.config["tool_allowlist"]` for every LLM node and
+  its LLM sub-nodes (`propagate_parent_messages` carries the allowlist into
+  runtime-lowered subgraphs as a fallback). A request that declares no
+  tools sends no allowlist — tools stay invisible (fail closed).
 - Tool definitions are advertised to the provider (`ChatCompletionRequest.tools`)
   only when auto-exec is enabled with an allowlist — otherwise the provider
   cannot emit tool calls at all.

@@ -174,9 +174,10 @@ impl DefaultExecutor {
 
     /// Belt-and-suspenders: strategy sub-nodes built at compile time never
     /// carry the request's assembled messages (the pipeline only injects them
-    /// into top-level nodes). Copy the parent node's messages into any LLM
-    /// sub-node that has none so requests never go out with an empty
-    /// `messages` array.
+    /// into top-level nodes). Copy the parent node's messages (and the
+    /// per-request tool allowlist, when present) into any LLM sub-node that
+    /// lacks them so requests never go out with an empty `messages` array and
+    /// tool definitions remain available for sub-node dispatch.
     fn propagate_parent_messages(node: &ExecutionNode, subgraph: &mut ExecutionSubgraph) {
         let Some(messages) = node
             .config
@@ -186,6 +187,7 @@ impl DefaultExecutor {
         else {
             return;
         };
+        let tool_allowlist = node.config.get("tool_allowlist").cloned();
         for sub_node in &mut subgraph.nodes {
             if !matches!(sub_node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
                 continue;
@@ -198,6 +200,11 @@ impl DefaultExecutor {
                 .unwrap_or(false);
             if !has_messages {
                 sub_node.config.insert("messages".to_string(), messages.clone());
+            }
+            if sub_node.config.get("tool_allowlist").is_none() {
+                if let Some(ref allowlist) = tool_allowlist {
+                    sub_node.config.insert("tool_allowlist".to_string(), allowlist.clone());
+                }
             }
         }
     }

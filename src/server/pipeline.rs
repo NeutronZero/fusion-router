@@ -148,6 +148,27 @@ impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
                         }
                     }
                 }
+                // Law 7 / ADR-037: the request-declared tools become the
+                // per-request tool allowlist. The provider is only ever shown
+                // the allowlisted definitions and nothing is auto-executed
+                // unless `tools.allow_auto_exec` is enabled server-side.
+                if let Some(tools) = &ctx.request.tools {
+                    if !tools.is_empty() {
+                        let allowlist: Vec<serde_json::Value> = tools
+                            .iter()
+                            .map(|t| serde_json::Value::String(t.name.clone()))
+                            .collect();
+                        let allowlist = serde_json::Value::Array(allowlist);
+                        node.config.insert("tool_allowlist".to_string(), allowlist.clone());
+                        if let Some(subgraph) = node.subgraph.as_mut() {
+                            for sub_node in &mut subgraph.nodes {
+                                if matches!(sub_node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
+                                    sub_node.config.insert("tool_allowlist".to_string(), allowlist.clone());
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -253,6 +274,15 @@ impl PipelineStep<ExecutionResult, ChatCompletionResponse> for ResponseBuilderSt
             .or_else(|| {
                 result.outputs.values().last().and_then(|v| v.as_str().map(|s| s.to_string()))
             })
+            // Tool call results are structured JSON, not text: surface them so
+            // the client can see what executed and what came back.
+            .or_else(|| {
+                result.outputs.values().last().and_then(|v| {
+                    v.as_object()
+                        .map(|o| serde_json::json!(o).to_string())
+                        .or_else(|| v.as_array().map(|a| serde_json::json!(a).to_string()))
+                })
+            })
             .unwrap_or_else(|| "Request processed successfully.".to_string());
 
         let response = ChatCompletionResponse {
@@ -332,5 +362,98 @@ mod tests {
         assert!(!ctx.cancellation_token.is_cancelled());
         token.cancel();
         assert!(ctx.cancellation_token.is_cancelled());
+    }
+
+    fn permissive_quota() -> crate::types::Quota {
+        crate::types::Quota {
+            max_daily_cost: 1_000_000.0,
+            max_daily_tokens: 1_000_000_000,
+            max_concurrent: 100,
+            provider_limits: std::collections::HashMap::new(),
+        }
+    }
+
+    fn consensus_ir() -> WorkflowIR {
+        WorkflowIR {
+            plan_id: Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: Uuid::new_v4(),
+                kind: IRNodeKind::Generate,
+                strategy: crate::types::StrategyKind::Consensus,
+                model: Some("test-model".into()),
+                config: std::collections::HashMap::new(),
+            }],
+            edges: vec![],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.1,
+                estimated_tokens: 500,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compilation_step_propagates_tool_allowlist() {
+        let compiler = Arc::new(crate::compiler::build_compiler(
+            crate::types::ModelCatalog::default(),
+            Arc::new(crate::resource::DefaultResourceManager::new(permissive_quota())),
+            None,
+        ));
+        let mut request = test_request();
+        request.tools = Some(vec![ToolDefinition {
+            name: "calculator".into(),
+            description: "arithmetic".into(),
+            parameters: None,
+        }]);
+
+        let mut ctx = PipelineContext::new(Uuid::new_v4(), request, CancellationToken::new());
+        let step = CompilationStep { compiler };
+        let graph = step.execute(consensus_ir(), &mut ctx).await.unwrap();
+
+        let node = &graph.nodes[0];
+        let allowlist = node
+            .config
+            .get("tool_allowlist")
+            .and_then(|v| v.as_array())
+            .expect("top-level LLM node must carry the request tool allowlist");
+        assert_eq!(allowlist.len(), 1);
+        assert_eq!(allowlist[0], serde_json::json!("calculator"));
+
+        let subgraph = node
+            .subgraph
+            .as_ref()
+            .expect("consensus node must carry a compile-time subgraph");
+        let sub_nodes_with_allowlist = subgraph
+            .nodes
+            .iter()
+            .filter(|n| {
+                n.config
+                    .get("tool_allowlist")
+                    .and_then(|v| v.as_array())
+                    .is_some()
+            })
+            .count();
+        assert!(
+            sub_nodes_with_allowlist > 0,
+            "LLM sub-nodes must receive the tool allowlist"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_compilation_step_omits_allowlist_when_request_has_no_tools() {
+        let compiler = Arc::new(crate::compiler::build_compiler(
+            crate::types::ModelCatalog::default(),
+            Arc::new(crate::resource::DefaultResourceManager::new(permissive_quota())),
+            None,
+        ));
+
+        let mut ctx = PipelineContext::new(Uuid::new_v4(), test_request(), CancellationToken::new());
+        let step = CompilationStep { compiler };
+        let graph = step.execute(consensus_ir(), &mut ctx).await.unwrap();
+
+        assert!(
+            graph.nodes[0].config.get("tool_allowlist").is_none(),
+            "no tools requested => no allowlist advertised (fail closed)"
+        );
     }
 }
