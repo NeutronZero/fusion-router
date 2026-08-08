@@ -150,7 +150,7 @@ impl Transport for HttpTransport {
             move |chunk_res| -> Result<TransportEvent, TransportError> {
                 match chunk_res {
                     Ok(bytes) => {
-                        let mut buf = pending.lock().unwrap();
+                        let mut buf = pending.lock().unwrap_or_else(|e| e.into_inner());
                         buf.extend_from_slice(&bytes);
                         Ok(TransportEvent { data: drain_utf8(&mut buf) })
                     }
@@ -163,7 +163,7 @@ impl Transport for HttpTransport {
         // partial multi-byte sequence is decoded lossily instead of dropped.
         let tail = pending;
         let flushed = futures::stream::once(async move {
-            let buf = tail.lock().unwrap().clone();
+            let buf = tail.lock().unwrap_or_else(|e| e.into_inner()).clone();
             if buf.is_empty() {
                 None
             } else {
@@ -200,7 +200,18 @@ fn drain_utf8(carry: &mut Vec<u8>) -> String {
                 carry.drain(..valid + err_len);
                 text
             }
-            None => String::new(),
+            None => {
+                let valid = e.valid_up_to();
+                if valid > 0 {
+                    let text = std::str::from_utf8(&carry[..valid])
+                        .expect("valid_up_to bytes are valid UTF-8")
+                        .to_string();
+                    carry.drain(..valid);
+                    text
+                } else {
+                    String::new()
+                }
+            }
         },
     }
 }
@@ -250,11 +261,26 @@ mod tests {
     }
 
     #[test]
+    fn test_drain_utf8_yields_valid_prefix_on_incomplete_tail() {
+        let mut carry = Vec::new();
+        carry.extend_from_slice("Hello ".as_bytes());
+        carry.extend_from_slice(&[0xE4, 0xB8]); // first two bytes of U+4E2D (中)
+        let prefix = drain_utf8(&mut carry);
+        assert_eq!(prefix, "Hello ", "valid prefix text must yield immediately");
+        assert_eq!(carry, vec![0xE4, 0xB8], "incomplete tail stays buffered");
+
+        carry.extend_from_slice(&[0xAD]); // third byte completing 中
+        let remainder = drain_utf8(&mut carry);
+        assert_eq!(remainder, "中");
+        assert!(carry.is_empty());
+    }
+
+    #[test]
     fn test_drain_utf8_flushes_partial_tail_lossily() {
         let mut carry = vec![0xE4, 0xB8]; // first two bytes of U+4E2D (中)
         assert_eq!(drain_utf8(&mut carry), "", "incomplete sequence stays buffered");
         // Stream ends: flush decodes lossily instead of dropping.
-        assert_eq!(String::from_utf8_lossy(&carry), "�");
+        assert_eq!(String::from_utf8_lossy(&carry), "\u{FFFD}");
     }
 
     #[test]

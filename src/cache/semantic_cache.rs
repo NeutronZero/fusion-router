@@ -26,12 +26,12 @@ pub struct SemanticCache {
 }
 
 impl SemanticCache {
-    pub fn new(
+    pub fn try_new(
         embedder: Arc<dyn Embedder + Send + Sync>,
         similarity_threshold: f32,
         max_entries: usize,
         dimensions: usize,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let options = IndexOptions {
             dimensions,
             metric: MetricKind::Cos,
@@ -41,9 +41,9 @@ impl SemanticCache {
             expansion_search: 64,
             multi: false,
         };
-        let index = Index::new(&options).expect("Failed to create HNSW index");
-        index.reserve(max_entries).expect("Failed to reserve index capacity");
-        Self {
+        let index = Index::new(&options).map_err(|e| format!("Failed to create HNSW index: {}", e))?;
+        index.reserve(max_entries).map_err(|e| format!("Failed to reserve index capacity: {}", e))?;
+        Ok(Self {
             embedder,
             entries: RwLock::new(HashMap::new()),
             index: Arc::new(std::sync::Mutex::new(index)),
@@ -51,7 +51,17 @@ impl SemanticCache {
             max_entries,
             next_label: AtomicU64::new(0),
             dimensions,
-        }
+        })
+    }
+
+    pub fn new(
+        embedder: Arc<dyn Embedder + Send + Sync>,
+        similarity_threshold: f32,
+        max_entries: usize,
+        dimensions: usize,
+    ) -> Self {
+        Self::try_new(embedder, similarity_threshold, max_entries, dimensions)
+            .expect("Failed to initialize SemanticCache HNSW index")
     }
 
     pub async fn get(&self, query: &str) -> Option<Value> {
@@ -140,8 +150,7 @@ impl SemanticCache {
         self.entries.read().is_empty()
     }
 
-    pub fn clear(&self) {
-        self.entries.write().clear();
+    pub fn try_clear(&self) -> Result<(), String> {
         let options = IndexOptions {
             dimensions: self.dimensions,
             metric: MetricKind::Cos,
@@ -151,10 +160,16 @@ impl SemanticCache {
             expansion_search: 64,
             multi: false,
         };
-        let new_index = Index::new(&options).expect("Failed to create new HNSW index");
-        new_index.reserve(self.max_entries).expect("Failed to reserve index capacity");
+        let new_index = Index::new(&options).map_err(|e| format!("Failed to create new HNSW index: {}", e))?;
+        new_index.reserve(self.max_entries).map_err(|e| format!("Failed to reserve index capacity: {}", e))?;
+        self.entries.write().clear();
         *self.index.lock().unwrap_or_else(|e| e.into_inner()) = new_index;
         self.next_label.store(0, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn clear(&self) {
+        let _ = self.try_clear();
     }
 
     pub fn set_capacity(&mut self, new_capacity: usize) {
