@@ -65,3 +65,38 @@ async fn test_constraint_validation_pass_equivalence() {
     assert!(monolith_valid_res.is_ok(), "Monolith pass must accept valid IR");
     assert!(crate_valid_res.is_ok(), "Crate pass must accept valid IR");
 }
+
+#[tokio::test]
+async fn test_model_resolution_pass_equivalence() {
+    use fusion_compiler::ModelResolutionPass as CrateModelResolutionPass;
+    use fusion_router::compiler::passes::ModelResolutionPass as MonolithModelResolutionPass;
+    use fusion_core::{ModelCatalog as CrateModelCatalog, ModelRequirements as CrateModelRequirements};
+    use fusion_router::types::ModelCatalog as MonolithModelCatalog;
+    use fusion_router::providers::ModelRequirements as MonolithModelRequirements;
+
+    let crate_catalog = CrateModelCatalog::default();
+    let monolith_catalog = MonolithModelCatalog::default();
+
+    // 1. Tool Requirement
+    let crate_reqs_tool = CrateModelRequirements { requires_tools: true, ..Default::default() };
+    let monolith_reqs_tool = MonolithModelRequirements { requires_tools: true, ..Default::default() };
+
+    let crate_pass_tool = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_tool));
+    let _monolith_pass_tool = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_tool) };
+
+    assert_eq!(crate_pass_tool.select_model(), "claude-sonnet-4-20250514");
+
+    // 2. High Coding Score Requirement (>= 0.8)
+    let crate_reqs_code = CrateModelRequirements { min_coding_score: Some(0.85), ..Default::default() };
+    let crate_pass_code = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_code));
+    assert_eq!(crate_pass_code.select_model(), "claude-sonnet-4-20250514");
+
+    // 3. High Reasoning Score Requirement (>= 0.8)
+    let crate_reqs_reason = CrateModelRequirements { min_reasoning_score: Some(0.90), ..Default::default() };
+    let crate_pass_reason = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_reason));
+    assert_eq!(crate_pass_reason.select_model(), "claude-opus-4-20250514");
+
+    // 4. Default / Fast Fallback
+    let crate_pass_default = CrateModelResolutionPass::new(crate_catalog.clone(), None);
+    assert_eq!(crate_pass_default.select_model(), "gpt-4o-mini");
+}

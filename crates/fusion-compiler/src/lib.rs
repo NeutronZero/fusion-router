@@ -4,7 +4,7 @@
 //! provider scores in `explain_route` / `compile` are hardcoded placeholder data
 //! for the Studio UI. Callers must pass `is_simulation = true` (see
 //! `fusion-studio-api`).
-use fusion_core::PlatformError;
+use fusion_core::{ModelCatalog, ModelRequirements, PlatformError};
 use fusion_ir::WorkflowIR;
 use serde::{Deserialize, Serialize};
 
@@ -99,6 +99,39 @@ impl CompilerPass for ConstraintValidationPass {
                 recovery_suggestion: "Add at least one execution node to the workflow spec".to_string(),
             });
         }
+        Ok(ir.clone())
+    }
+}
+
+pub struct ModelResolutionPass {
+    pub model_catalog: ModelCatalog,
+    pub model_requirements: Option<ModelRequirements>,
+}
+
+impl ModelResolutionPass {
+    pub fn new(model_catalog: ModelCatalog, model_requirements: Option<ModelRequirements>) -> Self {
+        Self {
+            model_catalog,
+            model_requirements,
+        }
+    }
+
+    pub fn select_model(&self) -> &str {
+        match &self.model_requirements {
+            Some(reqs) if reqs.requires_tools => &self.model_catalog.code,
+            Some(reqs) if reqs.min_coding_score.is_some_and(|s| s >= 0.8) => &self.model_catalog.code,
+            Some(reqs) if reqs.min_reasoning_score.is_some_and(|s| s >= 0.8) => &self.model_catalog.architecture,
+            _ => &self.model_catalog.fast,
+        }
+    }
+}
+
+impl CompilerPass for ModelResolutionPass {
+    fn name(&self) -> &str {
+        "model_resolution"
+    }
+
+    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         Ok(ir.clone())
     }
 }

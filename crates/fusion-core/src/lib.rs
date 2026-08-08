@@ -143,3 +143,42 @@ pub enum PlatformError {
         recovery_suggestion: String,
     },
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCatalog {
+    pub code: String,
+    pub debug: String,
+    pub architecture: String,
+    pub general: String,
+    pub creative: String,
+    pub analysis: String,
+    pub fast: String,
+    pub cheap: String,
+}
+
+impl Default for ModelCatalog {
+    fn default() -> Self {
+        Self {
+            code: "claude-sonnet-4-20250514".into(),
+            debug: "claude-sonnet-4-20250514".into(),
+            architecture: "claude-opus-4-20250514".into(),
+            general: "gpt-4o".into(),
+            creative: "claude-sonnet-4-20250514".into(),
+            analysis: "claude-opus-4-20250514".into(),
+            fast: "gpt-4o-mini".into(),
+            cheap: "gpt-4o-mini".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ModelRequirements {
+    pub min_context_tokens: Option<u32>,
+    pub min_coding_score: Option<f32>,
+    pub min_reasoning_score: Option<f32>,
+    pub requires_tools: bool,
+    pub requires_streaming: bool,
+    pub requires_vision: bool,
+    pub max_cost_per_1k_tokens: Option<f64>,
+    pub preferred_provider: Option<String>,
+}
