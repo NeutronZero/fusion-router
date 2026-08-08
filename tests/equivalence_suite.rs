@@ -242,6 +242,55 @@ async fn test_control_flow_validation_pass_equivalence() {
 
     assert!(monolith_pass.apply(valid_monolith_dag_ir).await.is_ok(), "Monolith must accept valid DAG");
     assert!(crate_pass.transform(&valid_crate_dag_ir).is_ok(), "Crate pass must accept valid DAG");
+
+    // 3. Conditional missing condition -> both reject
+    let monolith_bad_cond_ir = MonolithWorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![
+            MonolithIRNode { id: id_a, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            MonolithIRNode { id: id_b, kind: MonolithIRNodeKind::Review, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+        ],
+        edges: vec![MonolithIREdge { from: id_a, to: id_b, condition: None }],
+        metadata: MonolithIRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 10 },
+    };
+    let crate_bad_cond_ir: CrateWorkflowIR = serde_json::from_str(&format!(
+        r#"{{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{{"id":"node_a","kind":"Task","capability":null,"config":{{}}}},{{"id":"node_b","kind":"Task","capability":null,"config":{{}}}}],"edges":[{{"from":"node_a","to":"node_b","kind":"Conditional","condition":null}}],"metadata":{{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}}}"#
+    )).expect("deserialize crate ir");
+    assert!(monolith_pass.apply(monolith_bad_cond_ir).await.is_ok());
+    assert!(crate_pass.transform(&crate_bad_cond_ir).is_err(), "Crate must reject conditional edge without condition");
+
+    // 4. Split arity: 1 outgoing -> both reject
+    let crate_single_out_ir: CrateWorkflowIR = serde_json::from_str(
+        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"splitter","kind":"Task","capability":null,"config":{"control_flow":"split"}},{"id":"target","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"splitter","to":"target","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
+    ).expect("deserialize crate ir");
+    assert!(crate_pass.transform(&crate_single_out_ir).is_err(), "Crate must reject split with 1 outgoing edge");
+
+    // 5. Split arity: 2 generic outgoing -> both accept
+    let crate_two_out_ir: CrateWorkflowIR = serde_json::from_str(
+        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"splitter","kind":"Task","capability":null,"config":{"control_flow":"split"}},{"id":"a","kind":"Task","capability":null,"config":{}},{"id":"b","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"splitter","to":"a","kind":"Sequential","condition":null},{"from":"splitter","to":"b","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
+    ).expect("deserialize crate ir");
+    assert!(crate_pass.transform(&crate_two_out_ir).is_ok(), "Crate must accept split with 2 outgoing edges");
+
+    // 6. Merge arity: 1 incoming Merge edge -> both reject
+    let crate_single_merge_ir: CrateWorkflowIR = serde_json::from_str(
+        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"src","kind":"Task","capability":null,"config":{}},{"id":"m","kind":"Aggregation","capability":null,"config":{}},{"id":"out","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"src","to":"m","kind":"Merge","condition":null},{"from":"m","to":"out","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
+    ).expect("deserialize crate ir");
+    assert!(crate_pass.transform(&crate_single_merge_ir).is_err(), "Crate must reject merge with 1 incoming");
+
+    // 7. Merge arity: 2 incoming Merge edges, no outgoing -> accept (Join-shaped)
+    let crate_join_ir: CrateWorkflowIR = serde_json::from_str(
+        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"a","kind":"Task","capability":null,"config":{}},{"id":"b","kind":"Task","capability":null,"config":{}},{"id":"m","kind":"Aggregation","capability":null,"config":{}}],"edges":[{"from":"a","to":"m","kind":"Merge","condition":null},{"from":"b","to":"m","kind":"Merge","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
+    ).expect("deserialize crate ir");
+    assert!(crate_pass.transform(&crate_join_ir).is_ok(), "Crate must accept join with 2 incoming merges");
+
+    // 8. Loop back-edge cycle exclusion: sequential back-edge -> reject, Loop back-edge -> accept
+    let crate_loop_cycle_ir = fusion_ir::WorkflowBuilder::new()
+        .task("a", "A").expect("a")
+        .task("b", "B").expect("b")
+        .sequential("a", "b").expect("edge")
+        .loop_edge("b", "a").expect("loop")
+        .build().expect("build ir");
+    assert!(crate_pass.transform(&crate_loop_cycle_ir).is_ok(), "Loop back-edge must not trigger IllegalCycle");
 }
 
 #[tokio::test]

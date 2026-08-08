@@ -34,6 +34,12 @@ pub enum ValidationError {
     MergeArity(String),
     #[error("output node `{0}` may not have outgoing edges")]
     OutputOutgoing(String),
+    #[error("split node `{0}` requires at least two outgoing edges")]
+    SplitArity(String),
+    #[error("loop edge source `{0}` requires `max_iterations` in config")]
+    LoopConfig(String),
+    #[error("barrier node `{0}` requires at least one incoming and one outgoing edge")]
+    BarrierArity(String),
     #[error("provider-identifying field `{0}` is reserved by the architecture")]
     ProviderField(String),
     #[error("workflow version {0} is not supported (expected {1})")]
@@ -114,10 +120,15 @@ fn structural_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
     }
 
     let mut incoming: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut adjacency: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
     for e in &ir.edges {
+        if e.kind == WorkflowEdgeKind::Loop {
+            continue;
+        }
         if seen.contains(e.to.as_str()) {
             *incoming.entry(e.to.as_str()).or_insert(0) += 1;
         }
+        adjacency.entry(e.from.as_str()).or_default().push(e.to.as_str());
     }
     let roots: Vec<&str> = ir.nodes.iter().map(|n| n.id.as_str()).filter(|id| incoming.get(id).copied().unwrap_or(0) == 0).collect();
     if roots.is_empty() {
@@ -130,9 +141,9 @@ fn structural_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
         if !reachable.insert(cur) {
             continue;
         }
-        for e in &ir.edges {
-            if e.from == cur {
-                queue.push(e.to.as_str());
+        if let Some(nexts) = adjacency.get(cur) {
+            for next in nexts {
+                queue.push(next);
             }
         }
     }
@@ -151,6 +162,10 @@ const RESERVED_PROVIDER_KEYS: [&str; 3] = ["model", "provider", "endpoint"];
 
 fn node_kind_of(ir: &WorkflowIR, id: &str) -> Option<WorkflowNodeKind> {
     ir.nodes.iter().find(|n| n.id == id).map(|n| n.kind)
+}
+
+fn control_flow_marker<'a>(ir: &'a WorkflowIR, id: &str) -> Option<&'a str> {
+    ir.nodes.iter().find(|n| n.id == id).and_then(|n| n.config.get("control_flow").and_then(|v| v.as_str()))
 }
 
 fn semantic_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
@@ -209,6 +224,51 @@ fn semantic_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
             edge: Some(format!("{} -> {}", from, to)),
             error: ValidationError::IllegalCycle { from, to },
         });
+    }
+
+    for e in &ir.edges {
+        if e.kind == WorkflowEdgeKind::Loop {
+            if let Some(marker) = control_flow_marker(ir, &e.from) {
+                if marker == "loop" {
+                    let has_max = ir.nodes.iter()
+                        .find(|n| n.id == e.from)
+                        .map(|n| n.config.contains_key("max_iterations"))
+                        .unwrap_or(false);
+                    if !has_max {
+                        report.push(ValidationIssue {
+                            node: Some(e.from.clone()),
+                            edge: Some(format!("{} -> {}", e.from, e.to)),
+                            error: ValidationError::LoopConfig(e.from.clone()),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    for n in &ir.nodes {
+        if let Some(marker) = control_flow_marker(ir, &n.id) {
+            if marker == "split" {
+                let out = outgoing.get(n.id.as_str()).copied().unwrap_or(0);
+                if out < 2 {
+                    report.push(ValidationIssue {
+                        node: Some(n.id.clone()),
+                        edge: None,
+                        error: ValidationError::SplitArity(n.id.clone()),
+                    });
+                }
+            } else if marker == "barrier" {
+                let inc = incoming.get(n.id.as_str()).copied().unwrap_or(0);
+                let out = outgoing.get(n.id.as_str()).copied().unwrap_or(0);
+                if inc < 1 || out < 1 {
+                    report.push(ValidationIssue {
+                        node: Some(n.id.clone()),
+                        edge: None,
+                        error: ValidationError::BarrierArity(n.id.clone()),
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -340,7 +400,7 @@ mod tests {
     fn reports_missing_root_and_unreachable_nodes() {
         let cycle = ir_with(
             vec![node("a", WorkflowNodeKind::Task), node("b", WorkflowNodeKind::Task)],
-            vec![edge("a", "b", WorkflowEdgeKind::Sequential), edge("b", "a", WorkflowEdgeKind::Loop)],
+            vec![edge("a", "b", WorkflowEdgeKind::Sequential), edge("b", "a", WorkflowEdgeKind::Sequential)],
         );
         let report = cycle.validate();
         assert!(report.issues().iter().any(|i| i.error == ValidationError::MissingRoot));
@@ -452,5 +512,100 @@ mod tests {
         ir.version = 99;
         let report = ir.validate();
         assert!(report.issues().iter().any(|i| i.error == ValidationError::VersionMismatch(99, WORKFLOW_IR_VERSION)));
+    }
+
+    #[test]
+    fn split_requires_two_parallel_outgoing_edges() {
+        let mut n1 = node("n1", WorkflowNodeKind::Task);
+        n1.config.insert("control_flow".into(), serde_json::Value::String("split".into()));
+        let ir = ir_with(
+            vec![n1, node("n2", WorkflowNodeKind::Task)],
+            vec![edge("n1", "n2", WorkflowEdgeKind::Sequential)],
+        );
+        let report = ir.validate();
+        assert!(report.issues().iter().any(|i| i.error == ValidationError::SplitArity("n1".into())));
+    }
+
+    #[test]
+    fn split_with_two_parallel_edges_passes() {
+        let mut n1 = node("n1", WorkflowNodeKind::Task);
+        n1.config.insert("control_flow".into(), serde_json::Value::String("split".into()));
+        let ir = ir_with(
+            vec![n1, node("n2", WorkflowNodeKind::Task), node("n3", WorkflowNodeKind::Task)],
+            vec![edge("n1", "n2", WorkflowEdgeKind::Parallel), edge("n1", "n3", WorkflowEdgeKind::Parallel)],
+        );
+        let report = ir.validate();
+        assert!(!report.issues().iter().any(|i| i.error == ValidationError::SplitArity("n1".into())));
+    }
+
+    #[test]
+    fn marked_split_accepts_two_non_parallel_outgoing_edges() {
+        let mut n1 = node("n1", WorkflowNodeKind::Task);
+        n1.config.insert("control_flow".into(), serde_json::Value::String("split".into()));
+        let ir = ir_with(
+            vec![n1, node("n2", WorkflowNodeKind::Task), node("n3", WorkflowNodeKind::Task)],
+            vec![edge("n1", "n2", WorkflowEdgeKind::Sequential), edge("n1", "n3", WorkflowEdgeKind::Conditional)],
+        );
+        let report = ir.validate();
+        assert!(!report.issues().iter().any(|i| i.error == ValidationError::SplitArity("n1".into())));
+    }
+
+    #[test]
+    fn loop_edge_requires_max_iterations_in_config() {
+        let mut n1 = node("n1", WorkflowNodeKind::Task);
+        n1.config.insert("control_flow".into(), serde_json::Value::String("loop".into()));
+        let ir = ir_with(
+            vec![n1, node("n2", WorkflowNodeKind::Task)],
+            vec![edge("n1", "n2", WorkflowEdgeKind::Loop)],
+        );
+        let report = ir.validate();
+        assert!(report.issues().iter().any(|i| i.error == ValidationError::LoopConfig("n1".into())));
+    }
+
+    #[test]
+    fn loop_edge_with_max_iterations_passes() {
+        let mut n1 = node("n1", WorkflowNodeKind::Task);
+        n1.config.insert("control_flow".into(), serde_json::Value::String("loop".into()));
+        n1.config.insert("max_iterations".into(), serde_json::Value::Number(10.into()));
+        let ir = ir_with(
+            vec![n1, node("n2", WorkflowNodeKind::Task)],
+            vec![edge("n1", "n2", WorkflowEdgeKind::Loop)],
+        );
+        let report = ir.validate();
+        assert!(!report.issues().iter().any(|i| i.error == ValidationError::LoopConfig("n1".into())));
+    }
+
+    #[test]
+    fn barrier_requires_incoming_and_outgoing_edges() {
+        let mut n1 = node("n1", WorkflowNodeKind::Task);
+        n1.config.insert("control_flow".into(), serde_json::Value::String("barrier".into()));
+        let ir = ir_with(
+            vec![n1, node("n2", WorkflowNodeKind::Task)],
+            vec![edge("n2", "n1", WorkflowEdgeKind::Sequential)],
+        );
+        let report = ir.validate();
+        assert!(report.issues().iter().any(|i| i.error == ValidationError::BarrierArity("n1".into())));
+    }
+
+    #[test]
+    fn barrier_with_both_incoming_and_outgoing_passes() {
+        let mut n1 = node("n1", WorkflowNodeKind::Task);
+        n1.config.insert("control_flow".into(), serde_json::Value::String("barrier".into()));
+        let ir = ir_with(
+            vec![n1, node("n2", WorkflowNodeKind::Task), node("n3", WorkflowNodeKind::Task)],
+            vec![edge("n2", "n1", WorkflowEdgeKind::Sequential), edge("n1", "n3", WorkflowEdgeKind::Sequential)],
+        );
+        let report = ir.validate();
+        assert!(!report.issues().iter().any(|i| i.error == ValidationError::BarrierArity("n1".into())));
+    }
+
+    #[test]
+    fn join_target_does_not_require_barrier_outgoing_edge() {
+        let ir = ir_with(
+            vec![node("a", WorkflowNodeKind::Task), node("b", WorkflowNodeKind::Task), node("m", WorkflowNodeKind::Aggregation)],
+            vec![edge("a", "m", WorkflowEdgeKind::Merge), edge("b", "m", WorkflowEdgeKind::Merge)],
+        );
+        let report = ir.validate();
+        assert!(!report.issues().iter().any(|i| matches!(i.error, ValidationError::BarrierArity(_))));
     }
 }

@@ -463,7 +463,7 @@ impl Executor for DefaultExecutor {
                             .unwrap_or(false);
 
                         if !wants_tools {
-                            break response;
+                            break;
                         }
 
                         // Law 7 / ADR-037: tool execution is fed ONLY from
@@ -493,7 +493,7 @@ impl Executor for DefaultExecutor {
                             if !has_text {
                                 output_value = Some(results);
                             }
-                            break response;
+                            break;
                         }
 
                         // Feed the results back and let the model continue.
