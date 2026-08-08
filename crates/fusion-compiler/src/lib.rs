@@ -138,92 +138,20 @@ impl CompilerPass for ModelResolutionPass {
 
 pub struct ControlFlowValidationPass;
 
-impl ControlFlowValidationPass {
-    fn detect_illegal_cycles(&self, ir: &WorkflowIR) -> Result<(), PlatformError> {
-        let edges: Vec<(String, String)> = ir.edges().iter()
-            .filter(|e| e.condition() != Some("loop"))
-            .map(|e| (e.from().to_string(), e.to().to_string()))
-            .collect();
-
-        match three_color_cycle_detect(&edges) {
-            Ok(()) => Ok(()),
-            Err(node_id) => Err(PlatformError::Compiler {
-                code: "ILLEGAL_CYCLE".to_string(),
-                message: format!("Illegal cycle detected at node '{node_id}' outside of loop back-edges"),
-                recovery_suggestion: "Ensure non-loop control flow is a Directed Acyclic Graph (DAG)".to_string(),
-            }),
-        }
-    }
-}
-
-fn three_color_cycle_detect(edges: &[(String, String)]) -> Result<(), String> {
-    #[derive(Clone, Copy, PartialEq)]
-    enum Color { White, Grey, Black }
-
-    let mut colors: std::collections::HashMap<String, Color> = std::collections::HashMap::new();
-    let mut graph: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-    for (from, to) in edges {
-        graph.entry(from.clone()).or_default().push(to.clone());
-        graph.entry(to.clone()).or_default();
-    }
-
-    fn dfs(
-        node: &str,
-        graph: &std::collections::HashMap<String, Vec<String>>,
-        colors: &mut std::collections::HashMap<String, Color>,
-    ) -> bool {
-        colors.insert(node.to_string(), Color::Grey);
-        if let Some(neighbors) = graph.get(node) {
-            for next in neighbors {
-                match colors.get(next).unwrap_or(&Color::White) {
-                    Color::Grey => return true,
-                    Color::White => {
-                        if dfs(next, graph, colors) { return true; }
-                    }
-                    Color::Black => continue,
-                }
-            }
-        }
-        colors.insert(node.to_string(), Color::Black);
-        false
-    }
-
-    for node in graph.keys().cloned().collect::<Vec<_>>() {
-        if colors.get(&node).unwrap_or(&Color::White) == &Color::White
-            && dfs(&node, &graph, &mut colors) {
-                return Err(node);
-            }
-    }
-
-    Ok(())
-}
-
 impl CompilerPass for ControlFlowValidationPass {
     fn name(&self) -> &str {
         "control_flow_validation"
     }
 
     fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        let node_ids: std::collections::HashSet<&str> = ir.nodes().iter().map(|n| n.id()).collect();
-
-        for edge in ir.edges() {
-            if !node_ids.contains(edge.from()) {
-                return Err(PlatformError::Compiler {
-                    code: "UNKNOWN_SOURCE_NODE".to_string(),
-                    message: format!("Edge from '{}' references unknown source node", edge.from()),
-                    recovery_suggestion: "Ensure all edge source nodes exist in workflow graph".to_string(),
-                });
-            }
-            if !node_ids.contains(edge.to()) {
-                return Err(PlatformError::Compiler {
-                    code: "UNKNOWN_TARGET_NODE".to_string(),
-                    message: format!("Edge to '{}' references unknown target node", edge.to()),
-                    recovery_suggestion: "Ensure all edge target nodes exist in workflow graph".to_string(),
-                });
-            }
+        let report = ir.validate();
+        if let Some(err) = report.first_error() {
+            return Err(PlatformError::Compiler {
+                code: "CONTROL_FLOW_VALIDATION_FAILED".to_string(),
+                message: format!("Control flow validation error: {err}"),
+                recovery_suggestion: "Ensure edge integrity, cycle constraints, and node arity requirements are satisfied".to_string(),
+            });
         }
-
-        self.detect_illegal_cycles(ir)?;
         Ok(ir.clone())
     }
 }
