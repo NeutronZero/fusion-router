@@ -85,10 +85,20 @@ impl Compiler for DefaultCompiler {
     }
 }
 
-pub struct ValidationPass;
-impl CompilerPass for ValidationPass {
-    fn name(&self) -> &str { "Validation" }
+pub struct ConstraintValidationPass;
+impl CompilerPass for ConstraintValidationPass {
+    fn name(&self) -> &str {
+        "constraint_validation"
+    }
+
     fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+        if ir.nodes.is_empty() {
+            return Err(PlatformError::Compiler {
+                code: "EMPTY_IR".to_string(),
+                message: "IR must have at least one node".to_string(),
+                recovery_suggestion: "Add at least one execution node to the workflow spec".to_string(),
+            });
+        }
         Ok(ir.clone())
     }
 }
@@ -278,5 +288,25 @@ mod tests {
         let report = engine.compile("Code Generation", &ir, false).expect("Compile");
         assert_eq!(report.passes_executed.len(), 9);
         assert_eq!(report.pass_diffs.len(), 9);
+    }
+
+    #[test]
+    fn test_constraint_validation_pass() {
+        let pass = ConstraintValidationPass;
+        let empty_ir = WorkflowIR { nodes: vec![], edges: vec![] };
+        let res = pass.transform(&empty_ir);
+        assert!(res.is_err());
+        if let Err(PlatformError::Compiler { code, .. }) = res {
+            assert_eq!(code, "EMPTY_IR");
+        } else {
+            panic!("Expected PlatformError::Compiler");
+        }
+
+        let valid_ir = fusion_ir::WorkflowBuilder::new()
+            .task("n1", "CodeGeneration")
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(pass.transform(&valid_ir).is_ok());
     }
 }
