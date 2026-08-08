@@ -172,6 +172,36 @@ impl DefaultExecutor {
         serde_json::json!({ "tool_calls": results })
     }
 
+    /// Belt-and-suspenders: strategy sub-nodes built at compile time never
+    /// carry the request's assembled messages (the pipeline only injects them
+    /// into top-level nodes). Copy the parent node's messages into any LLM
+    /// sub-node that has none so requests never go out with an empty
+    /// `messages` array.
+    fn propagate_parent_messages(node: &ExecutionNode, subgraph: &mut ExecutionSubgraph) {
+        let Some(messages) = node
+            .config
+            .get("messages")
+            .filter(|v| v.as_array().map(|a| !a.is_empty()).unwrap_or(false))
+            .cloned()
+        else {
+            return;
+        };
+        for sub_node in &mut subgraph.nodes {
+            if !matches!(sub_node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
+                continue;
+            }
+            let has_messages = sub_node
+                .config
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
+            if !has_messages {
+                sub_node.config.insert("messages".to_string(), messages.clone());
+            }
+        }
+    }
+
     #[tracing::instrument(skip_all, fields(node_id = %node.id, model = %node.model))]
     fn build_request(&self, node: &ExecutionNode) -> ChatCompletionRequest {
         let mut messages: Vec<ChatMessage> = node
@@ -448,7 +478,9 @@ impl Executor for DefaultExecutor {
         // lowering below is only a fallback for legacy graphs that were not
         // compiled through `build_compiler`.
         if let Some(prebuilt) = &node.subgraph {
-            return prebuilt.clone();
+            let mut subgraph = prebuilt.clone();
+            Self::propagate_parent_messages(node, &mut subgraph);
+            return subgraph;
         }
 
         let strategy = self.strategies.get(&node.strategy);
@@ -466,7 +498,9 @@ impl Executor for DefaultExecutor {
                         &node.fallback,
                         &node.config,
                     );
-                    return execution_graph_to_subgraph(&eg, node);
+                    let mut subgraph = execution_graph_to_subgraph(&eg, node);
+                    Self::propagate_parent_messages(node, &mut subgraph);
+                    return subgraph;
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -675,6 +709,33 @@ mod tests {
             "subgraph nodes must inherit the workflow node's model, got: {:?}",
             subgraph.nodes.iter().map(|n| &n.model).collect::<Vec<_>>()
         );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_strategy_propagates_parent_messages_to_subnodes() {
+        let provider = Arc::new(MockChatProvider);
+        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        strategies.insert(StrategyKind::Consensus, Box::new(ConsensusStrategy::default()));
+        let executor = DefaultExecutor::new(provider, strategies);
+        let mut node = make_llm_node(StrategyKind::Consensus);
+        node.config.insert(
+            "messages".into(),
+            serde_json::json!([{ "role": "user", "content": "analyze the repo" }]),
+        );
+
+        let subgraph = executor.resolve_strategy(&node).await;
+
+        assert_eq!(subgraph.nodes.len(), 4);
+        for sub_node in &subgraph.nodes {
+            let messages = sub_node
+                .config
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .expect("LLM sub-node must inherit parent messages");
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["role"], "user");
+            assert_eq!(messages[0]["content"], "analyze the repo");
+        }
     }
 
     #[tokio::test]
