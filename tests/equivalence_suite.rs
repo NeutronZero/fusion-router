@@ -77,26 +77,82 @@ async fn test_model_resolution_pass_equivalence() {
     let crate_catalog = CrateModelCatalog::default();
     let monolith_catalog = MonolithModelCatalog::default();
 
+    // 0. Catalog Source of Truth Parity Check
+    assert_eq!(crate_catalog.code, monolith_catalog.code);
+    assert_eq!(crate_catalog.debug, monolith_catalog.debug);
+    assert_eq!(crate_catalog.architecture, monolith_catalog.architecture);
+    assert_eq!(crate_catalog.general, monolith_catalog.general);
+    assert_eq!(crate_catalog.creative, monolith_catalog.creative);
+    assert_eq!(crate_catalog.analysis, monolith_catalog.analysis);
+    assert_eq!(crate_catalog.fast, monolith_catalog.fast);
+    assert_eq!(crate_catalog.cheap, monolith_catalog.cheap);
+
+    let make_monolith_ir = || MonolithWorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![MonolithIRNode {
+            id: Uuid::new_v4(),
+            kind: MonolithIRNodeKind::Generate,
+            strategy: MonolithStrategyKind::Single,
+            model: None,
+            config: HashMap::new(),
+        }],
+        edges: vec![],
+        metadata: MonolithIRMetadata {
+            policy_applied: vec![],
+            estimated_cost: 0.0,
+            estimated_tokens: 10,
+        },
+    };
+
     // 1. Tool Requirement
     let crate_reqs_tool = CrateModelRequirements { requires_tools: true, ..Default::default() };
     let monolith_reqs_tool = MonolithModelRequirements { requires_tools: true, ..Default::default() };
-
     let crate_pass_tool = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_tool));
-    let _monolith_pass_tool = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_tool) };
-
-    assert_eq!(crate_pass_tool.select_model(), "claude-sonnet-4-20250514");
+    let monolith_pass_tool = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_tool) };
+    let monolith_ir_tool = monolith_pass_tool.apply(make_monolith_ir()).await.expect("apply");
+    assert_eq!(crate_pass_tool.select_model(), monolith_ir_tool.nodes[0].model.as_deref().unwrap());
+    assert_eq!(crate_pass_tool.select_model(), crate_catalog.code);
 
     // 2. High Coding Score Requirement (>= 0.8)
     let crate_reqs_code = CrateModelRequirements { min_coding_score: Some(0.85), ..Default::default() };
+    let monolith_reqs_code = MonolithModelRequirements { min_coding_score: Some(0.85), ..Default::default() };
     let crate_pass_code = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_code));
-    assert_eq!(crate_pass_code.select_model(), "claude-sonnet-4-20250514");
+    let monolith_pass_code = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_code) };
+    let monolith_ir_code = monolith_pass_code.apply(make_monolith_ir()).await.expect("apply");
+    assert_eq!(crate_pass_code.select_model(), monolith_ir_code.nodes[0].model.as_deref().unwrap());
+    assert_eq!(crate_pass_code.select_model(), crate_catalog.code);
 
     // 3. High Reasoning Score Requirement (>= 0.8)
     let crate_reqs_reason = CrateModelRequirements { min_reasoning_score: Some(0.90), ..Default::default() };
+    let monolith_reqs_reason = MonolithModelRequirements { min_reasoning_score: Some(0.90), ..Default::default() };
     let crate_pass_reason = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_reason));
-    assert_eq!(crate_pass_reason.select_model(), "claude-opus-4-20250514");
+    let monolith_pass_reason = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_reason) };
+    let monolith_ir_reason = monolith_pass_reason.apply(make_monolith_ir()).await.expect("apply");
+    assert_eq!(crate_pass_reason.select_model(), monolith_ir_reason.nodes[0].model.as_deref().unwrap());
+    assert_eq!(crate_pass_reason.select_model(), crate_catalog.architecture);
 
-    // 4. Default / Fast Fallback
+    // 4. Overlapping Priority Test A: Tool Requirement vs High Reasoning Score
+    let crate_reqs_overlap_a = CrateModelRequirements { requires_tools: true, min_reasoning_score: Some(0.95), ..Default::default() };
+    let monolith_reqs_overlap_a = MonolithModelRequirements { requires_tools: true, min_reasoning_score: Some(0.95), ..Default::default() };
+    let crate_pass_overlap_a = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_overlap_a));
+    let monolith_pass_overlap_a = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_overlap_a) };
+    let monolith_ir_overlap_a = monolith_pass_overlap_a.apply(make_monolith_ir()).await.expect("apply");
+    assert_eq!(crate_pass_overlap_a.select_model(), monolith_ir_overlap_a.nodes[0].model.as_deref().unwrap());
+    assert_eq!(crate_pass_overlap_a.select_model(), crate_catalog.code, "requires_tools must take priority over min_reasoning_score");
+
+    // 5. Overlapping Priority Test B: High Coding Score vs High Reasoning Score
+    let crate_reqs_overlap_b = CrateModelRequirements { min_coding_score: Some(0.85), min_reasoning_score: Some(0.95), ..Default::default() };
+    let monolith_reqs_overlap_b = MonolithModelRequirements { min_coding_score: Some(0.85), min_reasoning_score: Some(0.95), ..Default::default() };
+    let crate_pass_overlap_b = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_overlap_b));
+    let monolith_pass_overlap_b = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_overlap_b) };
+    let monolith_ir_overlap_b = monolith_pass_overlap_b.apply(make_monolith_ir()).await.expect("apply");
+    assert_eq!(crate_pass_overlap_b.select_model(), monolith_ir_overlap_b.nodes[0].model.as_deref().unwrap());
+    assert_eq!(crate_pass_overlap_b.select_model(), crate_catalog.code, "min_coding_score must take priority over min_reasoning_score");
+
+    // 6. Default / Fast Fallback
     let crate_pass_default = CrateModelResolutionPass::new(crate_catalog.clone(), None);
-    assert_eq!(crate_pass_default.select_model(), "gpt-4o-mini");
+    let monolith_pass_default = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: None };
+    let monolith_ir_default = monolith_pass_default.apply(make_monolith_ir()).await.expect("apply");
+    assert_eq!(crate_pass_default.select_model(), monolith_ir_default.nodes[0].model.as_deref().unwrap());
+    assert_eq!(crate_pass_default.select_model(), crate_catalog.fast);
 }
