@@ -22,6 +22,19 @@ The executor dispatches scheduled nodes to the appropriate handler:
 - **Connector nodes** → `Connector` trait (external service connectors)
 - **Capability nodes** → `CapabilityExecutor` (unified capability dispatch)
 
+### Subgraph Message Inheritance
+
+Strategy sub-nodes (consensus members, judge, reviewer) are prebuilt at compile time
+by `strategy_expansion` **without** the request context. To guarantee every LLM
+request carries the user's input:
+
+- `CompilationStep` (`src/server/pipeline.rs`) injects the assembled `messages`
+  into every LLM node and its LLM sub-nodes.
+- `DefaultExecutor::propagate_parent_messages` (src/executor/mod.rs) copies the
+  parent node's non-empty `messages` into any LLM sub-node that still lacks them
+  — applied to both prebuilt subgraphs and runtime-lowered legacy subgraphs.
+- Regression covered by `test_resolve_strategy_propagates_parent_messages_to_subnodes`.
+
 ## Tool Execution Trust Boundary (Law 7 / ADR-037)
 
 - **Model output is data, never commands.** The executor no longer parses

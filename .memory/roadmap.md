@@ -8,7 +8,7 @@
 | v0.14.2   | Studio BFF Vertical Integration | Complete     |
 | v0.14.3   | Distributed Execution Primitives| Complete     |
 | v0.14.4   | Systems Audit & Hardening       | Complete     |
-| v0.14.5   | Realistic Validation under Load | Next         |
+| v0.14.5   | Realistic Validation under Load | In Progress  |
 
 The **v0.13.x** series is the implementation series for the frozen v0.13.0 architecture.
 

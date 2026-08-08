@@ -55,6 +55,10 @@ Three-part split:
 | Stdio | `src/transport/stdio.rs` | Subprocess stdio for local models |
 | Backoff | `src/transport/backoff.rs` | Exponential backoff strategy |
 
+Transports are constructed with per-provider timeouts:
+- `new_openrouter_provider` uses 600 s (free streaming requests keep long generations; 30 s previously caused node failures)
+- `new_zen_provider` uses 300 s
+
 ## Model Adapters
 
 | Adapter | File | Provider |
