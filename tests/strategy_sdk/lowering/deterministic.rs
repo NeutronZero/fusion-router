@@ -24,7 +24,7 @@ fn test_single_lowering_is_deterministic() {
 fn test_consensus_lowering_is_deterministic() {
     let strategy = ConsensusStrategy::default();
     let ctx = CompilationContext::new();
-    let ir = StrategyIR::Consensus { count: 3 };
+    let ir = StrategyIR::Consensus { count: 3, members: vec![] };
 
     let graph1 = strategy.lower(&ir, &ctx).unwrap();
     let graph2 = strategy.lower(&ir, &ctx).unwrap();

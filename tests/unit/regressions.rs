@@ -186,6 +186,7 @@ async fn test_terminal_node_response_selection() {
             files: None,
             execution: None,
             output: None,
+            strategy: None,
         },
         tokio_util::sync::CancellationToken::new(),
     );
@@ -219,6 +220,7 @@ async fn test_compiler_model_resolution_preservation() {
             files: None,
             execution: None,
             output: None,
+            strategy: None,
         },
         tokio_util::sync::CancellationToken::new(),
     );

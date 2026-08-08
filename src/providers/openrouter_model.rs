@@ -5,11 +5,16 @@ use super::{Model, ModelCapabilities, ModelPricing, TransportRequest, TransportR
 
 pub struct OpenRouterModel {
     pub model_id: String,
+    pub base_url: Option<String>,
 }
 
 impl OpenRouterModel {
     pub fn new(model_id: String) -> Self {
-        Self { model_id }
+        Self::with_base_url(model_id, None)
+    }
+
+    pub fn with_base_url(model_id: String, base_url: Option<String>) -> Self {
+        Self { model_id, base_url }
     }
 }
 
@@ -47,8 +52,11 @@ impl Model for OpenRouterModel {
     }
 
     fn format_request(&self, req: &ChatCompletionRequest, api_key: &str) -> anyhow::Result<TransportRequest> {
-        let base_url = std::env::var("OPENROUTER_BASE_URL")
-            .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
+        let base_url = self
+            .base_url
+            .clone()
+            .or_else(|| std::env::var("OPENROUTER_BASE_URL").ok())
+            .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
         let url = format!("{}/chat/completions", base_url);
         
         let mut headers = HashMap::new();

@@ -22,6 +22,7 @@ fn test_request(model: &str) -> ChatCompletionRequest {
         files: None,
         execution: None,
         output: None,
+        strategy: None,
     }
 }
 
