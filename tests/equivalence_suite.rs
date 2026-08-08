@@ -156,3 +156,90 @@ async fn test_model_resolution_pass_equivalence() {
     assert_eq!(crate_pass_default.select_model(), monolith_ir_default.nodes[0].model.as_deref().unwrap());
     assert_eq!(crate_pass_default.select_model(), crate_catalog.fast);
 }
+
+#[tokio::test]
+async fn test_control_flow_validation_pass_equivalence() {
+    use fusion_compiler::ControlFlowValidationPass as CrateControlFlowPass;
+    use fusion_router::compiler::passes::ControlFlowValidationPass as MonolithControlFlowPass;
+    use fusion_router::types::IREdge as MonolithIREdge;
+
+    let monolith_pass = MonolithControlFlowPass;
+    let crate_pass = CrateControlFlowPass;
+
+    // 1. Unknown Source Node in Edge -> both monolith and crate must reject
+    let id_a = Uuid::new_v4();
+    let id_b = Uuid::new_v4();
+    let id_bad = Uuid::new_v4();
+
+    let monolith_invalid_edge_ir = MonolithWorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![MonolithIRNode {
+            id: id_a,
+            kind: MonolithIRNodeKind::Generate,
+            strategy: MonolithStrategyKind::Single,
+            model: None,
+            config: HashMap::new(),
+        }],
+        edges: vec![MonolithIREdge {
+            from: id_bad,
+            to: id_a,
+            condition: None,
+        }],
+        metadata: MonolithIRMetadata {
+            policy_applied: vec![],
+            estimated_cost: 0.0,
+            estimated_tokens: 0,
+        },
+    };
+
+    let crate_invalid_edge_ir: CrateWorkflowIR = serde_json::from_str(&format!(
+        r#"{{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{{"id":"node_a","kind":"Task","capability":null,"config":{{}}}}],"edges":[{{"from":"node_unknown","to":"node_a","kind":"Sequential","condition":null}}],"metadata":{{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}}}"#
+    )).expect("deserialize crate ir");
+
+    assert!(monolith_pass.apply(monolith_invalid_edge_ir).await.is_err(), "Monolith must reject unknown edge source");
+    assert!(crate_pass.transform(&crate_invalid_edge_ir).is_err(), "Crate pass must reject unknown edge source");
+
+    // 2. Valid multi-node DAG -> both monolith and crate must accept
+    let valid_monolith_dag_ir = MonolithWorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![
+            MonolithIRNode {
+                id: id_a,
+                kind: MonolithIRNodeKind::Generate,
+                strategy: MonolithStrategyKind::Single,
+                model: None,
+                config: HashMap::new(),
+            },
+            MonolithIRNode {
+                id: id_b,
+                kind: MonolithIRNodeKind::Review,
+                strategy: MonolithStrategyKind::Single,
+                model: None,
+                config: HashMap::new(),
+            },
+        ],
+        edges: vec![MonolithIREdge {
+            from: id_a,
+            to: id_b,
+            condition: None,
+        }],
+        metadata: MonolithIRMetadata {
+            policy_applied: vec![],
+            estimated_cost: 0.0,
+            estimated_tokens: 10,
+        },
+    };
+
+    let valid_crate_dag_ir = fusion_ir::WorkflowBuilder::new()
+        .task("node_a", "TaskA")
+        .expect("task a")
+        .task("node_b", "TaskB")
+        .expect("task b")
+        .sequential("node_a", "node_b")
+        .expect("sequential edge")
+        .build()
+        .expect("build valid ir");
+
+    assert!(monolith_pass.apply(valid_monolith_dag_ir).await.is_ok(), "Monolith must accept valid DAG");
+    assert!(crate_pass.transform(&valid_crate_dag_ir).is_ok(), "Crate pass must accept valid DAG");
+}
