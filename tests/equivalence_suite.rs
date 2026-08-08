@@ -291,6 +291,81 @@ async fn test_control_flow_validation_pass_equivalence() {
         .loop_edge("b", "a").expect("loop")
         .build().expect("build ir");
     assert!(crate_pass.transform(&crate_loop_cycle_ir).is_ok(), "Loop back-edge must not trigger IllegalCycle");
+
+    // 9. Split with 2 non-Parallel outgoing edges (Sequential + Sequential)
+    // Monolith: IRNodeKind::Split counts all outgoing edges, kind-agnostic
+    // Crate: config.control_flow == "split" counts all outgoing edges from the HashMap
+    let id_split = Uuid::new_v4();
+    let id_s1 = Uuid::new_v4();
+    let id_s2 = Uuid::new_v4();
+    let monolith_split_non_parallel = MonolithWorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![
+            MonolithIRNode { id: id_split, kind: MonolithIRNodeKind::Split, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            MonolithIRNode { id: id_s1, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            MonolithIRNode { id: id_s2, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+        ],
+        edges: vec![
+            MonolithIREdge { from: id_split, to: id_s1, condition: None },
+            MonolithIREdge { from: id_split, to: id_s2, condition: None },
+        ],
+        metadata: MonolithIRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 10 },
+    };
+    let crate_split_non_parallel: CrateWorkflowIR = serde_json::from_str(
+        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"splitter","kind":"Task","capability":null,"config":{"control_flow":"split"}},{"id":"s1","kind":"Task","capability":null,"config":{}},{"id":"s2","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"splitter","to":"s1","kind":"Sequential","condition":null},{"from":"splitter","to":"s2","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
+    ).expect("deserialize crate ir");
+    assert!(monolith_pass.apply(monolith_split_non_parallel).await.is_ok(), "Monolith Split must accept 2 non-Parallel outgoing edges");
+    assert!(crate_pass.transform(&crate_split_non_parallel).is_ok(), "Crate split must accept 2 non-Parallel outgoing edges");
+
+    // 10. Barrier vs Join distinction
+    // Monolith Join: IRNodeKind::Join with 2 incoming, 0 outgoing -> passes
+    // Monolith Barrier: IRNodeKind::Barrier with 2 incoming, 0 outgoing -> fails (no outgoing)
+    // Crate Join-shaped: no control_flow marker, 2 incoming Merge -> passes (MergeArity ok, no BarrierArity check)
+    // Crate Barrier-shaped: config.control_flow == "barrier", 2 incoming, 0 outgoing -> fails BarrierArity
+    let id_j = Uuid::new_v4();
+    let id_ja = Uuid::new_v4();
+    let id_jb = Uuid::new_v4();
+    let monolith_join_ir = MonolithWorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![
+            MonolithIRNode { id: id_ja, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            MonolithIRNode { id: id_jb, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            MonolithIRNode { id: id_j, kind: MonolithIRNodeKind::Join, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+        ],
+        edges: vec![
+            MonolithIREdge { from: id_ja, to: id_j, condition: None },
+            MonolithIREdge { from: id_jb, to: id_j, condition: None },
+        ],
+        metadata: MonolithIRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 10 },
+    };
+    let crate_join_ir: CrateWorkflowIR = serde_json::from_str(
+        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"ja","kind":"Task","capability":null,"config":{}},{"id":"jb","kind":"Task","capability":null,"config":{}},{"id":"j","kind":"Aggregation","capability":null,"config":{}}],"edges":[{"from":"ja","to":"j","kind":"Merge","condition":null},{"from":"jb","to":"j","kind":"Merge","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
+    ).expect("deserialize crate ir");
+    assert!(monolith_pass.apply(monolith_join_ir).await.is_ok(), "Monolith Join with 2 incoming must pass");
+    assert!(crate_pass.transform(&crate_join_ir).is_ok(), "Crate Join-shaped (no marker) with 2 incoming must pass");
+
+    // 10b. Barrier with 0 outgoing -> both reject
+    let id_b = Uuid::new_v4();
+    let id_ba = Uuid::new_v4();
+    let id_bb = Uuid::new_v4();
+    let monolith_barrier_no_out = MonolithWorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![
+            MonolithIRNode { id: id_ba, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            MonolithIRNode { id: id_bb, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            MonolithIRNode { id: id_b, kind: MonolithIRNodeKind::Barrier, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+        ],
+        edges: vec![
+            MonolithIREdge { from: id_ba, to: id_b, condition: None },
+            MonolithIREdge { from: id_bb, to: id_b, condition: None },
+        ],
+        metadata: MonolithIRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 10 },
+    };
+    let crate_barrier_no_out: CrateWorkflowIR = serde_json::from_str(
+        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"ba","kind":"Task","capability":null,"config":{}},{"id":"bb","kind":"Task","capability":null,"config":{}},{"id":"b","kind":"Task","capability":null,"config":{"control_flow":"barrier"}}],"edges":[{"from":"ba","to":"b","kind":"Sequential","condition":null},{"from":"bb","to":"b","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
+    ).expect("deserialize crate ir");
+    assert!(monolith_pass.apply(monolith_barrier_no_out).await.is_err(), "Monolith Barrier with 0 outgoing must fail");
+    assert!(crate_pass.transform(&crate_barrier_no_out).is_err(), "Crate barrier with 0 outgoing must fail BarrierArity");
 }
 
 #[tokio::test]
