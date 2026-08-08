@@ -352,18 +352,21 @@ impl Executor for DefaultExecutor {
                                 node_id = %sub_node.id,
                                 "Cache hit for LLM node"
                             );
-                            let latency = start.elapsed().as_millis() as u64;
                             let cached_output = cached
                                 .get("content")
                                 .and_then(|v| v.as_str())
                                 .map(|s| serde_json::Value::String(s.to_string()))
                                 .unwrap_or(cached);
-                            return NodeExecutionResult {
-                                state: NodeState::Succeeded,
-                                usage: None,
-                                latency_ms: latency,
-                                output: Some(cached_output),
-                            };
+                            // A cache hit satisfies just this sub-node: record
+                            // it as the member output and continue with the
+                            // remaining subgraph (other members, judge, exit
+                            // node) instead of returning for the whole
+                            // strategy.
+                            output_value = Some(cached_output);
+                            if let Some(current) = output_value.clone() {
+                                node_outputs.insert(sub_node.id, current);
+                            }
+                            continue;
                         }
                     }
 
@@ -1327,5 +1330,135 @@ mod tests {
             "budget-exhausted loop must still surface the last tool results"
         );
         assert_eq!(result.output.unwrap()["tool_calls"][0]["executed"], true);
+    }
+
+    #[cfg(feature = "semantic-cache")]
+    mod cache_tests {
+        use super::*;
+        use crate::cache::embeddings::Embedder;
+        use crate::cache::SemanticCache;
+
+        /// Deterministic per-text embeddings: identical keys embed identically
+        /// (cosine 1.0), different keys embed differently.
+        struct DeterministicEmbedder;
+
+        #[async_trait]
+        impl Embedder for DeterministicEmbedder {
+            async fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+                let mut v = vec![0.0f32; 64];
+                for (i, b) in text.bytes().enumerate() {
+                    v[i % 64] += b as f32;
+                }
+                let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if norm > 0.0 {
+                    for x in &mut v {
+                        *x /= norm;
+                    }
+                }
+                Ok(v)
+            }
+        }
+
+        struct CountingProvider(Arc<std::sync::atomic::AtomicUsize>);
+
+        #[async_trait]
+        impl ChatProvider for CountingProvider {
+            async fn chat_completion(
+                &self,
+                request: &ChatCompletionRequest,
+            ) -> anyhow::Result<ChatCompletionResponse> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(ChatCompletionResponse {
+                    id: "count".into(),
+                    object: "chat.completion".into(),
+                    created: 0,
+                    model: request.model.clone(),
+                    choices: vec![Choice {
+                        index: 0,
+                        message: ChatMessage {
+                            role: "assistant".into(),
+                            content: "judge verdict".into(),
+                        },
+                        finish_reason: "stop".into(),
+                    }],
+                    native_tool_calls: None,
+                    usage: Some(Usage {
+                        prompt_tokens: 1,
+                        completion_tokens: 1,
+                        total_tokens: 2,
+                    }),
+                })
+            }
+
+            fn name(&self) -> &str {
+                "counting"
+            }
+        }
+
+        /// A cache hit on one consensus member must satisfy only that member:
+        /// the remaining members and the judge still execute, and the judge's
+        /// output becomes the strategy result (regression for the early
+        /// `return` that used to abort the whole subgraph).
+        #[tokio::test]
+        async fn test_cache_hit_continues_remaining_subgraph() {
+            let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let provider = Arc::new(CountingProvider(counter.clone()));
+            let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> =
+                HashMap::new();
+            strategies.insert(
+                StrategyKind::Consensus,
+                Box::new(ConsensusStrategy::default()),
+            );
+            let executor = DefaultExecutor::new(provider, strategies);
+
+            let mut node = make_llm_node(StrategyKind::Consensus);
+            node.config.insert(
+                "messages".into(),
+                serde_json::json!([{ "role": "user", "content": "hello cache test" }]),
+            );
+
+            // Reconstruct the exact request the first member will produce and
+            // pre-populate the cache for it.
+            let member_request = ChatCompletionRequest {
+                model: node.model.clone(),
+                messages: vec![ChatMessage {
+                    role: "user".into(),
+                    content: "hello cache test".into(),
+                }],
+                stream: false,
+                temperature: None,
+                max_tokens: None,
+                tools: None,
+                files: None,
+                execution: None,
+                output: None,
+            };
+            let cache_key = DefaultExecutor::cache_key(&member_request);
+
+            let cache = Arc::new(SemanticCache::new(
+                Arc::new(DeterministicEmbedder),
+                0.99,
+                100,
+                64,
+            ));
+            cache
+                .put(&cache_key, serde_json::json!({ "content": "cached member" }))
+                .await;
+            let executor = executor.with_cache(cache);
+
+            let result = executor.execute_node(&node).await;
+
+            assert_eq!(result.state, NodeState::Succeeded);
+            assert_eq!(
+                result.output,
+                Some(serde_json::Value::String("judge verdict".into())),
+                "a cached member must not become the whole strategy's output"
+            );
+            assert_eq!(
+                counter.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "only the judge should hit the provider (all members cached)"
+            );
+        }
     }
 }

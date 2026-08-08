@@ -67,6 +67,16 @@ request carries the user's input:
   (`deepseek-v4-flash-free`) executed 12 `file_read` calls across 3 rounds and
   produced a file-referencing review report.
 
+## Semantic Cache Short-Circuit Semantics
+
+- With `semantic-cache` enabled, a cache hit satisfies **only the individual
+  sub-node** whose request matched: the hit output is recorded as that node's
+  output and execution moves on to the remaining subgraph (other members,
+  judge, exit node). A cached member answer can never become the whole
+  strategy's output. Regression: `cache_tests::test_cache_hit_continues_remaining_subgraph`
+  (asserts the provider is still called for the judge and the judge's output
+  wins).
+
 ## Execution State Machine (ADR-029)
 
 ```

@@ -6,9 +6,15 @@ use futures::Stream;
 use tokio_util::sync::CancellationToken;
 
 use crate::resource::guard::ResourceGuard;
-use crate::resource::stream_meter::StreamMeter;
+use crate::resource::stream_meter::{StreamMeter, StreamMeterReport};
 use crate::providers::ModelPricing;
 use crate::types::ChatStreamChunk;
+
+/// Fired exactly once when a streamed response terminates (completion,
+/// error, cancellation, or drop) with the final measured report. Used to
+/// record exact usage into the resource manager so quota accounting reflects
+/// what actually streamed rather than the admission estimate alone.
+pub type StreamFinishHook = Box<dyn FnOnce(StreamMeterReport) + Send + 'static>;
 
 pub struct CancellingStream<S> {
     inner: S,
@@ -41,6 +47,7 @@ pub struct MeteredStream {
     meter: Arc<Mutex<StreamMeter>>,
     guard: Option<ResourceGuard>,
     pricing: Option<ModelPricing>,
+    on_finish: Option<StreamFinishHook>,
 }
 
 impl Stream for MeteredStream {
@@ -49,6 +56,7 @@ impl Stream for MeteredStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.cancel.is_cancelled() {
             self.release_guard();
+            self.fire_finish_hook();
             return Poll::Ready(None);
         }
         match self.inner.as_mut().poll_next(cx) {
@@ -60,6 +68,7 @@ impl Stream for MeteredStream {
             }
             Poll::Ready(Some(Err(e))) => {
                 self.release_guard();
+                self.fire_finish_hook();
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(None) => {
@@ -67,6 +76,7 @@ impl Stream for MeteredStream {
                     meter.finalize(self.pricing.as_ref());
                 }
                 self.release_guard();
+                self.fire_finish_hook();
                 Poll::Ready(None)
             }
             Poll::Pending => Poll::Pending,
@@ -80,12 +90,31 @@ impl MeteredStream {
             drop(guard);
         }
     }
+
+    fn fire_finish_hook(&mut self) {
+        if let Some(hook) = self.on_finish.take() {
+            let report = self
+                .meter
+                .lock()
+                .map(|mut m| m.finalize(self.pricing.as_ref()))
+                .unwrap_or_else(|_| StreamMeterReport {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                    cost_millicosts: 0,
+                    ttfb_ms: None,
+                    total_duration_ms: None,
+                });
+            hook(report);
+        }
+    }
 }
 
 impl Drop for MeteredStream {
     fn drop(&mut self) {
         self.cancel.cancel();
         self.release_guard();
+        self.fire_finish_hook();
     }
 }
 
@@ -95,6 +124,18 @@ pub fn metered_stream(
     cancel: CancellationToken,
     pricing: Option<ModelPricing>,
 ) -> (MeteredStream, Arc<Mutex<StreamMeter>>) {
+    metered_stream_with_finish(inner, guard, cancel, pricing, Box::new(|_| {}))
+}
+
+/// Same as [`metered_stream`] but invokes `on_finish` exactly once when the
+/// stream terminates, with the final measured report.
+pub fn metered_stream_with_finish(
+    inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>>,
+    guard: ResourceGuard,
+    cancel: CancellationToken,
+    pricing: Option<ModelPricing>,
+    on_finish: StreamFinishHook,
+) -> (MeteredStream, Arc<Mutex<StreamMeter>>) {
     let meter = Arc::new(Mutex::new(StreamMeter::new()));
     let meter_clone = meter.clone();
     let stream = MeteredStream {
@@ -103,6 +144,7 @@ pub fn metered_stream(
         meter: meter_clone,
         guard: Some(guard),
         pricing,
+        on_finish: Some(on_finish),
     };
     (stream, meter)
 }

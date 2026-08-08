@@ -8,6 +8,7 @@ pub struct ResourceGuard {
     pub graph: ExecutionGraph,
     pub resource_manager: Arc<dyn ResourceManager>,
     pub committed: bool,
+    runtime: Option<tokio::runtime::Handle>,
 }
 
 impl ResourceGuard {
@@ -21,6 +22,11 @@ impl ResourceGuard {
             graph,
             resource_manager,
             committed: false,
+            // Capture the runtime at construction (all guards are created
+            // inside a Tokio context). Without this, a guard dropped from a
+            // non-runtime thread or after runtime teardown can never return
+            // the reserved quota.
+            runtime: tokio::runtime::Handle::try_current().ok(),
         }
     }
 
@@ -39,7 +45,7 @@ impl Drop for ResourceGuard {
                 request_id = %request_id,
                 "ResourceGuard dropped without commit; releasing reserved quota"
             );
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            if let Some(handle) = &self.runtime {
                 handle.spawn(async move {
                     let _ = resource_manager.release(&graph).await;
                 });

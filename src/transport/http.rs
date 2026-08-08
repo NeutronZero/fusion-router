@@ -17,28 +17,37 @@ pub struct HttpTransport {
 }
 
 impl HttpTransport {
-    pub fn new(timeout: Duration) -> Self {
-        Self {
-            client: Client::builder()
-                .timeout(timeout)
-                .build()
-                .unwrap_or_default(),
+    /// Builds a transport with the configured request timeout. Client
+    /// construction failures propagate instead of being replaced by a default
+    /// (timeout-less) client, so a misconfigured TLS/proxy setup surfaces at
+    /// startup rather than producing unbounded requests at runtime.
+    pub fn new(timeout: Duration) -> Result<Self, TransportError> {
+        let client = Client::builder().timeout(timeout).build().map_err(|e| {
+            TransportError::Network(format!("failed to build HTTP client: {e}"))
+        })?;
+        Ok(Self {
+            client,
             backoff_base_ms: DEFAULT_BACKOFF_BASE_MS,
             backoff_max_ms: DEFAULT_BACKOFF_MAX_MS,
             max_retries: DEFAULT_MAX_RETRIES,
-        }
+        })
     }
 
-    pub fn with_backoff(timeout: Duration, base_ms: u64, max_ms: u64, max_retries: u32) -> Self {
-        Self {
-            client: Client::builder()
-                .timeout(timeout)
-                .build()
-                .unwrap_or_default(),
+    pub fn with_backoff(
+        timeout: Duration,
+        base_ms: u64,
+        max_ms: u64,
+        max_retries: u32,
+    ) -> Result<Self, TransportError> {
+        let client = Client::builder().timeout(timeout).build().map_err(|e| {
+            TransportError::Network(format!("failed to build HTTP client: {e}"))
+        })?;
+        Ok(Self {
+            client,
             backoff_base_ms: base_ms,
             backoff_max_ms: max_ms,
             max_retries,
-        }
+        })
     }
 
     async fn send_once(&self, req: &TransportRequest) -> Result<TransportResponse, TransportError> {
@@ -74,7 +83,7 @@ impl HttpTransport {
 
 impl Default for HttpTransport {
     fn default() -> Self {
-        Self::new(Duration::from_secs(30))
+        Self::new(Duration::from_secs(30)).expect("default HTTP client build failed")
     }
 }
 
@@ -84,24 +93,23 @@ impl Transport for HttpTransport {
     async fn send(&self, req: TransportRequest) -> Result<TransportResponse, TransportError> {
         let mut backoff = Backoff::new(self.backoff_base_ms, self.backoff_max_ms);
 
+        // Only transient failures are retried: rate limits (429), server
+        // errors (5xx), and network/serialization hiccups. Permanent client
+        // errors (4xx) fail immediately instead of wasting latency and
+        // potentially tripping provider rate limits.
         for attempt in 0..=self.max_retries {
             let result = self.send_once(&req).await;
-            match result {
-                Ok(response) => {
-                    backoff.reset();
-                    if response.status == 429 && attempt < self.max_retries {
-                        tokio::time::sleep(backoff.next()).await;
-                        continue;
-                    }
-                    return Ok(response);
-                }
-                Err(e) => {
-                    if attempt == self.max_retries {
-                        return Err(e);
-                    }
-                    tokio::time::sleep(backoff.next()).await;
-                }
+            let should_retry = match &result {
+                Ok(response) => response.status == 429,
+                Err(TransportError::Http { status, .. }) => *status == 429 || *status >= 500,
+                Err(TransportError::Network(_))
+                | Err(TransportError::Timeout(_))
+                | Err(TransportError::Serialization(_)) => true,
+            };
+            if !should_retry || attempt == self.max_retries {
+                return result;
             }
+            tokio::time::sleep(backoff.next()).await;
         }
 
         Err(TransportError::Network("max retries exceeded".to_string()))
@@ -150,7 +158,8 @@ mod tests {
 
     #[test]
     fn test_with_backoff_stores_settings() {
-        let transport = HttpTransport::with_backoff(Duration::from_secs(5), 250, 4_000, 3);
+        let transport =
+            HttpTransport::with_backoff(Duration::from_secs(5), 250, 4_000, 3).unwrap();
 
         assert_eq!(transport.backoff_base_ms, 250);
         assert_eq!(transport.backoff_max_ms, 4_000);
@@ -159,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_new_uses_default_backoff_settings() {
-        let transport = HttpTransport::new(Duration::from_secs(30));
+        let transport = HttpTransport::new(Duration::from_secs(30)).unwrap();
 
         assert_eq!(transport.backoff_base_ms, DEFAULT_BACKOFF_BASE_MS);
         assert_eq!(transport.backoff_max_ms, DEFAULT_BACKOFF_MAX_MS);

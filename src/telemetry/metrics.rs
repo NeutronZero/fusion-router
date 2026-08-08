@@ -13,7 +13,7 @@ pub struct FusionMetrics {
     pub provider_latency_seconds: HistogramVec,
     pub strategy_latency_seconds: HistogramVec,
     pub strategy_errors_total: IntCounterVec,
-    pub graph_hash_count: IntCounterVec,
+    pub graph_hash_count: IntCounter,
 }
 
 fn safe_int_counter(name: &str, help: &str) -> IntCounter {
@@ -76,10 +76,11 @@ impl FusionMetrics {
                 "Per-strategy error count",
                 &["strategy"]
             ),
-            graph_hash_count: safe_int_counter_vec(
+            graph_hash_count: safe_int_counter(
                 "fusionrouter_graph_hash_count",
-                "Graph hash distribution",
-                &["graph_hash"]
+                // Unlabeled: each request compiles a unique graph, so a
+                // per-hash label would create unbounded cardinality.
+                "Total compiled graphs",
             ),
         }
     }
@@ -178,14 +179,12 @@ mod tests {
     }
 
     #[test]
-    fn test_metrics_graph_hash_distribution() {
+    fn test_metrics_graph_hash_count() {
         let metrics = FusionMetrics::instance();
-        metrics
-            .graph_hash_count
-            .with_label_values(&["abc123"])
-            .inc();
+        let before = metrics.graph_hash_count.get();
+        metrics.graph_hash_count.inc();
         let output = render_metrics();
+        assert_eq!(metrics.graph_hash_count.get(), before + 1);
         assert!(output.contains("fusionrouter_graph_hash_count"));
-        assert!(output.contains("graph_hash=\"abc123\""));
     }
 }

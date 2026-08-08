@@ -37,8 +37,9 @@ use crate::strategies::single::SingleStrategy;
 use crate::strategies::Strategy;
 use crate::telemetry::EvidenceRepository;
 use tokio_util::sync::CancellationToken;
-use crate::resource::cancelling_stream::metered_stream;
+use crate::resource::cancelling_stream::metered_stream_with_finish;
 use crate::resource::guard::ResourceGuard;
+use crate::resource::ResourceManager;
 use crate::providers::ModelPricing;
 use crate::types::*;
 use crate::server::pipeline::{
@@ -224,6 +225,35 @@ pub async fn chat_completions(
     }
 }
 
+/// Builds the admission/reservation graph for a streaming request. Streaming
+/// runs directly against the provider (no planner/compiler), so the estimate
+/// is derived from what the client already sent. It reserves quota up-front;
+/// when the stream terminates the measured usage (stream meter) replaces the
+/// estimate via `ResourceManager::record_usage`.
+fn stream_graph_estimate(request_id: Uuid, request: &ChatCompletionRequest) -> ExecutionGraph {
+    let input_tokens: u64 = request
+        .messages
+        .iter()
+        .map(|m| (m.content.len() / 4).max(1) as u64)
+        .sum();
+    let max_output = request.max_tokens.unwrap_or(4096) as u64;
+    let estimated_tokens = (input_tokens + max_output).max(1);
+    ExecutionGraph {
+        graph_id: request_id,
+        nodes: vec![],
+        edges: vec![],
+        metadata: GraphMetadata {
+            estimated_cost: 0.0,
+            estimated_tokens,
+            max_depth: 0,
+            node_count: 0,
+        },
+        total_tokens: estimated_tokens,
+        total_cost: 0,
+        primitive_graph_hash: 0,
+    }
+}
+
 async fn stream_response(
     state: AppState,
     request: ChatCompletionRequest,
@@ -233,34 +263,53 @@ async fn stream_response(
     let model_name = request.model.clone();
     let created = chrono::Utc::now().timestamp();
 
-    let _generation = state.config_manager.snapshot().generation;
     let pricing: Option<ModelPricing> = None;
     let resource_manager = state.resource_manager.clone();
 
     let provider = state.provider.clone();
     let inner = provider.chat_stream(&request).await;
+    let graph = stream_graph_estimate(request_id, &request);
     drop(request);
     drop(state);
 
     let event_stream: BoxStream<'static, Result<Event, std::convert::Infallible>> = match inner {
         Ok(inner_stream) => {
+            if !resource_manager.try_reserve(&graph).await {
+                tracing::warn!(
+                    request_id = %request_id,
+                    "streaming request rejected: daily resource quota exhausted"
+                );
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(error_response(
+                        request_id,
+                        &model_name,
+                        "Daily resource quota exhausted",
+                    )),
+                )
+                    .into_response();
+            }
             let cancel = CancellationToken::new();
-            let dummy_graph = ExecutionGraph {
-                graph_id: request_id,
-                nodes: vec![],
-                edges: vec![],
-                metadata: GraphMetadata {
-                    estimated_cost: 0.0,
-                    estimated_tokens: 0,
-                    max_depth: 0,
-                    node_count: 0,
-                },
-                total_tokens: 0,
-                total_cost: 0,
-                primitive_graph_hash: 0,
-            };
-            let guard = ResourceGuard::new(request_id, dummy_graph, resource_manager);
-            let (metered, _meter) = metered_stream(inner_stream, guard, cancel, pricing);
+            let guard = ResourceGuard::new(request_id, graph, resource_manager.clone());
+            // Exact accounting: the admission estimate is released when the
+            // stream ends, then the measured tokens/cost are recorded.
+            let hook_manager = resource_manager.clone();
+            let (metered, _meter) = metered_stream_with_finish(
+                inner_stream,
+                guard,
+                cancel,
+                pricing,
+                Box::new(move |report| {
+                    let manager = hook_manager.clone();
+                    tokio::spawn(async move {
+                        manager
+                            .record_usage(report.cost_millicosts, report.total_tokens)
+                            .await;
+                    });
+                    crate::telemetry::stream_metrics::StreamMetrics::instance()
+                        .record_report(&report);
+                }),
+            );
             Box::pin(metered.map(move |chunk_result| {
                 let id = request_id_str.clone();
                 let model = model_name.clone();
@@ -281,6 +330,8 @@ async fn stream_response(
                         })
                     }
                     Err(e) => {
+                        crate::telemetry::stream_metrics::StreamMetrics::instance()
+                            .record_error();
                         serde_json::json!({"error": e.to_string()})
                     }
                 };
@@ -344,7 +395,9 @@ async fn process_request(
         planner: state.planner.clone(),
         policies,
     };
-    let mut ir = step_plan.execute((reqs.clone(), evidence), &mut pctx).await?;
+    let mut ir = step_plan
+        .execute((reqs.clone(), Some(evidence)), &mut pctx)
+        .await?;
     // The caller's explicit model wins over the planner's catalog defaults;
     // otherwise requests for e.g. "openrouter/auto" silently execute on a
     // catalog model the provider may not offer.
@@ -369,11 +422,11 @@ async fn process_request(
         "graph compiled"
     );
 
-    // Record graph hash distribution
-    let hash_str = format!("{:016x}", graph.primitive_graph_hash);
+    // Record graph compilation rate: the hash is unique per request, so it
+    // must never be used as a label (unbounded cardinality would balloon
+    // memory and break the metrics scrape).
     crate::telemetry::metrics::FusionMetrics::instance()
         .graph_hash_count
-        .with_label_values(&[&hash_str])
         .inc();
 
     // 6. Resource Reservation with RAII Guard
@@ -527,31 +580,52 @@ async fn anthropic_stream_response(
     model_name: String,
 ) -> axum::response::Response {
     let msg_id = format!("msg_{}", request_id);
+    let pricing: Option<ModelPricing> = None;
     let resource_manager = state.resource_manager.clone();
     let provider = state.provider.clone();
     let inner = provider.chat_stream(&request).await;
+    let graph = stream_graph_estimate(request_id, &request);
     drop(request);
     drop(state);
 
     let stream: BoxStream<'static, Result<Event, std::convert::Infallible>> = match inner {
         Ok(inner_stream) => {
+            if !resource_manager.try_reserve(&graph).await {
+                tracing::warn!(
+                    request_id = %request_id,
+                    "anthropic streaming request rejected: daily resource quota exhausted"
+                );
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({
+                        "type": "error",
+                        "error": {
+                            "type": "resource_exhausted",
+                            "message": "Daily resource quota exhausted"
+                        }
+                    })),
+                )
+                    .into_response();
+            }
             let cancel = CancellationToken::new();
-            let dummy_graph = ExecutionGraph {
-                graph_id: request_id,
-                nodes: vec![],
-                edges: vec![],
-                metadata: GraphMetadata {
-                    estimated_cost: 0.0,
-                    estimated_tokens: 0,
-                    max_depth: 0,
-                    node_count: 0,
-                },
-                total_tokens: 0,
-                total_cost: 0,
-                primitive_graph_hash: 0,
-            };
-            let guard = ResourceGuard::new(request_id, dummy_graph, resource_manager);
-            let (metered, _meter) = metered_stream(inner_stream, guard, cancel, None);
+            let guard = ResourceGuard::new(request_id, graph, resource_manager.clone());
+            let hook_manager = resource_manager.clone();
+            let (metered, _meter) = metered_stream_with_finish(
+                inner_stream,
+                guard,
+                cancel,
+                pricing,
+                Box::new(move |report| {
+                    let manager = hook_manager.clone();
+                    tokio::spawn(async move {
+                        manager
+                            .record_usage(report.cost_millicosts, report.total_tokens)
+                            .await;
+                    });
+                    crate::telemetry::stream_metrics::StreamMetrics::instance()
+                        .record_report(&report);
+                }),
+            );
 
             let id_clone = msg_id.clone();
             let model_clone = model_name.clone();
@@ -586,6 +660,11 @@ async fn anthropic_stream_response(
 
             let header_stream = stream::iter(vec![Ok(message_start), Ok(content_block_start), Ok(ping)]);
 
+            // Set when a chunk error occurs so the footer (which would
+            // otherwise report a successful end_turn) is suppressed.
+            let stream_failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let footer_failed = stream_failed.clone();
+
             let delta_stream = metered.map(move |chunk_result| {
                 match chunk_result {
                     Ok(chunk) => {
@@ -599,6 +678,9 @@ async fn anthropic_stream_response(
                             })).unwrap_or_default()))
                     }
                     Err(e) => {
+                        stream_failed.store(true, std::sync::atomic::Ordering::SeqCst);
+                        crate::telemetry::stream_metrics::StreamMetrics::instance()
+                            .record_error();
                         Ok(Event::default()
                             .event("error")
                             .data(serde_json::to_string(&serde_json::json!({
@@ -630,11 +712,24 @@ async fn anthropic_stream_response(
                     "type": "message_stop"
                 })).unwrap_or_default());
 
+            // A failed stream must not be presented as a completed
+            // (end_turn) message: the stop footer is emitted only when no
+            // error chunk was observed.
             let footer_stream = stream::iter(vec![
                 Ok(content_block_stop),
                 Ok(message_delta),
                 Ok(message_stop),
-            ]);
+            ])
+            .filter_map(move |evt| {
+                let failed = footer_failed.clone();
+                async move {
+                    if failed.load(std::sync::atomic::Ordering::SeqCst) {
+                        None
+                    } else {
+                        Some(evt)
+                    }
+                }
+            });
 
             Box::pin(header_stream.chain(delta_stream).chain(footer_stream))
         }

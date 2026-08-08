@@ -22,7 +22,6 @@ pub struct PipelineContext {
     pub evidence: Option<EvidenceSnapshot>,
     pub ir: Option<WorkflowIR>,
     pub graph: Option<ExecutionGraph>,
-    pub resource_guard: Option<ResourceGuard>,
     pub execution_result: Option<ExecutionResult>,
     pub response: Option<ChatCompletionResponse>,
     pub budget_envelope: Option<BudgetEnvelope>,
@@ -39,7 +38,6 @@ impl PipelineContext {
             evidence: None,
             ir: None,
             graph: None,
-            resource_guard: None,
             execution_result: None,
             response: None,
             budget_envelope: None,
@@ -91,10 +89,16 @@ pub struct EvidenceSnapshotStep {
 }
 
 #[async_trait]
-impl PipelineStep<(), Option<EvidenceSnapshot>> for EvidenceSnapshotStep {
-    async fn execute(&self, _: (), ctx: &mut PipelineContext) -> Result<Option<EvidenceSnapshot>, RouterError> {
-        let evidence = self.repository.snapshot().await.ok();
-        ctx.evidence = evidence.clone();
+impl PipelineStep<(), EvidenceSnapshot> for EvidenceSnapshotStep {
+    async fn execute(&self, _: (), ctx: &mut PipelineContext) -> Result<EvidenceSnapshot, RouterError> {
+        let evidence = self.repository.snapshot().await.map_err(|e| {
+            RouterError::StageFailure {
+                stage: PipelineStage::EvidenceSnapshot,
+                request_id: ctx.request_id,
+                message: e.to_string(),
+            }
+        })?;
+        ctx.evidence = Some(evidence.clone());
         Ok(evidence)
     }
 }
@@ -219,7 +223,6 @@ impl PipelineStep<ExecutionGraph, ResourceGuard> for ResourceReservationStep {
         ctx.budget_envelope = Some(BudgetEnvelope::new(max_cost, max_tokens, 100));
 
         let guard = ResourceGuard::new(ctx.request_id, graph, self.resource_manager.clone());
-        ctx.resource_guard = None;
         Ok(guard)
     }
 }
@@ -344,7 +347,6 @@ mod tests {
         assert!(ctx.evidence.is_none());
         assert!(ctx.ir.is_none());
         assert!(ctx.graph.is_none());
-        assert!(ctx.resource_guard.is_none());
         assert!(ctx.execution_result.is_none());
         assert!(ctx.response.is_none());
         assert!(ctx.budget_envelope.is_none());

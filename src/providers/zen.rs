@@ -5,7 +5,10 @@ use std::time::Duration;
 
 pub fn new_zen_provider(api_key: String) -> Provider {
     let model = Box::new(ZenModel::new("opencode-zen-model".to_string()));
-    let transport = Box::new(HttpTransport::new(Duration::from_secs(300)));
+    let transport = Box::new(
+        HttpTransport::new(Duration::from_secs(300))
+            .expect("failed to build HTTP transport for zen provider"),
+    );
     Provider::new(model, transport, api_key)
 }
 

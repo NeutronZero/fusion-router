@@ -101,6 +101,18 @@ async fn main() {
             })
         });
 
+    if config.unsafe_dev && !unsafe_dev {
+        // ADR-035: the escape hatch must be explicit at invocation time. A
+        // config file with `unsafe_dev: true` must not silently disable
+        // auth/rate-limiting/tool guards in production deployments.
+        eprintln!(
+            "config sets `unsafe_dev: true`, but the flag is only honored from\n\
+             the command line. Start with `--unsafe-dev` if an insecure run\n\
+             is intentionally required."
+        );
+        std::process::exit(1);
+    }
+
     if unsafe_dev {
         config.unsafe_dev = true;
     }
@@ -319,13 +331,29 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
 
-    axum::serve(
+    let shutdown_timeout = std::time::Duration::from_secs(config.server.shutdown_timeout_secs);
+
+    // ADR: `shutdown_timeout_secs` bounds graceful drain; without it a stuck
+    // in-flight request can hang shutdown indefinitely.
+    let serve = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .unwrap();
+    .with_graceful_shutdown(shutdown_signal());
+
+    match tokio::time::timeout(shutdown_timeout, serve).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            eprintln!("server error: {e}");
+            std::process::exit(1);
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_secs = %config.server.shutdown_timeout_secs,
+                "graceful shutdown exceeded its bound; forcing exit"
+            );
+        }
+    }
 }
 
 #[cfg(unix)]

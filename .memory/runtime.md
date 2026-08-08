@@ -86,6 +86,23 @@ Pending → Running → Succeeded
 | `StreamMeter` | Streaming token counting |
 | `CancellingStream` | Safe stream cancellation |
 
+### Streaming Cost Accounting
+
+- **Quota is enforced, not just reserved**: streaming requests are
+  pre-flighted against the `BudgetEnvelope` via
+  `ResourceManager::try_reserve` before the graph runs; an over-quota stream
+  request fails fast with `QuotaExceeded` instead of consuming the scarce
+  enqueue slot and failing mid-stream.
+- **Usage is recorded on stream finish, never discarded**: streams run
+  through `metered_stream_with_finish` (`src/resource/cancelling_stream.rs`),
+  whose `StreamFinishHook` debits the real token usage exactly once — on
+  completion, error, cancellation, or drop — via
+  `ResourceManager::record_usage`. The `ResourceGuard` is held for the whole
+  stream and captures a `tokio::runtime::Handle` at construction so the
+  debit survives cross-task drop.
+- `StreamMetrics::record_report` / `record_error` capture the final
+  meter report and per-stream failure telemetry.
+
 ## Trigger Framework
 
 **Location:** `src/trigger/`

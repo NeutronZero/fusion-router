@@ -57,8 +57,16 @@ impl Model for OpenRouterModel {
         headers.insert("X-Title".to_string(), "FusionRouter".to_string());
         headers.insert("Content-Type".to_string(), "application/json".to_string());
 
+        // The registry routes on `<provider-key>/` prefixes; strip the routing
+        // prefix before forwarding so the upstream API receives a bare model
+        // id (mirrors ZenModel::format_request).
+        let api_model = req
+            .model
+            .strip_prefix("openrouter/")
+            .unwrap_or(&req.model);
+
         let mut body = serde_json::json!({
-            "model": req.model,
+            "model": api_model,
             "messages": req.messages,
             "stream": req.stream,
             "temperature": req.temperature,

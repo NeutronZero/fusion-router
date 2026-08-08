@@ -5,7 +5,10 @@ use std::time::Duration;
 
 pub fn new_ollama_provider() -> Provider {
     let model = Box::new(OllamaModel::new("ollama-model".to_string()));
-    let transport = Box::new(HttpTransport::new(Duration::from_secs(30)));
+    let transport = Box::new(
+        HttpTransport::new(Duration::from_secs(30))
+            .expect("failed to build HTTP transport for ollama provider"),
+    );
     Provider::new(model, transport, String::new())
 }
 

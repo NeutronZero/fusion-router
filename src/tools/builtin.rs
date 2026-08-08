@@ -1,7 +1,13 @@
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio::io::AsyncReadExt;
 
 use super::Tool;
+
+/// Hard cap on file bytes returned by `file_read`. A tool caller (or a
+/// prompt-injected file) cannot force the server to slurp arbitrarily large
+/// files into memory.
+const MAX_FILE_READ_BYTES: usize = 2 * 1024 * 1024;
 
 const MAX_EXPRESSION_LEN: usize = 512;
 
@@ -135,11 +141,28 @@ impl Tool for FileReadTool {
             return Err("Path traversal detected".to_string());
         }
 
-        let content = tokio::fs::read_to_string(&canonical)
+        let file = tokio::fs::File::open(&canonical)
             .await
             .map_err(|e| format!("File read error: {}", e))?;
+        let mut reader = tokio::io::BufReader::new(file).take((MAX_FILE_READ_BYTES + 1) as u64);
+        let mut content = String::new();
+        let bytes_read = reader
+            .read_to_string(&mut content)
+            .await
+            .map_err(|e| format!("File read error: {}", e))?;
+        let truncated = bytes_read > MAX_FILE_READ_BYTES;
+        if truncated {
+            content = content
+                .get(..MAX_FILE_READ_BYTES)
+                .unwrap_or(&content)
+                .to_string();
+        }
 
-        Ok(serde_json::json!({ "content": content }))
+        Ok(serde_json::json!({
+            "content": content,
+            "bytes_read": bytes_read,
+            "truncated": truncated,
+        }))
     }
 }
 
@@ -224,6 +247,24 @@ mod tests {
         assert!(result.is_ok(), "File read should succeed: {:?}", result.err());
         let val = result.unwrap();
         assert_eq!(val["content"].as_str().unwrap(), test_content);
+    }
+
+    #[tokio::test]
+    async fn test_file_read_tool_truncates_oversized_files() {
+        let tmp = std::env::temp_dir();
+        let unique_name = format!("_fusion_test_oversize_{}.txt", uuid::Uuid::new_v4());
+        let test_path = tmp.join(&unique_name);
+        let big_content = "x".repeat(MAX_FILE_READ_BYTES + 1024);
+        std::fs::write(&test_path, &big_content).unwrap();
+
+        let tool = FileReadTool::new(tmp.to_string_lossy().to_string());
+        let result = tool.execute(serde_json::json!({"path": unique_name})).await;
+        let _ = std::fs::remove_file(&test_path);
+
+        let val = result.expect("oversized file must still read, truncated");
+        assert_eq!(val["truncated"], serde_json::json!(true));
+        assert!(val["content"].as_str().unwrap().len() <= MAX_FILE_READ_BYTES);
+        assert!(val["bytes_read"].as_u64().unwrap() > MAX_FILE_READ_BYTES as u64);
     }
 
     #[tokio::test]

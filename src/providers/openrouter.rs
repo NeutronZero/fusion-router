@@ -5,7 +5,10 @@ use std::time::Duration;
 
 pub fn new_openrouter_provider(api_key: String) -> Provider {
     let model = Box::new(OpenRouterModel::new("openrouter-model".to_string()));
-    let transport = Box::new(HttpTransport::new(Duration::from_secs(600)));
+    let transport = Box::new(
+        HttpTransport::new(Duration::from_secs(600))
+            .expect("failed to build HTTP transport for openrouter provider"),
+    );
     Provider::new(model, transport, api_key)
 }
 

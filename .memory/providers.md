@@ -59,6 +59,20 @@ Transports are constructed with per-provider timeouts:
 - `new_openrouter_provider` uses 600 s (free streaming requests keep long generations; 30 s previously caused node failures)
 - `new_zen_provider` uses 300 s
 
+### HTTP Transport Semantics
+
+- **Client build failures fail fast**: `HttpTransport::new`/`with_backoff`
+  return `Result`; a failed `Client` builder (TLS/proxy misconfig) aborts
+  provider construction instead of silently replacing the client with a
+  default that has **no request timeout** (`transport/http.rs`).
+- **Retry policy**: only transient failures are retried — HTTP 429, 5xx,
+  network and serialization errors — with exponential backoff capped at
+  `max_retries` (default 5). Permanent 4xx client errors fail immediately.
+- **Prefix-stripping contract**: the registry routes on `<provider-key>/`
+  prefixes; each `*_model::format_request` must strip its own registered
+  prefix before forwarding (`zen/`, `opencode/`, and `openrouter/` are
+  stripped today) so upstream APIs receive bare model ids.
+
 ## Model Adapters
 
 | Adapter | File | Provider |

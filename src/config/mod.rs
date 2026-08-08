@@ -329,6 +329,40 @@ impl AppConfig {
             });
         }
 
+        // `host` + `port` are parsed as a bind address at boot; validate here
+        // so a malformed value is reported as a config error instead of
+        // panicking later.
+        if format!("{}:{}", self.server.host, self.server.port)
+            .parse::<std::net::SocketAddr>()
+            .is_err()
+        {
+            errors.push(ConfigValidationError {
+                field: "server.host".into(),
+                message: format!(
+                    "'{}:{}' is not a valid bind address",
+                    self.server.host, self.server.port
+                ),
+                value: Some(self.server.host.clone()),
+                severity: ValidationSeverity::Error,
+            });
+        }
+
+        // `logging.level` is parsed into a tracing directive at boot; reject
+        // malformed values here instead of panicking later.
+        if self
+            .logging
+            .level
+            .parse::<tracing_subscriber::filter::Directive>()
+            .is_err()
+        {
+            errors.push(ConfigValidationError {
+                field: "logging.level".into(),
+                message: format!("'{}' is not a valid tracing level/directive", self.logging.level),
+                value: Some(self.logging.level.clone()),
+                severity: ValidationSeverity::Error,
+            });
+        }
+
         if self.resources.max_daily_cost < 0.0 {
             errors.push(ConfigValidationError {
                 field: "resources.max_daily_cost".into(),

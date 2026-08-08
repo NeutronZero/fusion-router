@@ -7,6 +7,7 @@ use crate::security::paths::canonicalize_within;
 
 const MAX_ARGS: usize = 32;
 const MAX_ARG_LEN: usize = 1024;
+const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
 /// Commands whose arguments are treated as file paths by convention. For
 /// these, every non-flag argument must canonicalize inside an allowed read
@@ -15,6 +16,19 @@ const FILE_READING_COMMANDS: &[&str] = &[
     "cat", "head", "tail", "grep", "wc", "sort", "uniq", "cut", "sed", "awk",
     "less", "more", "fold", "nl", "tac", "strings", "diff", "file",
 ];
+
+/// 0-based positions of the positional (non-flag) arguments that are command
+/// text (patterns, scripts, programs) rather than file paths. Validating
+/// these as canonical paths would wrongly reject legitimate invocations like
+/// `grep "foo" file` or `awk '{print $1}' file`.
+fn command_non_path_positions(cmd: &str) -> &'static [usize] {
+    match cmd {
+        "grep" => &[0],
+        "sed" => &[0],
+        "awk" => &[0],
+        _ => &[],
+    }
+}
 
 pub struct ShellCommandTool {
     allowed_commands: Vec<String>,
@@ -76,10 +90,17 @@ impl ShellCommandTool {
                 cmd
             ));
         }
+        let non_path_positions = command_non_path_positions(cmd);
+        let mut positional_index = 0usize;
         for arg in args {
             if arg.starts_with('-') {
                 continue;
             }
+            if non_path_positions.contains(&positional_index) {
+                positional_index += 1;
+                continue;
+            }
+            positional_index += 1;
             let candidate = std::path::PathBuf::from(arg);
             let within = self
                 .allowed_read_directories
@@ -178,20 +199,60 @@ impl Tool for ShellCommandTool {
         Self::validate_args(&cmd_args)?;
         self.validate_path_args(cmd, &cmd_args)?;
 
-        let output = tokio::time::timeout(
+        let child = Command::new(cmd)
+            .args(&cmd_args)
+            // Never inherit the server's environment: the child would
+            // otherwise carry API keys (OPENROUTER_API_KEY, ...) it could
+            // echo back in its output.
+            .env_clear()
+            // Kill the OS process when the `Child` is dropped, so a timeout
+            // does not leave an orphaned process running.
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Command execution error: {}", e))?;
+
+        let output = match tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs),
-            Command::new(cmd).args(&cmd_args).output(),
+            child.wait_with_output(),
         )
         .await
-        .map_err(|_| format!("Command '{}' timed out after {}s", cmd, self.timeout_secs))?
-        .map_err(|e| format!("Command execution error: {}", e))?;
+        {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => return Err(format!("Command wait error: {}", e)),
+            // The wait future was dropped, dropping `child`; `kill_on_drop`
+            // reaps the spawned process.
+            Err(_) => {
+                return Err(format!(
+                    "Command '{}' timed out after {}s (process killed)",
+                    cmd, self.timeout_secs
+                ))
+            }
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout_truncated = stdout.len() > MAX_OUTPUT_BYTES;
+        let stderr_truncated = stderr.len() > MAX_OUTPUT_BYTES;
 
         Ok(serde_json::json!({
-            "stdout": String::from_utf8_lossy(&output.stdout).to_string(),
-            "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
+            "stdout": truncate_output(&stdout),
+            "stderr": truncate_output(&stderr),
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
             "exit_code": output.status.code().unwrap_or(-1),
         }))
     }
+}
+
+fn truncate_output(text: &str) -> String {
+    if text.len() <= MAX_OUTPUT_BYTES {
+        return text.to_string();
+    }
+    let mut truncated = text[..MAX_OUTPUT_BYTES].to_string();
+    truncated.push_str("\n... [output truncated]");
+    truncated
 }
 
 #[cfg(test)]

@@ -39,12 +39,14 @@ impl ProviderRegistry {
 
     pub fn register_target(&self, prefixes: Vec<String>, target: ProviderTarget) {
         let target_arc = Arc::new(target);
+        // Both mappings are mutated under a single critical section so a
+        // concurrent `get_matching_targets` (which reads only `prefixes`)
+        // can never observe a prefix dangling to a not-yet-registered
+        // target (or vice versa during removal).
         {
             let mut targets = self.targets.write();
-            targets.insert(target_arc.name.clone(), target_arc.clone());
-        }
-        {
             let mut prefix_list = self.prefixes.write();
+            targets.insert(target_arc.name.clone(), target_arc.clone());
             prefix_list.push((prefixes, target_arc));
         }
         self.version.fetch_add(1, Ordering::Release);
@@ -79,11 +81,14 @@ impl ProviderRegistry {
     pub fn unregister_target(&self, name: &str) -> bool {
         let removed = {
             let mut targets = self.targets.write();
-            targets.remove(name).is_some()
+            let mut prefix_list = self.prefixes.write();
+            let removed = targets.remove(name).is_some();
+            if removed {
+                prefix_list.retain(|(_, target)| target.name != name);
+            }
+            removed
         };
         if removed {
-            let mut prefix_list = self.prefixes.write();
-            prefix_list.retain(|(_, target)| target.name != name);
             self.capabilities.write().remove(name);
             self.pricing.write().remove(name);
             self.version.fetch_add(1, Ordering::Release);
@@ -269,15 +274,20 @@ impl ConfigSubscriber for ProviderRegistry {
             );
 
             let mut caps = self.capabilities.write();
-            for name in &removed {
-                caps.remove(name.as_str());
-            }
-
             let mut pricing = self.pricing.write();
             for name in &removed {
+                caps.remove(name.as_str());
                 pricing.remove(name.as_str());
             }
+            // Capability/pricing entries for providers that remain configured
+            // are preserved by name, so capability filtering stays active
+            // across config reloads.
+            drop(caps);
+            drop(pricing);
 
+            // Prefixes and targets are replaced under a single critical
+            // section so readers never observe a prefix-to-target mismatch
+            // during the transition.
             let mut prefix_list = self.prefixes.write();
             prefix_list.clear();
             for (name, target) in &candidates {
