@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
 
     let strategy = ConsensusStrategy { count: CONSENSUS_COUNT };
     let ctx = CompilationContext::new();
-    let graph = strategy.lower(&StrategyIR::Consensus { count: CONSENSUS_COUNT }, &ctx)?;
+    let graph = strategy.lower(&StrategyIR::Consensus { count: CONSENSUS_COUNT, members: vec![] }, &ctx)?;
     let hash = graph.compute_hash();
 
     let template = ExecutionNode {
@@ -87,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
             files: None,
             execution: None,
             output: None,
+            strategy: None,
         };
 
         let resp = provider.chat_completion(&request).await?;
@@ -131,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
         files: None,
         execution: None,
         output: None,
+        strategy: None,
     };
 
     let verdict = provider.chat_completion(&judge_request).await?;

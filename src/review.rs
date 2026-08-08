@@ -154,6 +154,7 @@ impl ReviewArgs {
         let mut args = Self::default();
         let raw: Vec<String> = std::env::args().skip(2).collect();
         let mut i = 0;
+        let mut members_given = false;
         while i < raw.len() {
             match raw[i].as_str() {
                 "--config" => {
@@ -163,6 +164,10 @@ impl ReviewArgs {
                     }
                 }
                 "--members" => {
+                    if !members_given {
+                        args.members.clear();
+                        members_given = true;
+                    }
                     let mut taken = 0;
                     while let Some(v) = raw.get(i + 1 + taken) {
                         if v.starts_with("--") {
@@ -200,7 +205,7 @@ impl ReviewArgs {
             }
             i += 1;
         }
-        if args.members.len() < 2 {
+        if members_given && args.members.len() < 2 {
             args.members = Self::default().members;
         }
         args

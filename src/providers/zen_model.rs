@@ -5,11 +5,16 @@ use super::{Model, ModelCapabilities, ModelPricing, TransportRequest, TransportR
 
 pub struct ZenModel {
     pub model_id: String,
+    pub base_url: Option<String>,
 }
 
 impl ZenModel {
     pub fn new(model_id: String) -> Self {
-        Self { model_id }
+        Self::with_base_url(model_id, None)
+    }
+
+    pub fn with_base_url(model_id: String, base_url: Option<String>) -> Self {
+        Self { model_id, base_url }
     }
 }
 
@@ -47,8 +52,11 @@ impl Model for ZenModel {
     }
 
     fn format_request(&self, req: &ChatCompletionRequest, api_key: &str) -> anyhow::Result<TransportRequest> {
-        let base_url = std::env::var("OPENCODEZEN_BASE_URL")
-            .unwrap_or_else(|_| "https://opencode.ai/zen/v1".to_string());
+        let base_url = self
+            .base_url
+            .clone()
+            .or_else(|| std::env::var("OPENCODEZEN_BASE_URL").ok())
+            .unwrap_or_else(|| "https://opencode.ai/zen/v1".to_string());
         let url = format!("{}/chat/completions", base_url);
         
         let mut headers = HashMap::new();

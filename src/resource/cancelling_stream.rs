@@ -72,9 +72,9 @@ impl Stream for MeteredStream {
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(None) => {
-                if let Ok(mut meter) = self.meter.lock() {
-                    meter.finalize(self.pricing.as_ref());
-                }
+                // `fire_finish_hook` finalizes the meter exactly once
+                // (meter.finalize is idempotent), so there is no separate
+                // finalize here — finalizing twice would double-report usage.
                 self.release_guard();
                 self.fire_finish_hook();
                 Poll::Ready(None)
@@ -251,5 +251,41 @@ mod tests {
         assert_eq!(result2.content, chunk2.content);
         let result3 = block_on(stream.next());
         assert!(result3.is_none());
+    }
+
+    #[test]
+    fn test_finish_hook_fires_exactly_once_across_error_and_drop() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let fires = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+        let guard = make_test_guard();
+        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> = Box::pin(
+            stream::iter(vec![
+                Err(anyhow::anyhow!("boom")),
+                Ok(ChatStreamChunk {
+                    content: Some("late".to_string()),
+                    finish_reason: None,
+                    usage: None,
+                }),
+            ]),
+        );
+        let fires2 = fires.clone();
+        let (mut stream, _meter) = metered_stream_with_finish(
+            inner,
+            guard,
+            cancel,
+            None,
+            Box::new(move |_report| {
+                fires2.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        // First poll hits the error: the hook fires while the error is yielded.
+        assert!(block_on(stream.next()).unwrap().is_err());
+        assert_eq!(fires.load(Ordering::SeqCst), 1);
+        // Polling the remainder (and Drop) must not fire the hook again.
+        assert!(block_on(stream.next()).unwrap().is_ok());
+        assert!(block_on(stream.next()).is_none());
+        drop(stream);
+        assert_eq!(fires.load(Ordering::SeqCst), 1, "hook fires exactly once");
     }
 }

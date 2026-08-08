@@ -19,6 +19,7 @@ async fn test_context_assembler_basic() {
         files: None,
         execution: None,
         output: None,
+        strategy: None,
     };
 
     let snapshot = assembler.assemble(&request).await.unwrap();

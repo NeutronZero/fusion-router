@@ -160,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
             files: None,
             execution: None,
             output: None,
+            strategy: None,
         };
 
         let resp = provider.chat_completion(&request).await?;
@@ -206,6 +207,7 @@ async fn main() -> anyhow::Result<()> {
         files: None,
         execution: None,
         output: None,
+        strategy: None,
     };
 
     let synthesis = provider.chat_completion(&judge_request).await?;

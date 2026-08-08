@@ -133,4 +133,25 @@ impl RouterError {
             Self::Internal { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
+
+    /// Client-safe message. Internal provider/transport detail stays in the
+    /// server logs (`Display`); the response must not leak paths, provider
+    /// internals, or configuration.
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::StageFailure { .. } => {
+                "request failed during pre-execution processing".to_string()
+            }
+            Self::ResourceExhausted { .. } => "daily resource quota exhausted".to_string(),
+            Self::CapacityExceeded { .. } => {
+                "router capacity temporarily exceeded; retry later".to_string()
+            }
+            Self::ClientCancelled { .. } => "request cancelled".to_string(),
+            Self::BudgetExceeded { .. } => "budget exceeded for this request".to_string(),
+            Self::MaxIterationsExceeded { .. } => {
+                "workflow exceeded its iteration limit".to_string()
+            }
+            Self::Internal { .. } => "internal error".to_string(),
+        }
+    }
 }

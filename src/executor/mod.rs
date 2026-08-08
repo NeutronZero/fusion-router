@@ -126,12 +126,29 @@ impl DefaultExecutor {
                 .unwrap_or(false);
 
             if allowlisted && registry_has {
-                let registry = self.tool_registry.as_ref().unwrap();
-                match registry
-                    .get(&call.name)
-                    .unwrap()
-                    .execute(call.arguments.clone())
-                    .await
+                // Registry presence was checked above; avoid panics anyway if
+                // the registry changed between the check and the lookup.
+                let Some(registry) = self.tool_registry.as_ref() else {
+                    results.push(serde_json::json!({
+                        "id": call.id,
+                        "tool": call.name,
+                        "arguments": call.arguments,
+                        "error": "tool registry unavailable",
+                        "executed": false,
+                    }));
+                    continue;
+                };
+                let Some(tool) = registry.get(&call.name) else {
+                    results.push(serde_json::json!({
+                        "id": call.id,
+                        "tool": call.name,
+                        "arguments": call.arguments,
+                        "error": "tool not registered",
+                        "executed": false,
+                    }));
+                    continue;
+                };
+                match tool.execute(call.arguments.clone()).await
                 {
                     Ok(result) => {
                         info!(tool = %call.name, "Tool executed successfully (native tool call)");
@@ -464,8 +481,18 @@ impl Executor for DefaultExecutor {
                         if !executed_any || tool_round + 1 >= max_tool_rounds {
                             // Nothing ran (e.g. all calls outside the
                             // allowlist) or the round budget is exhausted:
-                            // surface the tool results and stop.
-                            output_value = Some(results);
+                            // stop. If the model produced a final text answer
+                            // (possibly alongside the tool calls), keep it;
+                            // otherwise surface the raw tool results so the
+                            // stop does not discard information.
+                            let has_text = output_value
+                                .as_ref()
+                                .and_then(|v| v.as_str())
+                                .map(|s| !s.trim().is_empty())
+                                .unwrap_or(false);
+                            if !has_text {
+                                output_value = Some(results);
+                            }
                             break response;
                         }
 
@@ -484,12 +511,13 @@ impl Executor for DefaultExecutor {
 
                     #[cfg(feature = "semantic-cache")]
                     if let Some(ref cache) = self.cache {
-                        let content = output_value
-                            .as_ref()
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        cache.put(&cache_key, serde_json::json!({ "content": content })).await;
+                        // Only cache textual answers; JSON tool-result payloads
+                        // or empty output must never pollute the cache.
+                        if let Some(content) = output_value.as_ref().and_then(|v| v.as_str()) {
+                            if !content.trim().is_empty() {
+                                cache.put(&cache_key, serde_json::json!({ "content": content })).await;
+                            }
+                        }
                     }
 
                     if let Some(current) = output_value.clone() {

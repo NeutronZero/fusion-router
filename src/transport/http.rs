@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use reqwest::Client;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use crate::transport::backoff::Backoff;
 use crate::transport::{Transport, TransportRequest, TransportResponse, TransportEvent, TransportError};
@@ -121,34 +122,86 @@ impl Transport for HttpTransport {
             "GET" => self.client.get(&req.url),
             _ => self.client.post(&req.url),
         };
-        
+
         for (k, v) in req.headers {
             request = request.header(k, v);
         }
-        
+
         let resp = request
             .json(&req.body)
             .send()
             .await
             .map_err(|e| TransportError::Network(e.to_string()))?;
-            
+
         let status = resp.status().as_u16();
         if status >= 400 {
             let err_body = resp.text().await.unwrap_or_default();
             return Err(TransportError::Http { status, body: err_body });
         }
-        
-        let stream = resp.bytes_stream().map(|chunk_res| {
-            match chunk_res {
-                Ok(bytes) => {
-                    let data = String::from_utf8_lossy(&bytes).to_string();
-                    Ok(TransportEvent { data })
+
+        // Chunk boundaries are arbitrary byte counts: a multi-byte UTF-8
+        // sequence may be split across two chunks. `drain_utf8` decodes only
+        // complete sequences per chunk and carries any trailing partial
+        // sequence into the next chunk, so streamed text is never corrupted
+        // by from_utf8_lossy() mangling a split character mid-stream.
+        let pending: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let stream = resp.bytes_stream().map({
+            let pending = pending.clone();
+            move |chunk_res| -> Result<TransportEvent, TransportError> {
+                match chunk_res {
+                    Ok(bytes) => {
+                        let mut buf = pending.lock().unwrap();
+                        buf.extend_from_slice(&bytes);
+                        Ok(TransportEvent { data: drain_utf8(&mut buf) })
+                    }
+                    Err(e) => Err(TransportError::Network(e.to_string())),
                 }
-                Err(e) => Err(TransportError::Network(e.to_string()))
             }
         });
-        
-        Ok(Box::pin(stream))
+
+        // Flush any bytes still held back at end of stream: a trailing
+        // partial multi-byte sequence is decoded lossily instead of dropped.
+        let tail = pending;
+        let flushed = futures::stream::once(async move {
+            let buf = tail.lock().unwrap().clone();
+            if buf.is_empty() {
+                None
+            } else {
+                Some(Ok(TransportEvent {
+                    data: String::from_utf8_lossy(&buf).into_owned(),
+                }))
+            }
+        })
+        .filter_map(|flush| async move { flush });
+
+        Ok(Box::pin(stream.chain(flushed)))
+    }
+}
+
+/// Appends `bytes` to `carry` and returns the complete UTF-8 text decodable
+/// so far. Any trailing partial multi-byte sequence is left buffered for the
+/// next call; only truly invalid bytes are replaced (U+FFFD), never valid
+/// bytes misaligned by a chunk split.
+fn drain_utf8(carry: &mut Vec<u8>) -> String {
+    if carry.is_empty() {
+        return String::new();
+    }
+    match std::str::from_utf8(carry) {
+        Ok(s) => {
+            let text = s.to_string();
+            carry.clear();
+            text
+        }
+        Err(e) => match e.error_len() {
+            Some(err_len) => {
+                let valid = e.valid_up_to();
+                let text =
+                    String::from_utf8_lossy(&carry[..valid + err_len]).into_owned();
+                carry.drain(..valid + err_len);
+                text
+            }
+            None => String::new(),
+        },
     }
 }
 
@@ -173,5 +226,48 @@ mod tests {
         assert_eq!(transport.backoff_base_ms, DEFAULT_BACKOFF_BASE_MS);
         assert_eq!(transport.backoff_max_ms, DEFAULT_BACKOFF_MAX_MS);
         assert_eq!(transport.max_retries, DEFAULT_MAX_RETRIES);
+    }
+
+    #[test]
+    fn test_drain_utf8_joins_split_multibyte_character() {
+        // "中文" encoded as bytes; split mid-character at every boundary.
+        let text = "Hello 中文 world 🚀";
+        let bytes = text.as_bytes();
+        for split in 1..bytes.len() {
+            let mut carry: Vec<u8> = Vec::new();
+            let mut decoded = String::new();
+            decoded.push_str(&drain_utf8(&mut carry));
+            for &byte in &bytes[..split] {
+                carry.push(byte);
+                decoded.push_str(&drain_utf8(&mut carry));
+            }
+            for &byte in &bytes[split..] {
+                carry.push(byte);
+                decoded.push_str(&drain_utf8(&mut carry));
+            }
+            assert_eq!(decoded, text, "split at byte {split} must not corrupt text");
+        }
+    }
+
+    #[test]
+    fn test_drain_utf8_flushes_partial_tail_lossily() {
+        let mut carry = vec![0xE4, 0xB8]; // first two bytes of U+4E2D (中)
+        assert_eq!(drain_utf8(&mut carry), "", "incomplete sequence stays buffered");
+        // Stream ends: flush decodes lossily instead of dropping.
+        assert_eq!(String::from_utf8_lossy(&carry), "�");
+    }
+
+    #[test]
+    fn test_drain_utf8_replaces_only_invalid_bytes() {
+        let mut carry = "ok ".as_bytes().to_vec();
+        carry.push(0xFF); // invalid byte
+        carry.extend_from_slice("fine".as_bytes());
+        let out = drain_utf8(&mut carry);
+        assert_eq!(out, "ok \u{FFFD}");
+        // The valid bytes after the invalid one are preserved for the next
+        // call instead of being swallowed by the replacement.
+        let out = drain_utf8(&mut carry);
+        assert_eq!(out, "fine");
+        assert!(carry.is_empty());
     }
 }

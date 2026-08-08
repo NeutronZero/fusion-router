@@ -56,7 +56,7 @@ fn test_golden_ir_snapshots() {
 
     // Consensus strategy golden snapshot
     let consensus_graph = ConsensusStrategy::default()
-        .lower(&StrategyIR::Consensus { count: 3 }, &ctx)
+        .lower(&StrategyIR::Consensus { count: 3, members: vec![] }, &ctx)
         .unwrap();
     let consensus_snapshot: PrimitiveGraph = serde_json::from_str(
         include_str!("../../golden_ir/consensus.json")

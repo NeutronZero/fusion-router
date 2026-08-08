@@ -220,7 +220,7 @@ pub async fn chat_completions(
         Err(e) => {
             let status = e.status_code();
             tracing::error!(request_id = %request_id, stage = ?e.stage(), error = %e, "pipeline failed");
-            (status, Json(error_response(request_id, &request.model, &e.to_string()))).into_response()
+            (status, Json(error_response(request_id, &request.model, &e.user_message()))).into_response()
         }
     }
 }
@@ -332,14 +332,16 @@ async fn stream_response(
                     Err(e) => {
                         crate::telemetry::stream_metrics::StreamMetrics::instance()
                             .record_error();
-                        serde_json::json!({"error": e.to_string()})
+                        tracing::error!(request_id = %request_id_str, error = %e, "stream error mid-response");
+                        serde_json::json!({"error": "streaming error"})
                     }
                 };
                 Ok(Event::default().data(serde_json::to_string(&payload).unwrap_or_default()))
             }))
         }
         Err(e) => {
-            let error = serde_json::json!({"error": e.to_string()});
+            tracing::error!(request_id = %request_id, error = %e, "failed to open provider stream");
+            let error = serde_json::json!({"error": "upstream provider unavailable"});
             Box::pin(stream::once(async move {
                 Ok(Event::default().data(serde_json::to_string(&error).unwrap_or_default()))
             }))

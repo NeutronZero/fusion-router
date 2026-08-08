@@ -226,20 +226,27 @@ impl ConfigSubscriber for ProviderRegistry {
 
             let factory_name = name.clone();
             let factory_key = api_key.clone();
+            let factory_base_url = cfg.base_url.clone();
             let target = super::router::ProviderTarget::new(
                 name.clone(),
                 circuit_breaker,
                 Box::new(move || -> Arc<dyn super::ChatProvider + Send + Sync> {
+                    let base_url = factory_base_url.clone();
                     if factory_name == "openrouter" {
-                        Arc::new(
-                            super::openrouter::OpenRouterProvider::new(factory_key.clone()),
-                        )
+                        Arc::new(super::openrouter::OpenRouterProvider::with_base_url(
+                            factory_key.clone(),
+                            base_url,
+                        ))
                     } else if factory_name == "zen" {
-                        Arc::new(super::zen::ZenProvider::new(factory_key.clone()))
+                        Arc::new(super::zen::ZenProvider::with_base_url(
+                            factory_key.clone(),
+                            base_url,
+                        ))
                     } else {
-                        Arc::new(
-                            super::openrouter::OpenRouterProvider::new(factory_key.clone()),
-                        )
+                        Arc::new(super::openrouter::OpenRouterProvider::with_base_url(
+                            factory_key.clone(),
+                            base_url,
+                        ))
                     }
                 }),
             );
@@ -296,6 +303,9 @@ impl ConfigSubscriber for ProviderRegistry {
             drop(prefix_list);
 
             *targets = candidates;
+            // Bump the version so subscribers watching `version()` (e.g. the
+            // router dashboard) observe the full target replacement.
+            self.version.fetch_add(1, Ordering::SeqCst);
         }
     }
 }
