@@ -196,16 +196,34 @@ async fn main() {
 
                 let assessment = ReleaseAssessment::new(rel_env, evaluation, vec![]);
                 let attestation = ReleaseAttestation::new(assessment);
-                let canonical_bytes = AttestationBuilder::to_canonical_bytes(&attestation).unwrap();
+                let canonical_bytes = match AttestationBuilder::to_canonical_bytes(&attestation) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("Error serializing attestation bytes: {e}");
+                        std::process::exit(1);
+                    }
+                };
 
                 let signer = HmacSha256Signer::new("fusion-cli", &resolve_signing_key());
-                let sig = signer.sign(&canonical_bytes).unwrap();
+                let sig = match signer.sign(&canonical_bytes) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Error signing attestation: {e}");
+                        std::process::exit(1);
+                    }
+                };
                 let signed = fusion_router::release::signing::SignedAttestation { attestation, signature: sig };
                 let envelope = AttestationEnvelope::new(signed);
 
                 let archive_path = output_dir.unwrap_or_else(|| workspace_root.join(".fusion/attestations"));
                 let archive = FilesystemArchiveBackend::new(archive_path);
-                let stored_path = archive.store(&envelope).unwrap_or_else(|e| panic!("{e}"));
+                let stored_path = match archive.store(&envelope) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("Error storing attestation: {e}");
+                        std::process::exit(1);
+                    }
+                };
 
                 println!("Signed Release Attestation Created");
                 println!("Assessment ID: {}", envelope.signed_attestation.attestation.assessment.assessment_id);
@@ -216,14 +234,38 @@ async fn main() {
             GatesCmd::VerifyAttestation { target } => {
                 let archive = FilesystemArchiveBackend::new(workspace_root.join(".fusion/attestations"));
                 let envelope = if PathBuf::from(&target).exists() {
-                    let content = std::fs::read_to_string(&target).unwrap();
-                    serde_json::from_str::<AttestationEnvelope>(&content).unwrap()
+                    let content = match std::fs::read_to_string(&target) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("Error reading target attestation file '{}': {e}", target);
+                            std::process::exit(1);
+                        }
+                    };
+                    match serde_json::from_str::<AttestationEnvelope>(&content) {
+                        Ok(env) => env,
+                        Err(e) => {
+                            eprintln!("Error parsing attestation envelope from '{}': {e}", target);
+                            std::process::exit(1);
+                        }
+                    }
                 } else {
-                    archive.load(&target).unwrap_or_else(|e| panic!("{e}"))
+                    match archive.load(&target) {
+                        Ok(env) => env,
+                        Err(e) => {
+                            eprintln!("Error loading attestation from archive: {e}");
+                            std::process::exit(1);
+                        }
+                    }
                 };
 
                 let signer = HmacSha256Signer::new("fusion-cli", &resolve_signing_key());
-                let report = AttestationVerifier::verify(&envelope, &signer).unwrap_or_else(|e| panic!("{e}"));
+                let report = match AttestationVerifier::verify(&envelope, &signer) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Error verifying attestation: {e}");
+                        std::process::exit(1);
+                    }
+                };
 
                 println!("Attestation Verification Report");
                 println!("Schema Valid: {}", report.schema_valid);
@@ -251,7 +293,13 @@ async fn main() {
 
                 match format {
                     OutputFormat::Text => println!("{}", proj.model.render_ascii()),
-                    OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&proj.model).unwrap()),
+                    OutputFormat::Json => match serde_json::to_string_pretty(&proj.model) {
+                        Ok(json) => println!("{json}"),
+                        Err(e) => {
+                            eprintln!("Error formatting timeline model JSON: {e}");
+                            std::process::exit(1);
+                        }
+                    },
                 }
             }
             TraceCmd::Events { execution_id, format } => {
@@ -265,7 +313,13 @@ async fn main() {
                             println!("[seq: {}] [schema: {}] {:?}", env.sequence_number, env.schema_version, env.payload);
                         }
                     }
-                    OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&events).unwrap()),
+                    OutputFormat::Json => match serde_json::to_string_pretty(&events) {
+                        Ok(json) => println!("{json}"),
+                        Err(e) => {
+                            eprintln!("Error formatting events JSON: {e}");
+                            std::process::exit(1);
+                        }
+                    },
                 }
             }
         },
@@ -289,7 +343,13 @@ async fn main() {
                 }
             }
             CapabilityCmd::Publish { pkg_path, registry, key } => {
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Error initializing Tokio runtime: {e}");
+                        std::process::exit(1);
+                    }
+                };
                 if let Err(e) = rt.block_on(
                     commands::publish::execute_publish(&pkg_path, &registry, key.as_deref())
                 ) {
