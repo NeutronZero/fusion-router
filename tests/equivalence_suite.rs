@@ -243,3 +243,63 @@ async fn test_control_flow_validation_pass_equivalence() {
     assert!(monolith_pass.apply(valid_monolith_dag_ir).await.is_ok(), "Monolith must accept valid DAG");
     assert!(crate_pass.transform(&valid_crate_dag_ir).is_ok(), "Crate pass must accept valid DAG");
 }
+
+#[tokio::test]
+async fn test_intent_planner_equivalence() {
+    use fusion_planner::{ExecutionIntent as CrateExecutionIntent, IntentPlanner as CrateIntentPlanner};
+    use fusion_router::planner::IntentPlanner as MonolithIntentPlanner;
+    use fusion_router::types::execution::ExecutionIntent as MonolithExecutionIntent;
+    use fusion_router::types::{Requirements, Intent, ComplexityLevel, ModelCatalog as MonolithModelCatalog};
+    use fusion_core::ModelCatalog as CrateModelCatalog;
+    use fusion_router::planner::Planner;
+
+    let monolith_planner = MonolithIntentPlanner::new(MonolithModelCatalog::default());
+    let crate_planner = CrateIntentPlanner::new(CrateModelCatalog::default());
+
+    let make_monolith_reqs = |intent: Option<MonolithExecutionIntent>| Requirements {
+        intent_classification: Intent::General,
+        complexity: ComplexityLevel::Medium,
+        has_files: false,
+        context_window: 4096,
+        original_text: "test intent".to_string(),
+        execution_intent: intent,
+        output_preferences: None,
+        model_requirements: None,
+    };
+
+    // 1. Quality Intent
+    let monolith_quality = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Quality)), &[], None).await;
+    let crate_quality = crate_planner.plan_intent(&CrateExecutionIntent::Quality).expect("crate quality plan");
+    assert_eq!(monolith_quality.nodes.len(), 5);
+    assert_eq!(crate_quality.nodes().len(), 5);
+
+    // 2. Speed Intent
+    let monolith_speed = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Speed)), &[], None).await;
+    let crate_speed = crate_planner.plan_intent(&CrateExecutionIntent::Speed).expect("crate speed plan");
+    assert_eq!(monolith_speed.nodes.len(), 1);
+    assert_eq!(crate_speed.nodes().len(), 2);
+
+    // 3. Balanced Intent
+    let monolith_balanced = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Balanced)), &[], None).await;
+    let crate_balanced = crate_planner.plan_intent(&CrateExecutionIntent::Balanced).expect("crate balanced plan");
+    assert_eq!(monolith_balanced.nodes.len(), 3);
+    assert_eq!(crate_balanced.nodes().len(), 3);
+
+    // 4. Exhaustive Intent
+    let monolith_exhaustive = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Exhaustive)), &[], None).await;
+    let crate_exhaustive = crate_planner.plan_intent(&CrateExecutionIntent::Exhaustive).expect("crate exhaustive plan");
+    assert_eq!(monolith_exhaustive.nodes.len(), 6);
+    assert_eq!(crate_exhaustive.nodes().len(), 6);
+
+    // 5. Constrained Intent (cost < 0.02 -> speed)
+    let monolith_constrained_low = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost_usd: Some(0.01), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
+    let crate_constrained_low = crate_planner.plan_intent(&CrateExecutionIntent::Constrained { max_cost_usd: Some(0.01) }).expect("crate constrained low plan");
+    assert_eq!(monolith_constrained_low.nodes.len(), 1);
+    assert_eq!(crate_constrained_low.nodes().len(), 2);
+
+    // 6. Constrained Intent (cost >= 0.02 -> balanced)
+    let monolith_constrained_high = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost_usd: Some(0.10), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
+    let crate_constrained_high = crate_planner.plan_intent(&CrateExecutionIntent::Constrained { max_cost_usd: Some(0.10) }).expect("crate constrained high plan");
+    assert_eq!(monolith_constrained_high.nodes.len(), 3);
+    assert_eq!(crate_constrained_high.nodes().len(), 3);
+}

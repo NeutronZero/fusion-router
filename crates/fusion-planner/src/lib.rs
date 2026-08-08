@@ -1,36 +1,117 @@
-//! **SIMULATION** — Studio-sandbox planner (v0.14 UI vertical).
-//!
-//! `PlannerService::plan` returns a fixed two-node workflow regardless of intent.
-//! NOT wired into the production `src/` monolith planner.
-use fusion_core::PlatformError;
-use fusion_ir::WorkflowIR;
+use fusion_core::{ModelCatalog, PlatformError};
+use fusion_ir::{WorkflowBuilder, WorkflowIR};
 use fusion_kernel::{CapabilityRegistry, CapabilitySystem};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionIntent {
     Quality,
     Speed,
     Balanced,
-    Cheap,
-    Offline,
+    Exhaustive,
+    Constrained { max_cost_usd: Option<f64> },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PlannerKind {
-    Static,
-    Dynamic,
-    CapabilityBased,
+pub struct IntentPlanner {
+    pub model_catalog: ModelCatalog,
 }
 
-pub struct PlannerContract {
-    pub intent: String,
-    pub execution_intent: ExecutionIntent,
+impl IntentPlanner {
+    pub fn new(model_catalog: ModelCatalog) -> Self {
+        Self { model_catalog }
+    }
+
+    pub fn build_quality(&self) -> Result<WorkflowIR, PlatformError> {
+        WorkflowBuilder::new()
+            .task("n1", "CodeGeneration")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .task("n2", "CodeGeneration")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .task("n3", "CodeGeneration")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .review("n4", "Reviewer")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .task("n5", "Reflection")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .sequential("n1", "n2").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .sequential("n2", "n3").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .sequential("n3", "n4").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .sequential("n4", "n5").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .build()
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Build".into() })
+    }
+
+    pub fn build_speed(&self) -> Result<WorkflowIR, PlatformError> {
+        WorkflowBuilder::new()
+            .task("n1", "CodeGeneration")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .output("n2")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .sequential("n1", "n2")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .build()
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Build".into() })
+    }
+
+    pub fn build_balanced(&self) -> Result<WorkflowIR, PlatformError> {
+        WorkflowBuilder::new()
+            .task("n1", "CodeGeneration")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .task("n2", "CodeGeneration")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .review("n3", "Reviewer")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .sequential("n1", "n2").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .sequential("n2", "n3").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .build()
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Build".into() })
+    }
+
+    pub fn build_exhaustive(&self) -> Result<WorkflowIR, PlatformError> {
+        WorkflowBuilder::new()
+            .task("n1", "CodeGeneration")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .task("n2", "CodeGeneration")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .task("n3", "CodeGeneration")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .review("n4", "Reviewer")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .task("n5", "Reflection")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .review("n6", "Reviewer")
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Check node".into() })?
+            .sequential("n1", "n2").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .sequential("n2", "n3").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .sequential("n3", "n4").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .sequential("n4", "n5").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .sequential("n5", "n6").map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Edge".into() })?
+            .build()
+            .map_err(|e| PlatformError::Planner { code: "BUILDER_ERR".to_string(), message: e.to_string(), recovery_suggestion: "Build".into() })
+    }
+
+    pub fn plan_intent(&self, execution_intent: &ExecutionIntent) -> Result<WorkflowIR, PlatformError> {
+        match execution_intent {
+            ExecutionIntent::Quality => self.build_quality(),
+            ExecutionIntent::Speed => self.build_speed(),
+            ExecutionIntent::Balanced => self.build_balanced(),
+            ExecutionIntent::Exhaustive => self.build_exhaustive(),
+            ExecutionIntent::Constrained { max_cost_usd } => {
+                if let Some(cost) = max_cost_usd {
+                    if *cost < 0.02 {
+                        return self.build_speed();
+                    }
+                }
+                self.build_balanced()
+            }
+        }
+    }
 }
 
 pub struct PlannerService {
     capability_system: CapabilitySystem,
     capability_registry: CapabilityRegistry,
+    intent_planner: IntentPlanner,
 }
 
 impl PlannerService {
@@ -38,6 +119,7 @@ impl PlannerService {
         Self {
             capability_system,
             capability_registry: CapabilityRegistry::new(),
+            intent_planner: IntentPlanner::new(ModelCatalog::default()),
         }
     }
 
@@ -55,33 +137,7 @@ impl PlannerService {
         }
         let _ = &self.capability_system;
         let _ = &self.capability_registry;
-        let _ = &execution_intent;
-
-        fusion_ir::WorkflowBuilder::new()
-            .task("n1", "CodeGeneration")
-            .map_err(|e| PlatformError::Planner {
-                code: "BUILDER_ERR".to_string(),
-                message: e.to_string(),
-                recovery_suggestion: "Check node creation".to_string(),
-            })?
-            .output("n2")
-            .map_err(|e| PlatformError::Planner {
-                code: "BUILDER_ERR".to_string(),
-                message: e.to_string(),
-                recovery_suggestion: "Check output node creation".to_string(),
-            })?
-            .sequential("n1", "n2")
-            .map_err(|e| PlatformError::Planner {
-                code: "BUILDER_ERR".to_string(),
-                message: e.to_string(),
-                recovery_suggestion: "Check edge creation".to_string(),
-            })?
-            .build()
-            .map_err(|e| PlatformError::Planner {
-                code: "BUILDER_ERR".to_string(),
-                message: e.to_string(),
-                recovery_suggestion: "Check workflow validation".to_string(),
-            })
+        self.intent_planner.plan_intent(&execution_intent)
     }
 }
 
