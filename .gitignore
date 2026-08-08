@@ -17,3 +17,10 @@ scratch/
 
 ui/node_modules/
 ui/dist/
+
+# runtime artifacts
+server.pid
+fusion-server.log
+fusion-server-err.log
+srv-out.log
+srv-err.log
