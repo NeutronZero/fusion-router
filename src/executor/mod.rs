@@ -422,7 +422,7 @@ impl Executor for DefaultExecutor {
                                     .observe(latency as f64 / 1000.0);
                                 return NodeExecutionResult {
                                     state: NodeState::Failed(format!("Provider error: {}", e)),
-                                    usage: None,
+                                    usage: accumulated_usage,
                                     latency_ms: latency,
                                     output: None,
                                 };
@@ -1490,5 +1490,47 @@ mod tests {
                 "only the judge should hit the provider (all members cached)"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_execute_node_preserves_accumulated_usage_on_failure() {
+        struct FailingProvider {
+            calls: std::sync::atomic::AtomicUsize,
+        }
+
+        #[async_trait]
+        impl ChatProvider for FailingProvider {
+            fn name(&self) -> &str { "failing" }
+            async fn chat_completion(&self, _req: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
+                let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    Ok(ChatCompletionResponse {
+                        id: "ok".into(),
+                        object: "chat.completion".into(),
+                        created: 0,
+                        model: "mock".into(),
+                        choices: vec![Choice { index: 0, message: ChatMessage { role: "assistant".into(), content: "ok".into() }, finish_reason: "stop".into() }],
+                        native_tool_calls: None,
+                        usage: Some(Usage { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 }),
+                    })
+                } else {
+                    anyhow::bail!("provider simulated failure")
+                }
+            }
+        }
+
+        let provider = Arc::new(FailingProvider { calls: std::sync::atomic::AtomicUsize::new(0) });
+        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
+        strategies.insert(StrategyKind::Consensus, Box::new(crate::strategies::consensus::ConsensusStrategy::default()));
+        let executor = DefaultExecutor::new(provider, strategies);
+        let node = make_llm_node(StrategyKind::Consensus);
+
+        let result = executor.execute_node(&node).await;
+
+        assert!(matches!(result.state, NodeState::Failed(_)));
+        let usage = result.usage.expect("accumulated usage from successful first stage must be preserved on second stage failure");
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 20);
+        assert_eq!(usage.total_tokens, 30);
     }
 }
