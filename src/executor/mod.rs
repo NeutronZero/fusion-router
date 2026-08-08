@@ -367,77 +367,129 @@ impl Executor for DefaultExecutor {
                         }
                     }
 
-                    match self.provider.chat_completion(&request).await {
-                        Ok(response) => {
-                            info!(
-                                node_id = %sub_node.id,
-                                model = %response.model,
-                                request_messages = request.messages.len(),
-                                response_content_len = response.choices.first()
-                                    .map(|c| c.message.content.len())
-                                    .unwrap_or(0),
-                                "LLM node completed"
-                            );
+                    // Bounded tool loop (Law 7 / ADR-037): after executing
+                    // provider-native tool calls the results are appended to
+                    // the conversation and the model is re-prompted, so a
+                    // review/workflow can read files, observe results, and
+                    // continue. The loop ends when the model emits plain text
+                    // or when the round budget is exhausted.
+                    let max_tool_rounds = sub_node
+                        .config
+                        .get("max_tool_rounds")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(8)
+                        .max(1);
+                    let mut tool_round: u64 = 0;
 
-                            output_value = response.choices.first()
-                                .map(|c| c.message.content.clone())
-                                .map(serde_json::Value::String);
-
-                            #[cfg(feature = "semantic-cache")]
-                            if let Some(ref cache) = self.cache {
-                                let content = response.choices.first()
-                                    .map(|c| c.message.content.clone())
-                                    .unwrap_or_default();
-                                cache.put(&cache_key, serde_json::json!({ "content": content })).await;
+                    loop {
+                        let response = match self.provider.chat_completion(&request).await {
+                            Ok(response) => response,
+                            Err(e) => {
+                                info!(
+                                    node_id = %sub_node.id,
+                                    error = %e,
+                                    "LLM node failed"
+                                );
+                                let latency = start.elapsed().as_millis() as u64;
+                                crate::telemetry::metrics::FusionMetrics::instance()
+                                    .strategy_errors_total
+                                    .with_label_values(&[&strategy_label])
+                                    .inc();
+                                crate::telemetry::metrics::FusionMetrics::instance()
+                                    .strategy_latency_seconds
+                                    .with_label_values(&[&strategy_label])
+                                    .observe(latency as f64 / 1000.0);
+                                return NodeExecutionResult {
+                                    state: NodeState::Failed(format!("Provider error: {}", e)),
+                                    usage: None,
+                                    latency_ms: latency,
+                                    output: None,
+                                };
                             }
+                        };
 
-                            // Law 7 / ADR-037: tool execution is fed ONLY from
-                            // provider-native tool_calls. Model output text is
-                            // never parsed for tool invocation.
-                            if let Some(native_calls) = &response.native_tool_calls {
-                                if !native_calls.is_empty() {
-                                    output_value =
-                                        Some(self.execute_native_tool_calls(sub_node, native_calls).await);
-                                }
-                            }
+                        info!(
+                            node_id = %sub_node.id,
+                            model = %response.model,
+                            tool_round,
+                            request_messages = request.messages.len(),
+                            response_content_len = response.choices.first()
+                                .map(|c| c.message.content.len())
+                                .unwrap_or(0),
+                            has_tool_calls = response.native_tool_calls.as_ref().map(|c| c.len()).unwrap_or(0),
+                            "LLM node completed"
+                        );
 
-                            if let Some(usage) = response.usage {
-                                accumulated_usage = Some(match accumulated_usage {
-                                    Some(acc) => Usage {
-                                        prompt_tokens: acc.prompt_tokens + usage.prompt_tokens,
-                                        completion_tokens: acc.completion_tokens + usage.completion_tokens,
-                                        total_tokens: acc.total_tokens + usage.total_tokens,
-                                    },
-                                    None => usage,
-                                });
-                            }
+                        output_value = response.choices.first()
+                            .map(|c| c.message.content.clone())
+                            .map(serde_json::Value::String);
 
-                            if let Some(current) = output_value.clone() {
-                                node_outputs.insert(sub_node.id, current);
-                            }
+                        if let Some(usage) = response.usage.clone() {
+                            accumulated_usage = Some(match accumulated_usage {
+                                Some(acc) => Usage {
+                                    prompt_tokens: acc.prompt_tokens + usage.prompt_tokens,
+                                    completion_tokens: acc.completion_tokens + usage.completion_tokens,
+                                    total_tokens: acc.total_tokens + usage.total_tokens,
+                                },
+                                None => usage,
+                            });
                         }
-                        Err(e) => {
-                            info!(
-                                node_id = %sub_node.id,
-                                error = %e,
-                                "LLM node failed"
-                            );
-                            let latency = start.elapsed().as_millis() as u64;
-                            crate::telemetry::metrics::FusionMetrics::instance()
-                                .strategy_errors_total
-                                .with_label_values(&[&strategy_label])
-                                .inc();
-                            crate::telemetry::metrics::FusionMetrics::instance()
-                                .strategy_latency_seconds
-                                .with_label_values(&[&strategy_label])
-                                .observe(latency as f64 / 1000.0);
-                            return NodeExecutionResult {
-                                state: NodeState::Failed(format!("Provider error: {}", e)),
-                                usage: None,
-                                latency_ms: latency,
-                                output: None,
-                            };
+
+                        let wants_tools = response
+                            .native_tool_calls
+                            .as_ref()
+                            .map(|c| !c.is_empty())
+                            .unwrap_or(false);
+
+                        if !wants_tools {
+                            break response;
                         }
+
+                        // Law 7 / ADR-037: tool execution is fed ONLY from
+                        // provider-native tool_calls. Model output text is
+                        // never parsed for tool invocation.
+                        let native_calls = response.native_tool_calls.clone().unwrap_or_default();
+                        let results = self
+                            .execute_native_tool_calls(sub_node, &native_calls)
+                            .await;
+                        let executed_any = results["tool_calls"]
+                            .as_array()
+                            .map(|c| c.iter().any(|x| x["executed"] == true))
+                            .unwrap_or(false);
+
+                        if !executed_any || tool_round + 1 >= max_tool_rounds {
+                            // Nothing ran (e.g. all calls outside the
+                            // allowlist) or the round budget is exhausted:
+                            // surface the tool results and stop.
+                            output_value = Some(results);
+                            break response;
+                        }
+
+                        // Feed the results back and let the model continue.
+                        request.messages.push(ChatMessage {
+                            role: "user".to_string(),
+                            content: format!("Tool results:\n{}", results),
+                        });
+                        tool_round += 1;
+                        tracing::debug!(
+                            node_id = %sub_node.id,
+                            tool_round,
+                            "tool round completed; continuing LLM loop"
+                        );
+                    }; // tool loop
+
+                    #[cfg(feature = "semantic-cache")]
+                    if let Some(ref cache) = self.cache {
+                        let content = output_value
+                            .as_ref()
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        cache.put(&cache_key, serde_json::json!({ "content": content })).await;
+                    }
+
+                    if let Some(current) = output_value.clone() {
+                        node_outputs.insert(sub_node.id, current);
                     }
                 }
                 ExecutionNodeKind::Transform
@@ -927,6 +979,55 @@ mod tests {
         tool_calls: Option<Vec<ToolCall>>,
     }
 
+    /// Provider that emits tool calls for the first `tool_call_requests`
+    /// requests, then falls back to plain text — used to verify the bounded
+    /// ReAct-style tool loop in the executor.
+    struct ToolLoopProvider {
+        text: String,
+        tool_call_requests: usize,
+        tool_calls: Vec<ToolCall>,
+        request_count: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ChatProvider for ToolLoopProvider {
+        fn name(&self) -> &str {
+            "tool-loop-provider"
+        }
+
+        async fn chat_completion(
+            &self,
+            _request: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
+            let n = self.request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let calls = if n < self.tool_call_requests {
+                Some(self.tool_calls.clone())
+            } else {
+                None
+            };
+            Ok(ChatCompletionResponse {
+                id: format!("tool-loop-{}", n),
+                object: "chat.completion".into(),
+                created: 0,
+                model: "tool-loop-model".into(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: self.text.clone(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
+                native_tool_calls: calls,
+                usage: Some(Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                }),
+            })
+        }
+    }
+
     #[async_trait]
     impl ChatProvider for ToolCallProvider {
         fn name(&self) -> &str {
@@ -1154,5 +1255,77 @@ mod tests {
             request.tools.is_none(),
             "auto-exec disabled must not advertise tool definitions"
         );
+    }
+
+    /// The bounded tool loop re-prompts the model after executing native tool
+    /// calls, then final output is the model's text once it stops calling
+    /// tools.
+    #[tokio::test]
+    async fn test_tool_loop_re_prompts_until_model_emits_text() {
+        let provider = Arc::new(ToolLoopProvider {
+            text: "final review text".into(),
+            tool_call_requests: 2,
+            tool_calls: vec![ToolCall {
+                id: "lr".into(),
+                name: "file_read".into(),
+                arguments: serde_json::json!({"path": "src/executor/mod.rs"}),
+            }],
+            request_count: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(crate::tools::builtin::FileReadTool::new(".".into())));
+        let executor = DefaultExecutor::new(provider, single_strategies())
+            .with_tool_registry(Arc::new(registry))
+            .with_allow_auto_exec(true);
+        let mut node = make_llm_node(StrategyKind::Single);
+        node.config.insert(
+            "tool_allowlist".into(),
+            serde_json::json!(["file_read"]),
+        );
+
+        let result = executor.execute_node(&node).await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        assert_eq!(
+            result.output,
+            Some(serde_json::Value::String("final review text".into())),
+            "after tool rounds the model's final text must be the output"
+        );
+        let usage = result.usage.expect("usage accumulated across rounds");
+        assert_eq!(usage.total_tokens, 45, "3 provider calls (2 tool + 1 text) x 15 tokens");
+    }
+
+    /// The tool loop must terminate even when the model never stops calling
+    /// tools — the round budget caps it.
+    #[tokio::test]
+    async fn test_tool_loop_honors_round_budget() {
+        let provider = Arc::new(ToolLoopProvider {
+            text: String::new(),
+            tool_call_requests: usize::MAX,
+            tool_calls: vec![ToolCall {
+                id: "c".into(),
+                name: "calculator".into(),
+                arguments: serde_json::json!({"expression": "1+1"}),
+            }],
+            request_count: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let executor = DefaultExecutor::new(provider, single_strategies())
+            .with_tool_registry(calculator_registry())
+            .with_allow_auto_exec(true);
+        let mut node = make_llm_node(StrategyKind::Single);
+        node.config.insert(
+            "tool_allowlist".into(),
+            serde_json::json!(["calculator"]),
+        );
+        node.config.insert("max_tool_rounds".into(), serde_json::json!(3));
+
+        let result = executor.execute_node(&node).await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        assert!(
+            result.output.is_some(),
+            "budget-exhausted loop must still surface the last tool results"
+        );
+        assert_eq!(result.output.unwrap()["tool_calls"][0]["executed"], true);
     }
 }

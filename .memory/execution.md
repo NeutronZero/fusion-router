@@ -58,6 +58,14 @@ request carries the user's input:
   only when auto-exec is enabled with an allowlist — otherwise the provider
   cannot emit tool calls at all.
 - Providers without native tool-call support execute no tools (no emulation).
+- **Bounded tool loop (ReAct-style)**: when the model emits native tool calls
+  and at least one executes, the results are appended to the conversation
+  (`Tool results: <json>`) and the model is re-prompted, so it can read files,
+  observe results, and continue. The loop ends when the model emits plain text
+  or when the round budget (`node.config["max_tool_rounds"]`, default 8) is
+  exhausted. Verified live (2026-08-08): a self code-review on OpenCode Zen
+  (`deepseek-v4-flash-free`) executed 12 `file_read` calls across 3 rounds and
+  produced a file-referencing review report.
 
 ## Execution State Machine (ADR-029)
 
