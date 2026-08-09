@@ -31,7 +31,7 @@ async fn test_constraint_validation_pass_equivalence() {
     ).expect("deserialize empty ir");
 
     let monolith_res = monolith_pass.apply(empty_monolith_ir).await;
-    let crate_res = crate_pass.transform(&empty_crate_ir);
+    let crate_res = crate_pass.transform(&empty_crate_ir).await;
 
     assert!(monolith_res.is_err(), "Monolith pass must reject empty IR");
     assert!(crate_res.is_err(), "Crate pass must reject empty IR");
@@ -60,7 +60,7 @@ async fn test_constraint_validation_pass_equivalence() {
         .expect("workflow build");
 
     let monolith_valid_res = monolith_pass.apply(valid_monolith_ir).await;
-    let crate_valid_res = crate_pass.transform(&valid_crate_ir);
+    let crate_valid_res = crate_pass.transform(&valid_crate_ir).await;
 
     assert!(monolith_valid_res.is_ok(), "Monolith pass must accept valid IR");
     assert!(crate_valid_res.is_ok(), "Crate pass must accept valid IR");
@@ -197,7 +197,7 @@ async fn test_control_flow_validation_pass_equivalence() {
     )).expect("deserialize crate ir");
 
     assert!(monolith_pass.apply(monolith_invalid_edge_ir).await.is_err(), "Monolith must reject unknown edge source");
-    assert!(crate_pass.transform(&crate_invalid_edge_ir).is_err(), "Crate pass must reject unknown edge source");
+    assert!(crate_pass.transform(&crate_invalid_edge_ir).await.is_err(), "Crate pass must reject unknown edge source");
 
     // 2. Valid multi-node DAG -> both monolith and crate must accept
     let valid_monolith_dag_ir = MonolithWorkflowIR {
@@ -241,7 +241,7 @@ async fn test_control_flow_validation_pass_equivalence() {
         .expect("build valid ir");
 
     assert!(monolith_pass.apply(valid_monolith_dag_ir).await.is_ok(), "Monolith must accept valid DAG");
-    assert!(crate_pass.transform(&valid_crate_dag_ir).is_ok(), "Crate pass must accept valid DAG");
+    assert!(crate_pass.transform(&valid_crate_dag_ir).await.is_ok(), "Crate pass must accept valid DAG");
 
     // 3. Conditional missing condition -> both reject
     let monolith_bad_cond_ir = MonolithWorkflowIR {
@@ -257,31 +257,31 @@ async fn test_control_flow_validation_pass_equivalence() {
         r#"{{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{{"id":"node_a","kind":"Task","capability":null,"config":{{}}}},{{"id":"node_b","kind":"Task","capability":null,"config":{{}}}}],"edges":[{{"from":"node_a","to":"node_b","kind":"Conditional","condition":null}}],"metadata":{{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}}}"#
     )).expect("deserialize crate ir");
     assert!(monolith_pass.apply(monolith_bad_cond_ir).await.is_ok());
-    assert!(crate_pass.transform(&crate_bad_cond_ir).is_err(), "Crate must reject conditional edge without condition");
+    assert!(crate_pass.transform(&crate_bad_cond_ir).await.is_err(), "Crate must reject conditional edge without condition");
 
     // 4. Split arity: 1 outgoing -> both reject
     let crate_single_out_ir: CrateWorkflowIR = serde_json::from_str(
         r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"splitter","kind":"Task","capability":null,"config":{"control_flow":"split"}},{"id":"target","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"splitter","to":"target","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
     ).expect("deserialize crate ir");
-    assert!(crate_pass.transform(&crate_single_out_ir).is_err(), "Crate must reject split with 1 outgoing edge");
+    assert!(crate_pass.transform(&crate_single_out_ir).await.is_err(), "Crate must reject split with 1 outgoing edge");
 
     // 5. Split arity: 2 generic outgoing -> both accept
     let crate_two_out_ir: CrateWorkflowIR = serde_json::from_str(
         r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"splitter","kind":"Task","capability":null,"config":{"control_flow":"split"}},{"id":"a","kind":"Task","capability":null,"config":{}},{"id":"b","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"splitter","to":"a","kind":"Sequential","condition":null},{"from":"splitter","to":"b","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
     ).expect("deserialize crate ir");
-    assert!(crate_pass.transform(&crate_two_out_ir).is_ok(), "Crate must accept split with 2 outgoing edges");
+    assert!(crate_pass.transform(&crate_two_out_ir).await.is_ok(), "Crate must accept split with 2 outgoing edges");
 
     // 6. Merge arity: 1 incoming Merge edge -> both reject
     let crate_single_merge_ir: CrateWorkflowIR = serde_json::from_str(
         r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"src","kind":"Task","capability":null,"config":{}},{"id":"m","kind":"Aggregation","capability":null,"config":{}},{"id":"out","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"src","to":"m","kind":"Merge","condition":null},{"from":"m","to":"out","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
     ).expect("deserialize crate ir");
-    assert!(crate_pass.transform(&crate_single_merge_ir).is_err(), "Crate must reject merge with 1 incoming");
+    assert!(crate_pass.transform(&crate_single_merge_ir).await.is_err(), "Crate must reject merge with 1 incoming");
 
     // 7. Merge arity: 2 incoming Merge edges, no outgoing -> accept (Join-shaped)
     let crate_join_ir: CrateWorkflowIR = serde_json::from_str(
         r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"a","kind":"Task","capability":null,"config":{}},{"id":"b","kind":"Task","capability":null,"config":{}},{"id":"m","kind":"Aggregation","capability":null,"config":{}}],"edges":[{"from":"a","to":"m","kind":"Merge","condition":null},{"from":"b","to":"m","kind":"Merge","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
     ).expect("deserialize crate ir");
-    assert!(crate_pass.transform(&crate_join_ir).is_ok(), "Crate must accept join with 2 incoming merges");
+    assert!(crate_pass.transform(&crate_join_ir).await.is_ok(), "Crate must accept join with 2 incoming merges");
 
     // 8. Loop back-edge cycle exclusion: sequential back-edge -> reject, Loop back-edge -> accept
     let crate_loop_cycle_ir = fusion_ir::WorkflowBuilder::new()
@@ -290,7 +290,7 @@ async fn test_control_flow_validation_pass_equivalence() {
         .sequential("a", "b").expect("edge")
         .loop_edge("b", "a").expect("loop")
         .build().expect("build ir");
-    assert!(crate_pass.transform(&crate_loop_cycle_ir).is_ok(), "Loop back-edge must not trigger IllegalCycle");
+    assert!(crate_pass.transform(&crate_loop_cycle_ir).await.is_ok(), "Loop back-edge must not trigger IllegalCycle");
 
     // 9. Split with 2 non-Parallel outgoing edges (Sequential + Sequential)
     // Monolith: IRNodeKind::Split counts all outgoing edges, kind-agnostic
@@ -315,7 +315,7 @@ async fn test_control_flow_validation_pass_equivalence() {
         r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"splitter","kind":"Task","capability":null,"config":{"control_flow":"split"}},{"id":"s1","kind":"Task","capability":null,"config":{}},{"id":"s2","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"splitter","to":"s1","kind":"Sequential","condition":null},{"from":"splitter","to":"s2","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
     ).expect("deserialize crate ir");
     assert!(monolith_pass.apply(monolith_split_non_parallel).await.is_ok(), "Monolith Split must accept 2 non-Parallel outgoing edges");
-    assert!(crate_pass.transform(&crate_split_non_parallel).is_ok(), "Crate split must accept 2 non-Parallel outgoing edges");
+    assert!(crate_pass.transform(&crate_split_non_parallel).await.is_ok(), "Crate split must accept 2 non-Parallel outgoing edges");
 
     // 10. Barrier vs Join distinction
     // Monolith Join: IRNodeKind::Join with 2 incoming, 0 outgoing -> passes
@@ -342,7 +342,7 @@ async fn test_control_flow_validation_pass_equivalence() {
         r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"ja","kind":"Task","capability":null,"config":{}},{"id":"jb","kind":"Task","capability":null,"config":{}},{"id":"j","kind":"Aggregation","capability":null,"config":{}}],"edges":[{"from":"ja","to":"j","kind":"Merge","condition":null},{"from":"jb","to":"j","kind":"Merge","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
     ).expect("deserialize crate ir");
     assert!(monolith_pass.apply(monolith_join_ir).await.is_ok(), "Monolith Join with 2 incoming must pass");
-    assert!(crate_pass.transform(&crate_join_ir).is_ok(), "Crate Join-shaped (no marker) with 2 incoming must pass");
+    assert!(crate_pass.transform(&crate_join_ir).await.is_ok(), "Crate Join-shaped (no marker) with 2 incoming must pass");
 
     // 10b. Barrier with 0 outgoing -> both reject
     let id_b = Uuid::new_v4();
@@ -365,7 +365,7 @@ async fn test_control_flow_validation_pass_equivalence() {
         r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"ba","kind":"Task","capability":null,"config":{}},{"id":"bb","kind":"Task","capability":null,"config":{}},{"id":"b","kind":"Task","capability":null,"config":{"control_flow":"barrier"}}],"edges":[{"from":"ba","to":"b","kind":"Sequential","condition":null},{"from":"bb","to":"b","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
     ).expect("deserialize crate ir");
     assert!(monolith_pass.apply(monolith_barrier_no_out).await.is_err(), "Monolith Barrier with 0 outgoing must fail");
-    assert!(crate_pass.transform(&crate_barrier_no_out).is_err(), "Crate barrier with 0 outgoing must fail BarrierArity");
+    assert!(crate_pass.transform(&crate_barrier_no_out).await.is_err(), "Crate barrier with 0 outgoing must fail BarrierArity");
 }
 
 #[tokio::test]

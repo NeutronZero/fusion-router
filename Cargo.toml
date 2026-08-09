@@ -124,7 +124,7 @@ name = "run_debate_pipeline"
 path = "examples/run_debate_pipeline.rs"
 
 [profile.dev]
-incremental = false
+incremental = true
 opt-level = 0
 debug = true
 # "packed" saves ~40% disk vs "unpacked". Good for Windows.

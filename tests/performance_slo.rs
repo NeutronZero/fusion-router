@@ -8,8 +8,8 @@ use fusion_planner::PlannerService;
 use fusion_scheduler::SequentialScheduler;
 use chrono::Utc;
 
-#[test]
-fn test_performance_slo_certification_suite() {
+#[tokio::test]
+async fn test_performance_slo_certification_suite() {
     let prompt = "Performance & Scalability Benchmark Request";
 
     // 1. Planner Latency SLO Target (< 10 ms)
@@ -33,10 +33,10 @@ fn test_performance_slo_certification_suite() {
     // 2. Compiler Latency SLO Target (< 20 ms)
     let start_compiler = Instant::now();
     let compiler = CompilerEngine::new();
-    let report = compiler.compile(prompt, &ir, false).expect("Compile");
+    let report = compiler.compile(prompt, &ir, false).await.expect("Compile");
     let compiler_dur_ms = start_compiler.elapsed().as_millis();
     assert!(compiler_dur_ms < 20, "Compiler latency must be < 20ms (actual: {compiler_dur_ms}ms)");
-    assert_eq!(report.passes_executed.len(), 9);
+    assert_eq!(report.passes_executed.len(), 11);
 
     // 3. Scheduler Latency SLO Target (< 5 ms)
     let start_scheduler = Instant::now();

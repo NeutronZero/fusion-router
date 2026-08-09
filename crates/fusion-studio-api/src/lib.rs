@@ -651,6 +651,7 @@ async fn chat_handler(Json(payload): Json<ChatRequest>) -> Json<ChatResponse> {
     let compiler = CompilerEngine::new();
     let compiler_report = compiler
         .compile(&payload.prompt, &ir, true)
+        .await
         .unwrap_or_else(|_| fusion_compiler::CompilerReport {
             intent: payload.prompt.clone(),
             ir_version: 1,
@@ -953,7 +954,7 @@ async fn studio_chat_handler(Json(payload): Json<ChatRequest>) -> Json<Value> {
     });
 
     let compiler = CompilerEngine::new();
-    let report = compiler.compile(&payload.prompt, &ir, true).unwrap();
+    let report = compiler.compile(&payload.prompt, &ir, true).await.unwrap();
 
     Json(json!({
         "simulation": true,
@@ -993,7 +994,7 @@ async fn studio_inspector_handler(axum::extract::Path(id): axum::extract::Path<S
         .unwrap();
 
     let compiler = CompilerEngine::new();
-    let report = compiler.compile("AST Inspector Inquiry", &ir, true).unwrap();
+    let report = compiler.compile("AST Inspector Inquiry", &ir, true).await.unwrap();
 
     Json(json!({
         "simulation": true,

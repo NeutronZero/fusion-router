@@ -1,5 +1,5 @@
 [build]
-jobs = 1
+jobs = 4  # half cores — leave headroom for IDE, browser, etc.
 
 [profile.test]
 opt-level = 0

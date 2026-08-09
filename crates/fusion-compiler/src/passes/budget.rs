@@ -13,6 +13,7 @@
 use std::sync::Arc;
 use fusion_kernel::resource::ResourceManager;
 use fusion_ir::WorkflowIR;
+use crate::{CompilerPass, PlatformError};
 
 /// Budget optimisation pass — rejects IRs that exceed resource quota.
 pub struct BudgetOptimisationPass {
@@ -37,6 +38,22 @@ impl BudgetOptimisationPass {
             });
         }
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl CompilerPass for BudgetOptimisationPass {
+    fn name(&self) -> &str {
+        "Budget Optimisation"
+    }
+
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+        self.check(ir).await.map_err(|e| PlatformError::Compiler {
+            code: "BUDGET_EXCEEDED".to_string(),
+            message: e.to_string(),
+            recovery_suggestion: "Reduce workflow cost or increase resource quota".to_string(),
+        })?;
+        Ok(ir.clone())
     }
 }
 

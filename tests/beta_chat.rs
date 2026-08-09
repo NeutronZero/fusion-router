@@ -27,10 +27,10 @@ async fn test_beta_chat_end_to_end_orchestration_journey() {
 
     // 2. Compiler Phase (Must be invoked for every request - Law 1)
     let compiler = CompilerEngine::new();
-    let report = compiler.compile(prompt, &ir, false).expect("Compile workflow");
+    let report = compiler.compile(prompt, &ir, false).await.expect("Compile workflow");
 
     assert_eq!(report.intent, prompt);
-    assert_eq!(report.passes_executed.len(), 9);
+    assert_eq!(report.passes_executed.len(), 11);
     assert!(!report.is_simulation);
 
     // 3. Explain Route Verification

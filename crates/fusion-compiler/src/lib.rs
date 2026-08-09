@@ -4,8 +4,11 @@
 //! provider scores in `explain_route` / `compile` are hardcoded placeholder data
 //! for the Studio UI. Callers must pass `is_simulation = true` (see
 //! `fusion-studio-api`).
+use std::sync::Arc;
 use fusion_core::{ModelCatalog, ModelRequirements, PlatformError};
 use fusion_ir::WorkflowIR;
+use fusion_kernel::resource::StubResourceManager;
+use passes::BudgetOptimisationPass;
 use serde::{Deserialize, Serialize};
 
 pub mod passes;
@@ -52,9 +55,10 @@ pub struct CompilerReport {
     pub provider_comparison: Vec<ProviderComparisonCandidate>,
 }
 
+#[async_trait::async_trait]
 pub trait CompilerPass: Send + Sync {
     fn name(&self) -> &str;
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError>;
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError>;
 }
 
 #[async_trait::async_trait]
@@ -83,17 +87,18 @@ impl Default for DefaultCompiler {
 #[async_trait::async_trait]
 impl Compiler for DefaultCompiler {
     async fn compile(&self, ir: WorkflowIR) -> Result<CompilerReport, PlatformError> {
-        self.engine.compile("Default Compilation", &ir, false)
+        self.engine.compile("Default Compilation", &ir, false).await
     }
 }
 
 pub struct ConstraintValidationPass;
+#[async_trait::async_trait]
 impl CompilerPass for ConstraintValidationPass {
     fn name(&self) -> &str {
         "constraint_validation"
     }
 
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         if ir.nodes().is_empty() {
             return Err(PlatformError::Compiler {
                 code: "EMPTY_IR".to_string(),
@@ -128,24 +133,26 @@ impl ModelResolutionPass {
     }
 }
 
+#[async_trait::async_trait]
 impl CompilerPass for ModelResolutionPass {
     fn name(&self) -> &str {
         "model_resolution"
     }
 
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         Ok(ir.clone())
     }
 }
 
 pub struct ControlFlowValidationPass;
 
+#[async_trait::async_trait]
 impl CompilerPass for ControlFlowValidationPass {
     fn name(&self) -> &str {
         "control_flow_validation"
     }
 
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         let report = ir.validate();
         if let Some(err) = report.first_error() {
             return Err(PlatformError::Compiler {
@@ -159,65 +166,73 @@ impl CompilerPass for ControlFlowValidationPass {
 }
 
 pub struct CapabilityResolutionPass;
+#[async_trait::async_trait]
 impl CompilerPass for CapabilityResolutionPass {
     fn name(&self) -> &str { "Capability Resolution" }
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         Ok(ir.clone())
     }
 }
 
 pub struct ConstraintSolverPass;
+#[async_trait::async_trait]
 impl CompilerPass for ConstraintSolverPass {
     fn name(&self) -> &str { "Constraint Solver" }
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         Ok(ir.clone())
     }
 }
 
 pub struct ConstantFoldingPass;
+#[async_trait::async_trait]
 impl CompilerPass for ConstantFoldingPass {
     fn name(&self) -> &str { "Constant Folding" }
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         Ok(ir.clone())
     }
 }
 
 pub struct DeadNodeEliminationPass;
+#[async_trait::async_trait]
 impl CompilerPass for DeadNodeEliminationPass {
     fn name(&self) -> &str { "Dead Node Elimination" }
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         Ok(ir.clone())
     }
 }
 
 pub struct NodeFusionPass;
+#[async_trait::async_trait]
 impl CompilerPass for NodeFusionPass {
     fn name(&self) -> &str { "Node Fusion" }
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         Ok(ir.clone())
     }
 }
 
 pub struct RetryInjectionPass;
+#[async_trait::async_trait]
 impl CompilerPass for RetryInjectionPass {
     fn name(&self) -> &str { "Retry Injection" }
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         Ok(ir.clone())
     }
 }
 
 pub struct FallbackInjectionPass;
+#[async_trait::async_trait]
 impl CompilerPass for FallbackInjectionPass {
     fn name(&self) -> &str { "Fallback Injection" }
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         Ok(ir.clone())
     }
 }
 
 pub struct SchedulingHintsPass;
+#[async_trait::async_trait]
 impl CompilerPass for SchedulingHintsPass {
     fn name(&self) -> &str { "Scheduling Hints" }
-    fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
+    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
         Ok(ir.clone())
     }
 }
@@ -239,11 +254,12 @@ impl CompilerEngine {
             Box::new(RetryInjectionPass),
             Box::new(FallbackInjectionPass),
             Box::new(SchedulingHintsPass),
+            Box::new(BudgetOptimisationPass::new(Arc::new(StubResourceManager::new(f64::INFINITY, u64::MAX)))),
         ];
         Self { passes }
     }
 
-    pub fn compile(&self, intent: &str, ir: &WorkflowIR, is_simulation: bool) -> Result<CompilerReport, PlatformError> {
+    pub async fn compile(&self, intent: &str, ir: &WorkflowIR, is_simulation: bool) -> Result<CompilerReport, PlatformError> {
         if intent.is_empty() {
             return Err(PlatformError::Compiler {
                 code: "EMPTY_INTENT".to_string(),
@@ -259,7 +275,7 @@ impl CompilerEngine {
         for (idx, pass) in self.passes.iter().enumerate() {
             let pass_name = pass.name().to_string();
             let input_count = current_ir.nodes().len();
-            current_ir = pass.transform(&current_ir)?;
+            current_ir = pass.transform(&current_ir).await?;
             let output_count = current_ir.nodes().len();
 
             pass_names.push(pass_name.clone());
@@ -328,8 +344,8 @@ impl Default for CompilerEngine {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_compiler_engine_pass_pipeline() {
+    #[tokio::test]
+    async fn test_compiler_engine_pass_pipeline() {
         let engine = CompilerEngine::new();
         let ir = fusion_ir::WorkflowBuilder::new()
             .task("n1", "CodeGeneration")
@@ -341,16 +357,16 @@ mod tests {
             .build()
             .unwrap();
 
-        let report = engine.compile("Code Generation", &ir, false).expect("Compile");
-        assert_eq!(report.passes_executed.len(), 9);
-        assert_eq!(report.pass_diffs.len(), 9);
+        let report = engine.compile("Code Generation", &ir, false).await.expect("Compile");
+        assert_eq!(report.passes_executed.len(), 11);
+        assert_eq!(report.pass_diffs.len(), 11);
     }
 
-    #[test]
-    fn test_constraint_validation_pass() {
+    #[tokio::test]
+    async fn test_constraint_validation_pass() {
         let pass = ConstraintValidationPass;
         let empty_ir = fusion_ir::WorkflowBuilder::new().build().unwrap();
-        let res = pass.transform(&empty_ir);
+        let res = pass.transform(&empty_ir).await;
         assert!(res.is_err());
         if let Err(PlatformError::Compiler { code, .. }) = res {
             assert_eq!(code, "EMPTY_IR");
@@ -363,6 +379,6 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        assert!(pass.transform(&valid_ir).is_ok());
+        assert!(pass.transform(&valid_ir).await.is_ok());
     }
 }

@@ -25,8 +25,8 @@ fn test_domain_invariant_execution_has_one_workflow_ir() {
     assert_eq!(ir.version(), 1, "WorkflowIR version must be v1");
 }
 
-#[test]
-fn test_domain_invariant_workflow_ir_produces_one_execution_graph() {
+#[tokio::test]
+async fn test_domain_invariant_workflow_ir_produces_one_execution_graph() {
     let ir = WorkflowBuilder::new()
         .task("n1", "CodeGeneration")
         .unwrap()
@@ -38,10 +38,10 @@ fn test_domain_invariant_workflow_ir_produces_one_execution_graph() {
         .unwrap();
 
     let compiler = CompilerEngine::new();
-    let report = compiler.compile("Test Domain Compilation", &ir, false).expect("Compile");
+    let report = compiler.compile("Test Domain Compilation", &ir, false).await.expect("Compile");
 
     assert!(!report.graph_id.is_empty(), "ExecutionGraph ID must be present");
-    assert_eq!(report.pass_diffs.len(), 9, "Must execute exactly 9 compiler passes");
+    assert_eq!(report.pass_diffs.len(), 11, "Must execute exactly 11 compiler passes");
 }
 
 #[test]

@@ -6,7 +6,7 @@ use fusion_ir::WorkflowBuilder;
 use fusion_kernel::CapabilitySystem;
 use fusion_planner::PlannerService;
 
-fn execute_canonical_pipeline(entry_point: &str, prompt: &str) -> ExecutionRecord {
+async fn execute_canonical_pipeline(entry_point: &str, prompt: &str) -> ExecutionRecord {
     let exec_id = ExecutionId::new();
 
     // 1. Planner
@@ -26,7 +26,7 @@ fn execute_canonical_pipeline(entry_point: &str, prompt: &str) -> ExecutionRecor
 
     // 2. Compiler (Must be 100% invoked - Law 1)
     let compiler = CompilerEngine::new();
-    let report = compiler.compile(prompt, &ir, false).expect("Compile");
+    let report = compiler.compile(prompt, &ir, false).await.expect("Compile");
 
     // 3. Construct Canonical ExecutionRecord
     ExecutionRecord {
@@ -51,9 +51,9 @@ async fn test_beta_zero_bypass_certification_journey() {
     let mut records = Vec::new();
 
     for ep in &entry_points {
-        let rec = execute_canonical_pipeline(ep, "Synthesize AST graph");
+        let rec = execute_canonical_pipeline(ep, "Synthesize AST graph").await;
         assert!(rec.compiler_invoked, "Compiler MUST be invoked for entry point {ep}");
-        assert_eq!(rec.passes_count, 9);
+        assert_eq!(rec.passes_count, 11);
         records.push(rec);
     }
 
