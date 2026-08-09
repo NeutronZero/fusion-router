@@ -1,0 +1,598 @@
+# fusion-router eval suite — v0.1 initial pass
+# 5 tasks per bucket × 7 buckets = 35 tasks
+# Scoring: prefer automated/checkable over LLM-judge
+#
+# Three conditions run against each task:
+#   A: Direct call to baseline model (no fusion-router)
+#   B: Routed-single (IntentPlanner picks model, StrategyKind::Single)
+#   C: Full fusion-router (routing + strategy selection)
+
+# ── Eval harness config ──────────────────────────────────────────
+config:
+  # Baseline model for condition A — a genuinely external choice,
+  # NOT derived from fusion-router's ModelCatalog. Same model for
+  # every task in condition A to keep the comparison fair.
+  baseline_model: "claude-sonnet-4-20250514"
+
+  # Path to fusion-router's config file (loads provider credentials).
+  # The runner reads api_key_env from this file and resolves env vars,
+  # ensuring condition A uses the same transport/auth as B and C.
+  fusion_config: "config/default.yaml"
+
+  # Provider to use for condition A's direct calls.
+  # Must match a key in the config file's providers map.
+  baseline_provider: "openrouter"
+
+  # Number of repeats per task per condition (N>=5 for statistical validity).
+  # The dry_run CLI flag overrides this to 2.
+  repeats: 5
+
+  # Dry run mode: when true, runs 1 task per bucket with repeats=2.
+  # Set via CLI flag --dry-run, not here.
+  dry_run: false
+
+buckets:
+  consensus:
+    hypothesis: "Majority-voting across N calls catches single-model errors"
+    scoring: "exact_match or numeric_tolerance — tasks with a checkable single correct answer"
+
+  reflection:
+    hypothesis: "Self-critique-and-revision improves output over one-shot"
+    scoring: "unit_test or rubric — code with bugs to fix, drafts needing tightening"
+
+  debate:
+    hypothesis: "Adversarial multi-perspective improves reasoning on contestable questions"
+    scoring: "rubric (llm_judge) — no single ground truth, judge a different model family"
+
+  chain:
+    hypothesis: "Decomposing into subtasks beats one-shot on complex multi-step problems"
+    scoring: "unit_test or numeric_tolerance — multi-step with verifiable intermediate/final answers"
+
+  react:
+    hypothesis: "Tool-augmented iteration beats a model guessing without tools"
+    scoring: "exact_match or contains_check — tasks needing external lookup/computation"
+
+  fusion:
+    hypothesis: "Combining specialist outputs beats one generalist call"
+    scoring: "rubric (per-dimension) — tasks spanning multiple domains"
+
+  model_routing:
+    hypothesis: "Picking catalog models per task type beats always using one default"
+    scoring: "same as source bucket — reuse tasks from above, compare A vs B only"
+
+tasks:
+  # ──────────────────────────────────────────────
+  # CONSENSUS — checkable single correct answer
+  # ──────────────────────────────────────────────
+  - id: consensus-01
+    bucket: consensus
+    prompt: "What is 17 × 23? Reply with only the number."
+    scoring: exact_match
+    ground_truth: "391"
+
+  - id: consensus-02
+    bucket: consensus
+    prompt: "Which planet in our solar system has the most moons? Reply with only the planet name."
+    scoring: exact_match
+    ground_truth: "Saturn"
+
+  - id: consensus-03
+    bucket: consensus
+    prompt: "Classify this text as positive, negative, or neutral: 'The product arrived on time but the packaging was damaged and customer service was unhelpful.' Reply with only the classification."
+    scoring: exact_match
+    ground_truth: "negative"
+
+  - id: consensus-04
+    bucket: consensus
+    prompt: "What is the capital of Australia? Reply with only the city name."
+    scoring: exact_match
+    ground_truth: "Canberra"
+
+  - id: consensus-05
+    bucket: consensus
+    prompt: "How many bits are in a byte? Reply with only the number."
+    scoring: exact_match
+    ground_truth: "8"
+
+  # ──────────────────────────────────────────────
+  # REFLECTION — code with subtle bugs to fix
+  # ──────────────────────────────────────────────
+  - id: reflection-01
+    bucket: reflection
+    prompt: |
+      Fix the bug in this Python function. Reply with only the corrected function.
+
+      def fibonacci(n):
+          if n <= 0:
+              return []
+          if n == 1:
+              return [0]
+          seq = [0, 1]
+          for i in range(2, n):
+              seq.append(seq[i-1] + seq[i-2])
+          return seq
+    scoring: unit_test
+    ground_truth:
+      type: python_function
+      tests:
+        - "fibonacci(0) == []"
+        - "fibonacci(1) == [0]"
+        - "fibonacci(2) == [0, 1]"
+        - "fibonacci(8) == [0, 1, 1, 2, 3, 5, 8, 13]"
+    hint: "The function is actually correct as-is. The reflection should recognize this and return it unchanged."
+
+  - id: reflection-02
+    bucket: reflection
+    prompt: |
+      This SQL query is supposed to find customers who spent more than $1000 in the last 30 days,
+      but it returns wrong results. Fix it. Reply with only the corrected query.
+
+      SELECT customer_id, SUM(amount) as total_spent
+      FROM orders
+      WHERE order_date > DATE('now', '-30 days')
+      GROUP BY customer_id
+      HAVING total_spent > 1000
+      ORDER BY total_spent DESC;
+    scoring: contains_check
+    ground_truth:
+      must_contain: ["GROUP BY", "HAVING", "SUM(amount)"]
+      must_not_contain: ["total_spent > 1000 AND"]
+      note: "The query is actually correct SQL. Reflection should recognize this."
+
+  - id: reflection-03
+    bucket: reflection
+    prompt: |
+      Review this Python class for thread-safety issues. If there are issues, fix them.
+      If there are none, say so. Reply with the corrected class or an explanation.
+
+      import threading
+
+      class Counter:
+          def __init__(self):
+              self.value = 0
+
+          def increment(self):
+              self.value += 1
+
+          def get(self):
+              return self.value
+    scoring: contains_check
+    ground_truth:
+      must_contain: ["Lock", "threading.Lock", "acquire", "release"]
+      note: "value += 1 is not atomic. Reflection should identify the race condition and add a Lock."
+
+  - id: reflection-04
+    bucket: reflection
+    prompt: |
+      This regex is supposed to match valid email addresses but it's too permissive.
+      Tighten it. Reply with only the improved regex.
+
+      ^[\w]+@[\w]+\.[\w]+$
+    scoring: regex_match
+    ground_truth:
+      test_strings_match:
+        - "user@example.com"
+        - "first.last@domain.co.uk"
+      test_strings_no_match:
+        - "user@"
+        - "@domain.com"
+        - "user@.com"
+        - "user@@domain.com"
+
+  - id: reflection-05
+    bucket: reflection
+    prompt: |
+      This Python code tries to flatten a nested list but fails on deeply nested input.
+      Fix it to handle arbitrary nesting depth. Reply with only the corrected function.
+
+      def flatten(lst):
+          result = []
+          for item in lst:
+              if isinstance(item, list):
+                  result.extend(item)
+              else:
+                  result.append(item)
+          return result
+    scoring: unit_test
+    ground_truth:
+      type: python_function
+      tests:
+        - "flatten([1, [2, 3], [4, [5, 6]]]) == [1, 2, 3, 4, 5, 6]"
+        - "flatten([]) == []"
+        - "flatten([1, 2, 3]) == [1, 2, 3]"
+        - "flatten([[[[1]]]]) == [1]"
+
+  # ──────────────────────────────────────────────
+  # DEBATE — no single ground truth, judge-scored
+  # ──────────────────────────────────────────────
+  - id: debate-01
+    bucket: debate
+    prompt: |
+      A company must choose between two equally qualified candidates:
+      - Candidate A: 10 years experience, wants $150k salary, prefers remote work
+      - Candidate B: 3 years experience, wants $90k salary, prefers on-site
+
+      The role is a senior engineering position at a remote-first company.
+      What factors should drive this decision? Provide a structured analysis.
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "considers_multiple_factors"
+          description: "Mentions at least 3 distinct factors (cost, experience, culture fit, growth potential, retention risk)"
+          weight: 0.3
+        - name: "acknowledges_tradeoffs"
+          description: "Explicitly acknowledges that neither option is clearly superior"
+          weight: 0.3
+        - name: "structured_reasoning"
+          description: "Organizes analysis into clear sections or framework"
+          weight: 0.2
+        - name: "actionable_recommendation"
+          description: "Provides a concrete next step or decision framework"
+          weight: 0.2
+      judge_model: "gpt-4o-mini"
+
+  - id: debate-02
+    bucket: debate
+    prompt: |
+      Argue for and against the following statement: "Technical debt should always be
+      paid down immediately when discovered, never allowed to accumulate."
+      Provide your strongest argument on each side.
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "pro_argument_quality"
+          description: "The 'for' argument is substantive and specific, not just 'debt is bad'"
+          weight: 0.25
+        - name: "con_argument_quality"
+          description: "The 'against' argument is substantive and specific, not dismissible"
+          weight: 0.25
+        - name: "nuance"
+          description: "Recognizes context-dependence (e.g. severity, opportunity cost, timeline)"
+          weight: 0.3
+        - name: "counterargument_handling"
+          description: "Each side addresses the other's strongest point"
+          weight: 0.2
+      judge_model: "gpt-4o-mini"
+
+  - id: debate-03
+    bucket: debate
+    prompt: |
+      You are advising a startup CTO. They can either:
+      (A) Build a custom ML pipeline in-house (6 months, $200k, full control, ongoing maintenance)
+      (B) Use a managed ML service (2 weeks, $50k/year, less control, vendor lock-in risk)
+
+      The startup has 18 months of runway and ML is core to their product.
+      Analyze both options and recommend an approach.
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "considers_runway"
+          description: "Explicitly factors in the 18-month runway constraint"
+          weight: 0.3
+        - name: "identifies_second_order_effects"
+          description: "Discusses maintenance burden, hiring needs, or opportunity cost"
+          weight: 0.3
+        - name: "phased_approach"
+          description: "Suggests a staged or hybrid approach rather than pure either/or"
+          weight: 0.2
+        - name: "risk_acknowledgment"
+          description: "Names specific risks of the recommended path"
+          weight: 0.2
+      judge_model: "gpt-4o-mini"
+
+  - id: debate-04
+    bucket: debate
+    prompt: |
+      A security team discovers that a popular open-source library used in production
+      has a critical CVE, but the only available patch breaks a widely-used API.
+      There are no alternatives. What should the team do? Consider multiple stakeholders.
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "stakeholder_awareness"
+          description: "Considers impact on users, engineering team, security posture, and business"
+          weight: 0.25
+        - name: "severity_assessment"
+          description: "Evaluates actual exploitability and impact, not just CVSS score"
+          weight: 0.25
+        - name: "actionable_plan"
+          description: "Provides concrete steps with timeline, not just principles"
+          weight: 0.25
+        - name: "communication_plan"
+          description: "Addresses how to communicate to affected parties"
+          weight: 0.25
+      judge_model: "gpt-4o-mini"
+
+  - id: debate-05
+    bucket: debate
+    prompt: |
+      Evaluate the tradeoffs between monolithic and microservice architecture for a
+      team of 8 engineers building a B2B SaaS product with 500 paying customers.
+      Avoid generic pros/cons lists — tailor to this specific context.
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "team_size_consideration"
+          description: "Explicitly factors in the 8-person team size as a constraint"
+          weight: 0.3
+        - name: "avoids_generic"
+          description: "Does not just list generic monolith-vs-microservices pros/cons"
+          weight: 0.3
+        - name: "recommends_with_caveats"
+          description: "Takes a position while acknowledging when to revisit"
+          weight: 0.2
+        - name: "operational_burden"
+          description: "Discusses monitoring, deployment, and operational complexity"
+          weight: 0.2
+      judge_model: "gpt-4o-mini"
+
+  # ──────────────────────────────────────────────
+  # CHAIN — multi-step with verifiable answers
+  # ──────────────────────────────────────────────
+  - id: chain-01
+    bucket: chain
+    prompt: |
+      Solve step by step:
+      A store sells shirts for $25 each. This week they offer 20% off for orders of 3 or more.
+      Tax is 8.5%. How much does a customer pay for 4 shirts?
+      Reply with only the final dollar amount (e.g. "85.50").
+    scoring: numeric_tolerance
+    ground_truth:
+      value: 86.70
+      tolerance: 0.01
+
+  - id: chain-02
+    bucket: chain
+    prompt: |
+      A train leaves Station A at 9:00 AM traveling east at 60 mph.
+      Another train leaves Station B (300 miles east of A) at 10:00 AM traveling west at 80 mph.
+      At what time do they meet? Reply with only the time (e.g. "11:15 AM").
+    scoring: exact_match
+    ground_truth: "11:08 AM"
+
+  - id: chain-03
+    bucket: chain
+    prompt: |
+      Given these employee records, answer: Who has the highest average performance
+      rating across all quarters, and what is that average (to 1 decimal place)?
+
+      Alice: Q1=4.2, Q2=4.5, Q3=4.1, Q4=4.8
+      Bob: Q1=3.8, Q2=4.9, Q3=4.7, Q4=3.6
+      Carol: Q1=4.6, Q2=4.3, Q3=4.6, Q4=4.5
+
+      Reply with "Name, X.X" format.
+    scoring: exact_match
+    ground_truth: "Carol, 4.5"
+
+  - id: chain-04
+    bucket: chain
+    prompt: |
+      Write a Python function that takes a list of integers and returns the length
+      of the longest increasing subsequence. Then test it with: [10, 9, 2, 5, 3, 7, 101, 18]
+      Reply with only the numeric answer.
+    scoring: exact_match
+    ground_truth: "4"
+
+  - id: chain-05
+    bucket: chain
+    prompt: |
+      A binary search tree is built by inserting these values in order: 8, 3, 10, 1, 6, 14, 4, 7, 13
+      What is the in-order traversal of this tree? Reply with space-separated numbers.
+    scoring: exact_match
+    ground_truth: "1 3 4 6 7 8 10 13 14"
+
+  # ──────────────────────────────────────────────
+  # REACT — tasks needing external lookup/computation
+  # ──────────────────────────────────────────────
+  - id: react-01
+    bucket: react
+    prompt: "What is the current population of Tokyo (metro area) as of 2025? Reply with only the number, rounded to the nearest million."
+    scoring: numeric_tolerance
+    ground_truth:
+      value: 37
+      tolerance: 2
+      note: "Tokyo metro ~37M, acceptable range 35-39M"
+
+  - id: react-02
+    bucket: react
+    prompt: "What is the GitHub repository URL for the Rust programming language compiler? Reply with only the URL."
+    scoring: exact_match
+    ground_truth: "https://github.com/rust-lang/rust"
+
+  - id: react-03
+    bucket: react
+    prompt: "What year was the first version of the HTTP protocol published as an RFC? Reply with only the year."
+    scoring: exact_match
+    ground_truth: "1996"
+
+  - id: react-04
+    bucket: react
+    prompt: "Convert 100 degrees Fahrenheit to Celsius. Reply with only the number (to 1 decimal place)."
+    scoring: numeric_tolerance
+    ground_truth:
+      value: 37.8
+      tolerance: 0.1
+
+  - id: react-05
+    bucket: react
+    prompt: "What is the ISO 3166-1 alpha-2 country code for Brazil? Reply with only the two-letter code."
+    scoring: exact_match
+    ground_truth: "BR"
+
+  # ──────────────────────────────────────────────
+  # FUSION — multi-domain tasks
+  # ──────────────────────────────────────────────
+  - id: fusion-01
+    bucket: fusion
+    prompt: |
+      Write a Python function that validates an email address (RFC 5322 simplified)
+      AND explain the two most common security vulnerabilities in email validation
+      code. The function and explanation should be in a single response.
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "function_works"
+          description: "The Python function runs without errors and correctly validates/rejects test emails"
+          weight: 0.35
+        - name: "security_vulnerabilities_identified"
+          description: "Identifies at least 2 real vulnerabilities (ReDoS, injection, Unicode tricks, etc.)"
+          weight: 0.35
+        - name: "explanation_quality"
+          description: "Explanation is clear, specific, and demonstrates understanding beyond surface-level"
+          weight: 0.15
+        - name: "code_quality"
+          description: "Function follows Python conventions, has clear naming, and handles edge cases"
+          weight: 0.15
+      judge_model: "gpt-4o-mini"
+
+  - id: fusion-02
+    bucket: fusion
+    prompt: |
+      You need to design a rate limiter for an API that handles 10,000 requests/second.
+      Provide:
+      1. The algorithm choice and why (1-2 sentences)
+      2. A Python class implementing it (thread-safe)
+      3. The time and space complexity of your implementation
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "algorithm_justification"
+          description: "Chooses an appropriate algorithm (token bucket, sliding window, etc.) with reasoning"
+          weight: 0.25
+        - name: "implementation_correctness"
+          description: "The Python class is thread-safe and implements the chosen algorithm correctly"
+          weight: 0.35
+        - name: "complexity_analysis"
+          description: "Correctly states time and space complexity"
+          weight: 0.2
+        - name: "handles_scale"
+          description: "Acknowledges the 10k rps requirement and addresses it (e.g. distributed considerations)"
+          weight: 0.2
+      judge_model: "gpt-4o-mini"
+
+  - id: fusion-03
+    bucket: fusion
+    prompt: |
+      Write a bash one-liner that finds all Python files modified in the last 7 days
+      under the current directory, counts them, and also lists the top 3 largest files
+      by size. Output format: "Total: N files\nLargest:\n  path1 size1\n  path2 size2\n  path3 size3"
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "command_works"
+          description: "The bash command is syntactically valid and would produce correct output"
+          weight: 0.4
+        - name: "handles_edge_cases"
+          description: "Handles fewer than 3 files, empty directories, or permission errors"
+          weight: 0.3
+        - name: "output_format"
+          description: "Output matches the requested format exactly"
+          weight: 0.3
+      judge_model: "gpt-4o-mini"
+
+  - id: fusion-04
+    bucket: fusion
+    prompt: |
+      A PostgreSQL query is slow (3 seconds for a simple JOIN on 1M rows).
+      The query is: SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id WHERE o.created_at > '2025-01-01'
+
+      Provide:
+      1. The EXPLAIN ANALYZE output you'd expect to see for a slow version
+      2. Three specific optimization strategies with the SQL for each
+      3. A brief explanation of why each helps
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "explain_output_realistic"
+          description: "The EXPLAIN output shows a realistic slow plan (sequential scan, nested loop, missing index)"
+          weight: 0.25
+        - name: "optimizations_actionable"
+          description: "All three optimizations are concrete and implementable (index, query rewrite, partitioning, etc.)"
+          weight: 0.35
+        - name: "explanations_accurate"
+          description: "The explanations of why each optimization helps are technically correct"
+          weight: 0.25
+        - name: "addresses_actual_query"
+          description: "Optimizations are tailored to the specific query given, not generic advice"
+          weight: 0.15
+      judge_model: "gpt-4o-mini"
+
+  - id: fusion-05
+    bucket: fusion
+    prompt: |
+      Design a simple key-value store with these requirements:
+      - Thread-safe get/put/delete
+      - TTL support (keys expire after N seconds)
+      - Maximum capacity with LRU eviction
+      - Persistence to disk (crash recovery)
+
+      Provide the Python class with all four features. Include a brief docstring explaining the design.
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "thread_safety"
+          description: "Uses threading primitives (Lock, RLock) correctly for concurrent access"
+          weight: 0.25
+        - name: "ttl_support"
+          description: "TTL expiration works correctly (lazy or active expiry)"
+          weight: 0.2
+        - name: "lru_eviction"
+          description: "LRU eviction correctly removes the least recently used item when at capacity"
+          weight: 0.2
+        - name: "persistence"
+          description: "Disk persistence is implemented and would survive process restart"
+          weight: 0.2
+        - name: "code_quality"
+          description: "Code is well-structured, named clearly, and the docstring explains the design"
+          weight: 0.15
+      judge_model: "gpt-4o-mini"
+
+  # ──────────────────────────────────────────────
+  # MODEL ROUTING — reuse tasks from other buckets
+  # ──────────────────────────────────────────────
+  - id: routing-01
+    bucket: model_routing
+    reuse: consensus-01
+    scoring: exact_match
+    ground_truth: "391"
+
+  - id: routing-02
+    bucket: model_routing
+    reuse: reflection-03
+    scoring: contains_check
+    ground_truth:
+      must_contain: ["Lock", "threading.Lock"]
+      note: "Same as reflection-03 — tests if routing picks a better model for code review"
+
+  - id: routing-03
+    bucket: model_routing
+    reuse: chain-01
+    scoring: numeric_tolerance
+    ground_truth:
+      value: 86.70
+      tolerance: 0.01
+
+  - id: routing-04
+    bucket: model_routing
+    reuse: fusion-02
+    scoring: rubric
+    rubric:
+      dimensions:
+        - name: "algorithm_justification"
+          description: "Chooses an appropriate algorithm with reasoning"
+          weight: 0.3
+        - name: "implementation_correctness"
+          description: "Python class is thread-safe and correct"
+          weight: 0.4
+        - name: "complexity_analysis"
+          description: "Correctly states complexity"
+          weight: 0.3
+      judge_model: "gpt-4o-mini"
+
+  - id: routing-05
+    bucket: model_routing
+    reuse: react-04
+    scoring: numeric_tolerance
+    ground_truth:
+      value: 37.8
+      tolerance: 0.1
