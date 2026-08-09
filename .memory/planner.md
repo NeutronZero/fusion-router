@@ -41,6 +41,8 @@ The resolver is called during the **Capability Resolution** compiler pass to bin
 
 Policy enforcement (v0.13.1, H13/ADR-034): `apply_policy` runs on all resolution paths — required, version-constrained, optional, transitive dependencies inside `expand_dependencies`, and a final re-verification over the resolved instance set. Any deny-list hit (or allow-list miss) fails resolution with `ResolverError::PolicyDenied`; no capability can bypass policy through version constraints, optional requirements, aliases, or transitive deps.
 
+**Design note (2026-08-09):** The belt-and-braces re-verification (point 4, lines 370-374) is currently unreachable as the *sole* catch — every path into `final_instances` flows through `expand_dependencies`, which checks policy for all initial contracts and transitive dependencies. Points 1-3 cover all cases. The belt-and-braces check is intentional insurance against future code paths that might bypass earlier checks. If a future refactor adds such a path, the test `policy_denied_check_point_4_belt_and_braces` should be extended to prove defense-in-depth.
+
 ## Workflow Registry (`src/workflow/`)
 
 | Component | File | Purpose |
