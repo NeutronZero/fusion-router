@@ -8,9 +8,6 @@ pub mod permission;
 
 // Re-exports from the canonical crate location
 pub use fusion_kernel::capability::{
-    CapabilityDescriptor,
     CapabilityRegistry,
-    CapabilitySource,
     InMemoryCapabilityRegistry,
-    RegistryError,
 };

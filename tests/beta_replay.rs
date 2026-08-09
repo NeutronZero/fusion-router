@@ -18,7 +18,7 @@ async fn test_beta_execution_intelligence_and_replay_journey() {
         ir_version: 1,
         graph_id: "graph_001".to_string(),
         provider_id: ProviderId("openrouter".to_string()),
-        passes_count: 9,
+        passes_count: 11,
         execution_time_ms: 62,
         estimated_cost: 0.0012,
         compiler_invoked: true,
@@ -28,7 +28,7 @@ async fn test_beta_execution_intelligence_and_replay_journey() {
     let bundle1 = ExecutionBundle {
         record: record1.clone(),
         ir_json: r#"{"nodes":2}"#.to_string(),
-        compiler_report_json: r#"{"passes":9}"#.to_string(),
+        compiler_report_json: r#"{"passes":11}"#.to_string(),
         timeline_json: r#"[{"name":"Planning"}]"#.to_string(),
         telemetry_json: r#"[]"#.to_string(),
         config_snapshot_json: r#"{"version":1}"#.to_string(),
@@ -51,7 +51,7 @@ async fn test_beta_execution_intelligence_and_replay_journey() {
 
     let compiler_replay = replay_engine.replay(&imported_bundle, ReplayMode::Compiler);
     assert_eq!(compiler_replay.mode, ReplayMode::Compiler);
-    assert_eq!(compiler_replay.steps_replayed, 9);
+    assert_eq!(compiler_replay.steps_replayed, 11);
 
     let runtime_replay = replay_engine.replay(&imported_bundle, ReplayMode::Runtime);
     assert_eq!(runtime_replay.mode, ReplayMode::Runtime);

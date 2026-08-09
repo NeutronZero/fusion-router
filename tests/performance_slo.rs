@@ -53,7 +53,7 @@ async fn test_performance_slo_certification_suite() {
         ir_version: 1,
         graph_id: "g-slo".to_string(),
         provider_id: ProviderId("openrouter".to_string()),
-        passes_count: 9,
+        passes_count: 11,
         execution_time_ms: 10,
         estimated_cost: 0.001,
         compiler_invoked: true,

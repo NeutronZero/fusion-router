@@ -28,9 +28,9 @@ async fn test_beta_compiler_inspector_journey() {
     assert!(report.provider_comparison[2].reason.contains("Missing vision"));
 
     // 3. Tab 3: Compiler Pass Explorer & Pass Diffs
-    assert_eq!(report.pass_diffs.len(), 9);
-    assert_eq!(report.pass_diffs[0].pass_name, "Validation");
-    assert_eq!(report.pass_diffs[8].pass_name, "Scheduling Hints");
+    assert_eq!(report.pass_diffs.len(), 11);
+    assert_eq!(report.pass_diffs[0].pass_name, "constraint_validation");
+    assert_eq!(report.pass_diffs[9].pass_name, "Scheduling Hints");
 
     // 4. Multi-dimensional Score Verification
     let explain_scores = report.route_scores;

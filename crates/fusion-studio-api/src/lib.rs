@@ -478,10 +478,10 @@ async fn root_html_handler() -> Html<&'static str> {
 
         <!-- VIEW 3: COMPILER INSPECTOR -->
         <div id="view-compiler" class="view-pane">
-            <h2>9-Pass Compiler Optimization Inspector</h2>
+            <h2>11-Pass Compiler Optimization Inspector</h2>
             <div class="card">
                 <h3>Pass Transformation Sequence</h3>
-                <p style="color:var(--text-dim);">1. Validation &rarr; 2. CapabilityResolution &rarr; 3. ConstraintSolver &rarr; 4. ConstantFolding &rarr; 5. DeadNodeElimination &rarr; 6. NodeFusion &rarr; 7. RetryInjection &rarr; 8. FallbackInjection &rarr; 9. SchedulingHints</p>
+                <p style="color:var(--text-dim);">1. Validation &rarr; 2. ControlFlowValidation &rarr; 3. CapabilityResolution &rarr; 4. ConstraintSolver &rarr; 5. ConstantFolding &rarr; 6. DeadNodeElimination &rarr; 7. NodeFusion &rarr; 8. RetryInjection &rarr; 9. FallbackInjection &rarr; 10. SchedulingHints &rarr; 11. BudgetOptimisation</p>
             </div>
         </div>
 
@@ -791,7 +791,7 @@ async fn simulate_handler(Json(payload): Json<SimulateRequest>) -> Json<Value> {
         .unwrap();
 
     let compiler = CompilerEngine::new();
-    let report = compiler.compile(&payload.intent, &ir, true).unwrap();
+    let report = compiler.compile(&payload.intent, &ir, true).await.unwrap();
     Json(json!(report))
 }
 
@@ -1066,7 +1066,7 @@ async fn studio_replay_handler(axum::extract::Path(id): axum::extract::Path<Stri
         "replay_id": format!("replay_{id}"),
         "execution_id": id,
         "bundle_file": format!("{id}.fusion"),
-        "total_passes": 9,
+        "total_passes": 11,
         "replay_status": "Ready",
         "placement_id": format!("PLC-{id}"),
         "placement_policy": "locality-aware-v1",
@@ -1080,14 +1080,16 @@ async fn studio_replay_handler(axum::extract::Path(id): axum::extract::Path<Stri
         },
         "steps": [
             { "pass_index": 1, "name": "Validation", "delta_nodes": 0 },
-            { "pass_index": 2, "name": "Capability Resolution", "delta_nodes": 0 },
-            { "pass_index": 3, "name": "Constraint Solver", "delta_nodes": 0 },
-            { "pass_index": 4, "name": "Constant Folding", "delta_nodes": 0 },
-            { "pass_index": 5, "name": "Dead Node Elimination", "delta_nodes": 0 },
-            { "pass_index": 6, "name": "Node Fusion", "delta_nodes": 0 },
-            { "pass_index": 7, "name": "Retry Injection", "delta_nodes": 0 },
-            { "pass_index": 8, "name": "Fallback Injection", "delta_nodes": 0 },
-            { "pass_index": 9, "name": "Scheduling Hints", "delta_nodes": 0 }
+            { "pass_index": 2, "name": "ControlFlowValidation", "delta_nodes": 0 },
+            { "pass_index": 3, "name": "Capability Resolution", "delta_nodes": 0 },
+            { "pass_index": 4, "name": "Constraint Solver", "delta_nodes": 0 },
+            { "pass_index": 5, "name": "Constant Folding", "delta_nodes": 0 },
+            { "pass_index": 6, "name": "Dead Node Elimination", "delta_nodes": 0 },
+            { "pass_index": 7, "name": "Node Fusion", "delta_nodes": 0 },
+            { "pass_index": 8, "name": "Retry Injection", "delta_nodes": 0 },
+            { "pass_index": 9, "name": "Fallback Injection", "delta_nodes": 0 },
+            { "pass_index": 10, "name": "Scheduling Hints", "delta_nodes": 0 },
+            { "pass_index": 11, "name": "Budget Optimisation", "delta_nodes": 0 }
         ]
     }))
 }
@@ -1153,7 +1155,7 @@ mod tests {
         let json = res.0;
         assert!(json["execution_id"].as_str().unwrap().starts_with("FR-"));
         assert_eq!(json["execution_badge"]["status"], "Completed");
-        assert_eq!(json["execution_badge"]["passes_executed"], 9);
+        assert_eq!(json["execution_badge"]["passes_executed"], 11);
         assert_eq!(json["timeline"].as_array().unwrap().len(), 5);
     }
 
@@ -1162,11 +1164,11 @@ mod tests {
         let exec_id = "FR-20260805-000384".to_string();
         let insp = studio_inspector_handler(axum::extract::Path(exec_id.clone())).await;
         assert_eq!(insp.0["execution_id"], exec_id);
-        assert_eq!(insp.0["passes"].as_array().unwrap().len(), 9);
+        assert_eq!(insp.0["passes"].as_array().unwrap().len(), 11);
 
         let replay = studio_replay_handler(axum::extract::Path(exec_id.clone())).await;
         assert_eq!(replay.0["execution_id"], exec_id);
-        assert_eq!(replay.0["total_passes"], 9);
+        assert_eq!(replay.0["total_passes"], 11);
     }
 
     #[tokio::test]

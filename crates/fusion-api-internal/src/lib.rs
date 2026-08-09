@@ -176,7 +176,7 @@ mod tests {
             ir_version: 1,
             graph_id: "graph_1".to_string(),
             provider_id: ProviderId("openrouter".to_string()),
-            passes_count: 9,
+            passes_count: 11,
             execution_time_ms: 62,
             estimated_cost: 0.0012,
             compiler_invoked: true,

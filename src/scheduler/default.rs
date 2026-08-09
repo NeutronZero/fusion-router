@@ -221,7 +221,7 @@ impl DefaultScheduler {
                         retry_backoffs.remove(&node_id);
                         info!(node_id = ?node_id, latency_ms = latency, "Node succeeded");
                         instance.node_states.insert(node_id, NodeState::Succeeded);
-                        let output_val = exec_result.output.clone().unwrap_or(serde_json::Value::Null);
+                        let output_val = exec_result.output.unwrap_or(serde_json::Value::Null);
                         instance.outputs.insert(node_id, output_val.clone());
 
                         // Track terminal node output
@@ -372,7 +372,7 @@ impl DefaultScheduler {
                                                 .node_states
                                                 .insert(node_id, NodeState::Succeeded);
                                             queue.mark_completed(node_id);
-                                            let fb_out = fb_result.output.clone().unwrap_or(serde_json::Value::Null);
+                                            let fb_out = fb_result.output.unwrap_or(serde_json::Value::Null);
                                             instance.outputs.insert(node_id, fb_out.clone());
                                             instance.terminal_node_id = Some(node_id);
                                             if fb_out != serde_json::Value::Null {

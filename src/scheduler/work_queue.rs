@@ -10,6 +10,7 @@ pub struct WorkQueue {
     failed: HashSet<Uuid>,
     ready: HashSet<Uuid>,
     outgoing: HashMap<Uuid, Vec<(Uuid, Option<String>)>>,
+    incoming: HashMap<Uuid, Vec<Uuid>>,
     total_incoming: HashMap<Uuid, usize>,
     satisfied_incoming: HashMap<Uuid, usize>,
     activated_edges: HashSet<(Uuid, Uuid)>,
@@ -18,6 +19,7 @@ pub struct WorkQueue {
 impl WorkQueue {
     pub fn new(graph: ExecutionGraph) -> Self {
         let mut outgoing: HashMap<Uuid, Vec<(Uuid, Option<String>)>> = HashMap::new();
+        let mut incoming: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
         let mut total_incoming: HashMap<Uuid, usize> = HashMap::new();
 
         let mut loop_node_ids: HashSet<Uuid> = HashSet::new();
@@ -26,11 +28,13 @@ impl WorkQueue {
                 loop_node_ids.insert(node.id);
             }
             outgoing.entry(node.id).or_default();
+            incoming.entry(node.id).or_default();
             total_incoming.entry(node.id).or_insert(0);
         }
 
         for edge in &graph.edges {
             outgoing.entry(edge.from).or_default().push((edge.to, edge.condition.clone()));
+            incoming.entry(edge.to).or_default().push(edge.from);
             if !loop_node_ids.contains(&edge.to) {
                 *total_incoming.entry(edge.to).or_insert(0) += 1;
             }
@@ -50,6 +54,7 @@ impl WorkQueue {
             failed: HashSet::new(),
             ready,
             outgoing,
+            incoming,
             total_incoming,
             satisfied_incoming: HashMap::new(),
             activated_edges: HashSet::new(),
@@ -154,10 +159,11 @@ impl WorkQueue {
             self.failed.remove(id);
             self.ready.remove(id);
             let total = self.total_incoming.get(id).copied().unwrap_or(0);
-            let satisfied: usize = self.graph.edges.iter()
-                .filter(|e| e.to == *id)
-                .filter(|e| self.completed.contains(&e.from) && self.activated_edges.contains(&(e.from, e.to)))
-                .count();
+            let satisfied: usize = self.incoming.get(id).map(|sources| {
+                sources.iter()
+                    .filter(|from| self.completed.contains(from) && self.activated_edges.contains(&(**from, *id)))
+                    .count()
+            }).unwrap_or(0);
             self.satisfied_incoming.insert(*id, satisfied);
             if satisfied == total && satisfied > 0 {
                 self.ready.insert(*id);
