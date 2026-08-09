@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn test_constraint_validation_pass() {
         let pass = ConstraintValidationPass;
-        let empty_ir = WorkflowIR { nodes: vec![], edges: vec![] };
+        let empty_ir = fusion_ir::WorkflowBuilder::new().build().unwrap();
         let res = pass.transform(&empty_ir);
         assert!(res.is_err());
         if let Err(PlatformError::Compiler { code, .. }) = res {

@@ -1,7 +1,15 @@
+//! Capability registry — answers "what capabilities are available?"
+//!
+//! Ported from the monolith's `src/capability/registry.rs`. The trait is
+//! intentionally separate from the plain `CapabilityCatalog`/`CapabilitySystem`
+//! maps in the kernel (which are model-catalog lookups, not capability
+//! discovery). Registry freezes after startup (ADR-021).
+
 use std::collections::HashMap;
 use std::fmt;
-use serde::{Deserialize, Serialize};
+
 use fusion_plugin_api::{CapabilityContract, CapabilityId};
+use serde::{Deserialize, Serialize};
 
 /// Errors that can occur during registry operations.
 #[derive(Debug, Clone, PartialEq, Eq)]

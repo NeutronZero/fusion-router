@@ -1,27 +1,34 @@
-//! Phase 2A — `CapabilityGraph` (`src/planner/resolver/capability/graph.rs`)
+//! `CapabilityGraph` — inter-capability dependencies and conflicts as a
+//! validated DAG.
 //!
-//! Represents inter-capability dependencies and conflicts as a validated DAG.
+//! Ported from the monolith's `src/planner/resolver/capability/graph.rs`
+//! (Phase 2A). Pure data structures — no frozen-contract concerns.
 
 use std::collections::{HashMap, VecDeque};
+
 use fusion_plugin_api::{CapabilityContract, CapabilityId};
 
+/// A node in the capability graph — wraps the declared ABI contract.
 #[derive(Debug, Clone)]
 pub struct CapabilityNode {
     pub contract: CapabilityContract,
 }
 
+/// A directed dependency edge: `from` capability depends on `to` capability.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DependencyEdge {
     pub from: CapabilityId,
     pub to: CapabilityId,
 }
 
+/// A mutual-exclusion declaration between two capabilities.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConflictEdge {
     pub capability_a: CapabilityId,
     pub capability_b: CapabilityId,
 }
 
+/// Validated DAG of capability dependencies and conflicts.
 #[derive(Debug, Clone)]
 pub struct CapabilityGraph {
     nodes: HashMap<CapabilityId, CapabilityNode>,
@@ -30,6 +37,7 @@ pub struct CapabilityGraph {
 }
 
 impl CapabilityGraph {
+    /// Creates an empty graph.
     pub fn new() -> Self {
         Self {
             nodes: HashMap::new(),
@@ -37,14 +45,18 @@ impl CapabilityGraph {
             conflicts: Vec::new(),
         }
     }
+
+    /// Returns the capability nodes keyed by ID.
     pub fn nodes(&self) -> &HashMap<CapabilityId, CapabilityNode> {
         &self.nodes
     }
 
+    /// Returns the dependency edges.
     pub fn dependencies(&self) -> &Vec<DependencyEdge> {
         &self.dependencies
     }
 
+    /// Returns the conflict edges.
     pub fn conflicts(&self) -> &Vec<ConflictEdge> {
         &self.conflicts
     }
@@ -143,10 +155,12 @@ impl CapabilityGraph {
         Ok(order)
     }
 
+    /// Looks up a capability node by ID.
     pub fn get_node(&self, id: &CapabilityId) -> Option<&CapabilityNode> {
         self.nodes.get(id)
     }
 
+    /// Number of capability nodes in the graph.
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }

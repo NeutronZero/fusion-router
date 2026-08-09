@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use fusion_plugin_api::CapabilityId;
 
-use crate::capability::registry::{CapabilityRegistry, InMemoryCapabilityRegistry};
+use crate::capability::{CapabilityRegistry, InMemoryCapabilityRegistry};
 use crate::package::PackageError;
 use crate::package::verifier::VerifiedPackage;
 

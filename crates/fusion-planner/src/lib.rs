@@ -1,6 +1,8 @@
+pub mod capability;
+
 use fusion_core::{ModelCatalog, PlatformError};
 use fusion_ir::{WorkflowBuilder, WorkflowIR};
-use fusion_kernel::{CapabilityRegistry, CapabilitySystem};
+use fusion_kernel::{CapabilityCatalog, CapabilitySystem};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -110,7 +112,7 @@ impl IntentPlanner {
 
 pub struct PlannerService {
     capability_system: CapabilitySystem,
-    capability_registry: CapabilityRegistry,
+    capability_catalog: CapabilityCatalog,
     intent_planner: IntentPlanner,
 }
 
@@ -118,7 +120,7 @@ impl PlannerService {
     pub fn new(capability_system: CapabilitySystem) -> Self {
         Self {
             capability_system,
-            capability_registry: CapabilityRegistry::new(),
+            capability_catalog: CapabilityCatalog::new(),
             intent_planner: IntentPlanner::new(ModelCatalog::default()),
         }
     }
@@ -136,7 +138,7 @@ impl PlannerService {
             });
         }
         let _ = &self.capability_system;
-        let _ = &self.capability_registry;
+        let _ = &self.capability_catalog;
         self.intent_planner.plan_intent(&execution_intent)
     }
 }

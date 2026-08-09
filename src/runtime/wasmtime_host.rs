@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use reqwest::Request;
 use tracing::Level;
 use uuid::Uuid;
-use crate::capability::registry::CapabilityRegistry;
+use crate::capability::CapabilityRegistry;
 use crate::events::{bus::EventBus, ExecutionEventEnvelope, payload::ExecutionEvent};
 use crate::release::gate::GateError;
 use crate::runtime::host_services::CapabilityHostServices;
@@ -102,7 +102,7 @@ impl CapabilityHostServices for WasmtimeCapabilityHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::registry::InMemoryCapabilityRegistry;
+    use crate::capability::InMemoryCapabilityRegistry;
     use crate::events::bus::BroadcastEventBus;
     use std::sync::Arc;
     use fusion_plugin_api::{CapabilityContract, CapabilityId, Permission};

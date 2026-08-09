@@ -1,15 +1,15 @@
 //! Capability Subsystem (`src/capability/mod.rs`)
 //!
 //! Provides the registry, descriptor, and permission types for the Capability Platform.
+//! Registry types are canonical in `fusion_kernel::capability::registry` —
+//! this module re-exports them for backward compatibility.
 
 pub mod permission;
-pub mod registry;
 
-// Re-exports for downstream consumers — used in future tasks
-#[allow(unused_imports)]
-pub use registry::{
-    CapabilityRegistry,
+// Re-exports from the canonical crate location
+pub use fusion_kernel::capability::{
     CapabilityDescriptor,
+    CapabilityRegistry,
     CapabilitySource,
     InMemoryCapabilityRegistry,
     RegistryError,

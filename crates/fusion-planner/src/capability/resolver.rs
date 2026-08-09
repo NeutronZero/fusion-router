@@ -1,14 +1,14 @@
 //! Phase 2B & 2C — `CapabilityResolver`, `RequirementSet`, `ResolvedCapabilitySet`, & `CapabilityPlannerCache`
 //!
 //! Symbol resolution for capabilities, matching intent requirements to frozen contracts.
+//! Ported from the monolith's `src/planner/resolver/capability/resolver.rs`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use parking_lot::Mutex;
+
+use fusion_kernel::capability::{CapabilityGraph, CapabilityRegistry, DependencyEdge};
 use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityInstance};
-use crate::capability::CapabilityRegistry;
-use super::CapabilityGraph;
-use super::DependencyEdge;
+use parking_lot::Mutex;
 
 /// Errors that can occur during capability resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -382,8 +382,7 @@ impl CapabilityResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::InMemoryCapabilityRegistry;
-    use fusion_plugin_api::CapabilityContract;
+    use fusion_kernel::capability::InMemoryCapabilityRegistry;
     use serde_json::json;
 
     fn build_test_registry() -> Arc<dyn CapabilityRegistry> {

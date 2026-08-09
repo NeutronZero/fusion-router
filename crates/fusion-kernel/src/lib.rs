@@ -1,3 +1,9 @@
+//! `fusion-kernel`
+//!
+//! Core kernel types and runtime capability data structures.
+
+pub mod capability;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -87,11 +93,11 @@ pub enum ExecutionProfile {
     Offline,
 }
 
-pub struct CapabilityRegistry {
+pub struct CapabilityCatalog {
     catalog: HashMap<String, Vec<String>>,
 }
 
-impl CapabilityRegistry {
+impl CapabilityCatalog {
     pub fn new() -> Self {
         let mut catalog = HashMap::new();
         catalog.insert("Vision".to_string(), vec!["ImageInput".to_string()]);
@@ -112,7 +118,7 @@ impl CapabilityRegistry {
     }
 }
 
-impl Default for CapabilityRegistry {
+impl Default for CapabilityCatalog {
     fn default() -> Self {
         Self::new()
     }
@@ -171,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_capability_registry_and_execution_profiles() {
-        let reg = CapabilityRegistry::new();
+        let reg = CapabilityCatalog::new();
         assert!(reg.supports("Vision"));
         assert!(reg.supports("MCP"));
         assert!(reg.supports("ToolCalling"));

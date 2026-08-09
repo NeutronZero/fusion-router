@@ -42,7 +42,7 @@ mod tests {
 
         let host: Arc<dyn CapabilityHostServices> = Arc::new(
             crate::runtime::wasmtime_host::WasmtimeCapabilityHost::new(
-                Arc::new(crate::capability::registry::InMemoryCapabilityRegistry::new()),
+                Arc::new(crate::capability::InMemoryCapabilityRegistry::new()),
                 Arc::new(BroadcastEventBus::new(16)),
                 reqwest::Client::new(),
                 FusionMetrics::instance(),
