@@ -13,7 +13,7 @@ import sys
 import subprocess
 from pathlib import Path
 
-FROZEN_PATHS = ["src/compiler", "src/planner"]
+FROZEN_PATHS = ["src/compiler", "src/planner", "src/resource"]
 
 def get_git_diff_files():
     try:
@@ -53,9 +53,8 @@ def main():
         print("The following files in frozen monolith paths were modified:")
         for v in violations:
             print(f"  - {v}")
-        print("\nReason: src/compiler/ and src/planner/ are frozen during the Phase 3 port.")
-        print("All compiler/planner changes must be ported to crates/fusion-compiler and")
-        print("crates/fusion-planner instead of modifying the monolith.")
+        print("\nReason: src/compiler/, src/planner/, and src/resource/ are frozen during the Phase 3 port.")
+        print("All compiler/planner/resource changes must be ported to crates/ instead of modifying the monolith.")
         print("=" * 80 + "\n")
         sys.exit(1)
     else:

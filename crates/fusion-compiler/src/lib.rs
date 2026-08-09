@@ -8,6 +8,8 @@ use fusion_core::{ModelCatalog, ModelRequirements, PlatformError};
 use fusion_ir::WorkflowIR;
 use serde::{Deserialize, Serialize};
 
+pub mod passes;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExplainRouteScore {
     pub provider_name: String,

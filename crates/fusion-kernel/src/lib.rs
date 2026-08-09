@@ -3,6 +3,7 @@
 //! Core kernel types and runtime capability data structures.
 
 pub mod capability;
+pub mod resource;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
