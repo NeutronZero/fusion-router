@@ -52,19 +52,41 @@ Test cases:
 - `budget_pass_accumulates_spend` — two sequential passes, second sees accumulated state
 - `budget_pass_shared_state` — two passes sharing one instance, second sees first's spend
 
-### Q4: How many methods should the `ResourceManager` trait have?
+### Q4: How many methods should the `ResourceManager` trait have, and should signatures match exactly?
 
-**Decision:** 7 methods — the full monolith interface, not a minimal subset.
+**Decision:** 7 methods (same count as monolith), but 3 signatures diverge. This is deliberate.
 
-The monolith's `DefaultResourceManager` has 7 methods: `can_afford`, `try_reserve`, `release`, `quota`, `spent_cost`, `spent_tokens`, `record_usage`. An initial implementation ported only 4 (dropping `try_reserve`, `release`, `record_usage`) and changed `can_afford`'s signature from `&ExecutionGraph` to `(f64, u64)`.
+The monolith's trait has 7 methods. The ported trait also has 7 methods, but `can_afford`, `try_reserve`, and `release` take `(f64, u64)` instead of `&ExecutionGraph`:
 
-This was a scope error. Reasons to keep all 7:
-- The trait represents the *full resource management interface*, not just the budget-check subset
-- `try_reserve` and `release` are used by the executor (not the compiler pass), but they belong on the trait because the trait is the resource management contract
-- `record_usage` is used by the stream meter
-- At production cutover, the monolith's `DefaultResourceManager` will implement this trait directly — a 4-method trait can't be a drop-in replacement
+| Method | Monolith signature | Crate signature |
+|--------|-------------------|-----------------|
+| `can_afford` | `(&self, graph: &ExecutionGraph) -> bool` | `(&self, estimated_cost: f64, estimated_tokens: u64) -> bool` |
+| `try_reserve` | `(&self, graph: &ExecutionGraph) -> bool` | `(&self, estimated_cost: f64, estimated_tokens: u64) -> bool` |
+| `release` | `(&self, graph: &ExecutionGraph) -> anyhow::Result<()>` | `(&self, estimated_cost: f64, estimated_tokens: u64) -> anyhow::Result<()>` |
+| `quota` | `(&self) -> &Quota` | `(&self) -> &Quota` |
+| `spent_cost` | `(&self) -> f64` | `(&self) -> f64` |
+| `spent_tokens` | `(&self) -> u64` | `(&self) -> u64` |
+| `record_usage` | `(&self, u64, u64)` | `(&self, u64, u64)` |
 
-The `can_afford` signature stays as `(f64, u64)` (not `&ExecutionGraph`) because the compiler pass only needs cost/tokens, and taking the full graph would couple the trait to the IR. The monolith's `DefaultResourceManager` will implement the trait method by extracting cost/tokens from its own logic, not from the graph.
+**Why the divergence:** `ExecutionGraph` is defined in the monolith (`src/types/mod.rs`), not in any crate. `fusion-kernel` has no dependency on it and shouldn't — adding one would create a reverse dependency (crate → monolith). The crate's trait is parameterized on the *data* the methods need (cost, tokens), not on the monolith's type.
+
+**Cutover cost:** At production cutover, `DefaultResourceManager` can't directly implement this trait — its `can_afford(graph: &ExecutionGraph)` doesn't match `can_afford(estimated_cost: f64, estimated_tokens: u64)`. The adapter is thin:
+
+```rust
+#[async_trait]
+impl ResourceManager for DefaultResourceManager {
+    async fn can_afford(&self, estimated_cost: f64, estimated_tokens: u64) -> bool {
+        // Delegate to existing logic — same body, just parameterized differently
+        let cost = (estimated_cost * 1000.0) as u64;
+        let current = self.used_cost.load(Ordering::Acquire);
+        let max = (self.quota.max_daily_cost * 1000.0) as u64;
+        (current + cost <= max) && (self.used_tokens.load(Ordering::Acquire) + estimated_tokens <= self.quota.max_daily_tokens)
+    }
+    // ... same pattern for try_reserve, release
+}
+```
+
+This is ~15 lines of boilerplate. The alternative — having the crate's trait take `&ExecutionGraph` — would force `fusion-kernel` to depend on a monolith-internal type, which is worse. The adapter cost is acknowledged, not hidden.
 
 ### Q5: What does the stub's `can_afford()` actually check?
 
@@ -80,7 +102,7 @@ This enables the accumulation test cases from Q3. The stub is still a simplified
 - The thin-pass-plus-stub pattern is the right default for simulation-only crates
 - Equivalence tests for stateful passes are a new pattern — straightforward but distinct from the pure-function pattern used by prior passes
 - The production cutover decision (wiring live state into the crate) is explicitly deferred, not accidentally defaulted into
-- The 7-method trait is a 1:1 match with the monolith's interface — zero adaptation needed at cutover
+- **Cutover requires ~15 lines of adapter boilerplate** where `DefaultResourceManager` adapts its `&ExecutionGraph` signatures to the crate's `(f64, u64)` signatures. This is the explicit cost of keeping the crate decoupled from monolith-internal types.
 
 ## Scope
 
