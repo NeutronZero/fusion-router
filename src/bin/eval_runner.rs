@@ -306,32 +306,93 @@ fn strip_code_fences(s: &str) -> String {
 }
 
 /// Execute Python code and return (stdout, exit_ok).
+/// Execute Python code in a restricted environment with a hard timeout.
+///
+/// Sandboxing: writes code to a temp file, runs in a temp working directory,
+/// prefixes with a preamble that blocks dangerous imports and sets resource
+/// limits. Not a security boundary — prevents accidental infinite loops and
+/// filesystem writes, not deliberate escape.
 fn run_python(code: &str, timeout_secs: u64) -> (String, bool) {
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::process::{Command, Stdio};
 
+    // Preamble: restrict the execution environment
+    let preamble = r#"
+import sys, os, signal
+# Block dangerous modules at import time
+_blocked = {'subprocess', 'shutil', 'socket', 'http', 'urllib', 'ftplib', 'smtplib',
+            'multiprocessing', 'ctypes', 'importlib', 'pathlib', 'webbrowser'}
+_orig_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
+def _safe_import(name, *args, **kwargs):
+    if name.split('.')[0] in _blocked:
+        raise ImportError(f'Blocked by eval harness: {name}')
+    return _orig_import(name, *args, **kwargs)
+try:
+    __builtins__.__import__ = _safe_import
+except AttributeError:
+    import builtins
+    builtins.__import__ = _safe_import
+# Resource limits (best-effort, works on Unix)
+try:
+    import resource
+    resource.setrlimit(resource.RLIMIT_CPU, ({timeout_secs}, {timeout_secs}))
+    resource.setrlimit(resource.RLIMIT_AS, (256_000_000, 256_000_000))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (1_000_000, 1_000_000))
+except (ImportError, ValueError, OSError):
+    pass
+os.chdir(os.environ.get('EVAL_WORKDIR', '.'))
+"#
+        .replace("{timeout_secs}", &timeout_secs.to_string());
+
+    let full_code = format!("{}\n{}", preamble, code);
+
+    // Write to temp file (avoids command-line arg length limits, special chars)
+    let temp_dir_name = format!("eval_runner_{}", std::process::id());
+    let temp_dir = std::env::temp_dir().join(&temp_dir_name);
+    if std::fs::create_dir_all(&temp_dir).is_err() {
+        return ("TEMPDIR_NOT_AVAILABLE".to_string(), false);
+    }
+    let temp_path = temp_dir.join("eval_test.py");
+    let Ok(mut file) = std::fs::File::create(&temp_path) else {
+        return ("TEMPFILE_NOT_AVAILABLE".to_string(), false);
+    };
+    if file.write_all(full_code.as_bytes()).is_err() {
+        return ("WRITE_FAILED".to_string(), false);
+    }
+    drop(file);
+
+    let script_path = temp_path.to_string_lossy().to_string();
+
+    // Set EVAL_WORKDIR to temp dir so code can't reach real filesystem
+    let workdir = temp_dir.clone();
+
     let Ok(mut child) = Command::new("python3")
-        .arg("-c")
-        .arg(code)
+        .arg(&script_path)
+        .current_dir(&workdir)
+        .env("EVAL_WORKDIR", workdir.to_string_lossy().as_ref())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
     .or_else(|_| {
         Command::new("python")
-            .arg("-c")
-            .arg(code)
+            .arg(&script_path)
+            .current_dir(&workdir)
+            .env("EVAL_WORKDIR", workdir.to_string_lossy().as_ref())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
     }) else {
+        let _ = std::fs::remove_file(&temp_path);
         return ("PYTHON_NOT_AVAILABLE".to_string(), false);
     };
 
-    // Wait with timeout
+    // Wait with hard timeout
     let start = std::time::Instant::now();
-    loop {
+    let result = loop {
         match child.try_wait() {
             Ok(Some(status)) => {
                 let stdout = child
@@ -343,20 +404,26 @@ fn run_python(code: &str, timeout_secs: u64) -> (String, bool) {
                         Some(buf)
                     })
                     .unwrap_or_default();
-                return (stdout, status.success());
+                break (stdout, status.success());
             }
             Ok(None) => {
                 if start.elapsed().as_secs() >= timeout_secs {
                     let _ = child.kill();
-                    return ("TIMEOUT".to_string(), false);
+                    let _ = child.wait(); // reap zombie on Unix
+                    break ("TIMEOUT".to_string(), false);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Err(e) => {
-                return (format!("SPAWN_ERROR: {}", e), false);
+                break (format!("SPAWN_ERROR: {}", e), false);
             }
         }
-    }
+    };
+
+    // Cleanup
+    let _ = std::fs::remove_file(&temp_path);
+    let _ = std::fs::remove_dir(&temp_dir);
+    result
 }
 
 fn score_output(task: &TaskDef, output: &str, judge_provider: Option<&dyn ChatProvider>) -> (f64, RunStatus) {
@@ -1165,6 +1232,8 @@ fn print_report(reports: &[BucketReport]) {
     println!("{}", "=".repeat(60));
     println!("  Note: B/C latency includes scheduler retry backoff (~1.65s avg).");
     println!("        quality is computed over scored runs only (failures excluded).");
+    println!("        judge model: gpt-4o-mini (no overlap with default ModelCatalog");
+    println!("        routing — debate→claude-opus, fusion→claude-sonnet, routing→gpt-4o).");
     println!();
 
     for report in reports {
