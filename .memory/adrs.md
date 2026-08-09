@@ -49,7 +49,7 @@
 | ADR-035 | Fail-Closed Deployment | Draft | Fail-closed defaults; `--unsafe-dev`; identity-based rate limiting; constant-time key check (v0.13.1 charter) |
 | ADR-036 | Plugin Execution Context | Draft | `PluginExecutionContext`; caller-bound permissions; metered/timed WASM; content-bound attestation (v0.13.1 charter) |
 | ADR-037 | Structured Tool Invocation | Draft | Provider-native `tool_calls` only; model output is never executable (v0.13.1 charter) |
-| ADR-038 | BudgetOptimisationPass Port | Accepted | Trait in kernel, stub in compiler, real instance stays in monolith; stateful equivalence test pattern |
+| ADR-038 | BudgetOptimisationPass Port | Accepted | 7-method trait in kernel, state-aware stub in compiler, real instance stays in monolith; accumulation test pattern |
 
 ## ADR Location: `docs/decisions/`
 

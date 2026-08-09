@@ -1,9 +1,8 @@
 //! Resource management — budget quotas and spend tracking.
 //!
-//! Ported from the monolith's `src/resource/mod.rs`. The trait is simplified
-//! to the budget-check interface needed by `BudgetOptimisationPass`. The
-//! monolith's `DefaultResourceManager` implements this trait and retains its
-//! extra methods (`try_reserve`, `release`, `record_usage`) as inherent methods.
+//! Ported from the monolith's `src/resource/mod.rs`. This is the canonical
+//! 7-method `ResourceManager` trait — the monolith's `DefaultResourceManager`
+//! will implement this trait (with extra inherent methods) at production cutover.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -16,15 +15,23 @@ pub struct Quota {
     pub max_daily_tokens: u64,
 }
 
-/// Resource manager trait — answers "can this execution be afforded?"
+/// Resource manager trait — 7 methods matching the monolith's interface.
 ///
-/// Simplified from the monolith's 7-method trait to the 4 methods needed
-/// by `BudgetOptimisationPass`. The monolith's `DefaultResourceManager`
-/// implements this trait and keeps extra methods as inherent methods.
+/// This is the canonical definition. The monolith's `DefaultResourceManager`
+/// will implement this trait at production cutover. Extra methods (`try_reserve`,
+/// `release`, `record_usage`) are needed by the executor and stream meter, not
+/// just the compiler pass — they're part of the trait because the trait represents
+/// the full resource management interface, not just the budget check subset.
 #[async_trait]
 pub trait ResourceManager: Send + Sync {
     /// Returns true if the estimated cost and tokens fit within remaining quota.
     async fn can_afford(&self, estimated_cost: f64, estimated_tokens: u64) -> bool;
+
+    /// Atomically reserves budget for an execution. Returns false if insufficient.
+    async fn try_reserve(&self, estimated_cost: f64, estimated_tokens: u64) -> bool;
+
+    /// Releases previously reserved budget.
+    async fn release(&self, estimated_cost: f64, estimated_tokens: u64) -> anyhow::Result<()>;
 
     /// Returns the budget quota.
     fn quota(&self) -> &Quota;
@@ -34,11 +41,16 @@ pub trait ResourceManager: Send + Sync {
 
     /// Returns total tokens spent so far.
     fn spent_tokens(&self) -> u64;
+
+    /// Records actual measured usage (e.g. from a stream meter) so quota
+    /// accounting reflects reality rather than only estimates. No-op by default.
+    async fn record_usage(&self, _cost_millicosts: u64, _tokens: u64) {}
 }
 
 /// Test-double resource manager for crate-level tests.
-/// Always returns `can_afford() = true` — tests budget *plumbing*,
-/// not budget *logic* (real accounting stays in the monolith).
+/// Tracks actual state — `can_afford()` checks against quota.
+/// Tests budget *plumbing* and basic *logic*; real production accounting
+/// stays in the monolith's `DefaultResourceManager`.
 pub struct StubResourceManager {
     quota: Quota,
     cost: AtomicU64,
@@ -63,8 +75,37 @@ impl StubResourceManager {
 
 #[async_trait]
 impl ResourceManager for StubResourceManager {
-    async fn can_afford(&self, _estimated_cost: f64, _estimated_tokens: u64) -> bool {
-        true // Stub always allows — plumbing test, not budget-logic test
+    async fn can_afford(&self, estimated_cost: f64, estimated_tokens: u64) -> bool {
+        let cost_millicosts = (estimated_cost * 1000.0) as u64;
+        let current_cost = self.cost.load(Ordering::Acquire);
+        let current_tokens = self.tokens.load(Ordering::Acquire);
+        let max_cost = (self.quota.max_daily_cost * 1000.0) as u64;
+        let max_tokens = self.quota.max_daily_tokens;
+        (current_cost + cost_millicosts <= max_cost) && (current_tokens + estimated_tokens <= max_tokens)
+    }
+
+    async fn try_reserve(&self, estimated_cost: f64, estimated_tokens: u64) -> bool {
+        let cost_millicosts = (estimated_cost * 1000.0) as u64;
+        let max_cost = (self.quota.max_daily_cost * 1000.0) as u64;
+        let max_tokens = self.quota.max_daily_tokens;
+
+        let current_cost = self.cost.load(Ordering::Relaxed);
+        let current_tokens = self.tokens.load(Ordering::Relaxed);
+
+        if current_cost + cost_millicosts > max_cost || current_tokens + estimated_tokens > max_tokens {
+            return false;
+        }
+
+        self.cost.store(current_cost + cost_millicosts, Ordering::Release);
+        self.tokens.store(current_tokens + estimated_tokens, Ordering::Release);
+        true
+    }
+
+    async fn release(&self, estimated_cost: f64, estimated_tokens: u64) -> anyhow::Result<()> {
+        let cost_millicosts = (estimated_cost * 1000.0) as u64;
+        self.cost.fetch_sub(cost_millicosts, Ordering::Relaxed);
+        self.tokens.fetch_sub(estimated_tokens, Ordering::Relaxed);
+        Ok(())
     }
 
     fn quota(&self) -> &Quota {
@@ -78,6 +119,11 @@ impl ResourceManager for StubResourceManager {
     fn spent_tokens(&self) -> u64 {
         self.tokens.load(Ordering::Acquire)
     }
+
+    async fn record_usage(&self, cost_millicosts: u64, tokens: u64) {
+        self.cost.fetch_add(cost_millicosts, Ordering::Relaxed);
+        self.tokens.fetch_add(tokens, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -85,9 +131,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stub_always_allows() {
+    fn stub_tracks_spend() {
         let stub = StubResourceManager::new(100.0, 1_000_000);
-        assert!(stub.spent_cost() == 0.0);
-        assert!(stub.spent_tokens() == 0);
+        assert_eq!(stub.spent_cost(), 0.0);
+        assert_eq!(stub.spent_tokens(), 0);
+
+        stub.simulate_spend(50_000, 100_000); // $50 cost, 100k tokens
+        assert_eq!(stub.spent_cost(), 50.0);
+        assert_eq!(stub.spent_tokens(), 100_000);
+    }
+
+    #[tokio::test]
+    async fn stub_can_afford_checks_quota() {
+        let stub = StubResourceManager::new(1.0, 1000); // $1, 1000 tokens
+        assert!(stub.can_afford(0.5, 500).await); // Under quota
+        assert!(!stub.can_afford(1.1, 500).await); // Over cost quota
+        assert!(!stub.can_afford(0.5, 1100).await); // Over token quota
     }
 }

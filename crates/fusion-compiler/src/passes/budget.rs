@@ -4,10 +4,11 @@
 //! The pass is thin: it builds a throwaway budget check from the IR's estimated
 //! cost/tokens and calls `ResourceManager::can_afford()`.
 //!
-//! **Plumbing test, not budget-logic test:** The `StubResourceManager` used in
-//! tests always returns `can_afford() = true`. These tests verify the pass calls
+//! **Plumbing test, not budget-logic test:** Tests verify the pass calls
 //! `can_afford()` with the right arguments and propagates the result correctly.
-//! Real budget accounting stays in the monolith's `DefaultResourceManager`.
+//! Real production accounting stays in the monolith's `DefaultResourceManager`.
+//! The `StubResourceManager` from `fusion_kernel` tracks state for accumulation
+//! tests, but its logic is simplified — not a production substitute.
 
 use std::sync::Arc;
 use fusion_kernel::resource::ResourceManager;
@@ -23,7 +24,7 @@ impl BudgetOptimisationPass {
         Self { resource_manager }
     }
 
-    /// Checks whether the IR fits within budget. Returns Ok(ir) if affordable,
+    /// Checks whether the IR fits within budget. Returns Ok(()) if affordable,
     /// Err if not. Pass-through — does not modify the IR.
     pub async fn check(&self, ir: &WorkflowIR) -> Result<(), BudgetError> {
         let estimated_cost = ir.metadata().estimated_cost;
@@ -67,53 +68,88 @@ impl std::error::Error for BudgetError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fusion_kernel::resource::{Quota, ResourceManager};
+    use fusion_kernel::resource::StubResourceManager;
 
-    /// Local test-double: always returns `can_afford() = true`.
-    /// Plumbing test, not budget-logic test.
-    struct StubResourceManager {
-        _quota: Quota,
+    fn make_ir_with_budget(cost: f64, tokens: u64) -> WorkflowIR {
+        // Set metadata by re-serializing with desired values
+        // WorkflowIR doesn't expose mutable metadata, so we build via JSON
+        let json = serde_json::json!({
+            "version": 1,
+            "workflow_id": "00000000-0000-0000-0000-000000000000",
+            "nodes": [{"id": "n1", "kind": "Task", "capability": "CodeGeneration", "config": {}}],
+            "edges": [],
+            "metadata": {
+                "policy_applied": [],
+                "estimated_cost": cost,
+                "estimated_tokens": tokens
+            }
+        });
+        fusion_ir::WorkflowIR::from_json(&json.to_string()).unwrap()
     }
 
-    #[async_trait::async_trait]
-    impl ResourceManager for StubResourceManager {
-        async fn can_afford(&self, _estimated_cost: f64, _estimated_tokens: u64) -> bool {
-            true
-        }
-        fn quota(&self) -> &Quota { &self._quota }
-        fn spent_cost(&self) -> f64 { 0.0 }
-        fn spent_tokens(&self) -> u64 { 0 }
-    }
+    // -----------------------------------------------------------------------
+    // Plumbing tests — pass calls can_afford, propagates result
+    // -----------------------------------------------------------------------
 
-    /// Plumbing test: stub always returns true, so check() should succeed.
     #[tokio::test]
     async fn budget_pass_plumbing_allows_under_quota() {
-        let stub = StubResourceManager { _quota: Quota { max_daily_cost: 100.0, max_daily_tokens: 1_000_000 } };
-        let pass = BudgetOptimisationPass::new(Arc::new(stub));
+        let stub = StubResourceManager::new(100.0, 1_000_000);
+        let pass = BudgetOptimisationPass::new(Arc::new(stub) as Arc<dyn ResourceManager>);
 
-        let ir = fusion_ir::WorkflowBuilder::new()
-            .task("n1", "CodeGeneration")
-            .unwrap()
-            .build()
-            .unwrap();
-
+        let ir = make_ir_with_budget(0.01, 1000);
         assert!(pass.check(&ir).await.is_ok());
     }
 
-    /// Plumbing test: stub always returns true, so even a "large" IR passes.
-    /// Real budget rejection is tested by the monolith's DefaultResourceManager.
     #[tokio::test]
-    async fn budget_pass_plumbing_stub_always_allows() {
-        let stub = StubResourceManager { _quota: Quota { max_daily_cost: 0.01, max_daily_tokens: 100 } };
-        let pass = BudgetOptimisationPass::new(Arc::new(stub));
+    async fn budget_pass_plumbing_rejects_over_quota() {
+        let stub = StubResourceManager::new(0.001, 100); // Tiny quota
+        let pass = BudgetOptimisationPass::new(Arc::new(stub) as Arc<dyn ResourceManager>);
 
-        let ir = fusion_ir::WorkflowBuilder::new()
-            .task("n1", "CodeGeneration")
-            .unwrap()
-            .build()
-            .unwrap();
+        let ir = make_ir_with_budget(10.0, 10_000); // Way over quota
+        let err = pass.check(&ir).await.unwrap_err();
+        assert!(matches!(err, BudgetError::Exceeded { .. }));
+    }
 
-        // Stub always returns true — plumbing test, not budget-logic
-        assert!(pass.check(&ir).await.is_ok());
+    // -----------------------------------------------------------------------
+    // Accumulation tests — second call sees state from first
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn budget_pass_accumulates_spend() {
+        let stub: Arc<StubResourceManager> = Arc::new(StubResourceManager::new(0.10, 10_000)); // $0.10 quota, 10k tokens
+        let pass = BudgetOptimisationPass::new(Arc::clone(&stub) as Arc<dyn ResourceManager>);
+
+        // First IR: $0.05, 5000 tokens — fits ($0.05 < $0.10)
+        let ir1 = make_ir_with_budget(0.05, 5000);
+        assert!(pass.check(&ir1).await.is_ok());
+
+        // Simulate the spend happening (pass doesn't do this — executor does)
+        stub.simulate_spend(50_000, 5000); // $50 millicosts = $0.05 spent
+
+        // Second IR: $0.06, 5000 tokens — now over because $0.05 + $0.06 = $0.11 > $0.10
+        let ir2 = make_ir_with_budget(0.06, 5000);
+        let err = pass.check(&ir2).await.unwrap_err();
+        assert!(matches!(err, BudgetError::Exceeded { .. }));
+    }
+
+    #[tokio::test]
+    async fn budget_pass_shared_state_between_instances() {
+        let stub: Arc<StubResourceManager> = Arc::new(StubResourceManager::new(0.10, 10_000));
+
+        // Two passes sharing the same stub (coerce to trait object)
+        let pass1 = BudgetOptimisationPass::new(Arc::clone(&stub) as Arc<dyn ResourceManager>);
+        let pass2 = BudgetOptimisationPass::new(Arc::clone(&stub) as Arc<dyn ResourceManager>);
+
+        // pass1: $0.05, 5000 tokens — fits
+        let ir1 = make_ir_with_budget(0.05, 5000);
+        assert!(pass1.check(&ir1).await.is_ok());
+
+        // Simulate spend
+        stub.simulate_spend(50_000, 5000);
+
+        // pass2: $0.06, 5000 tokens — over quota ($0.11 > $0.10)
+        let ir2 = make_ir_with_budget(0.06, 5000);
+        let err = pass2.check(&ir2).await.unwrap_err();
+        assert!(matches!(err, BudgetError::Exceeded { .. }));
     }
 }

@@ -1139,6 +1139,7 @@ dependencies = [
 name = "fusion-kernel"
 version = "0.14.5"
 dependencies = [
+ "anyhow",
  "async-trait",
  "chrono",
  "fusion-core",
