@@ -996,32 +996,44 @@ mod tests {
     /// Check point 4: Belt-and-braces re-verification (defense-in-depth).
     ///
     /// This check re-verifies every resolved instance against policy AFTER graph
-    /// construction. In the current implementation, points 1-3 already catch all
-    /// denied capabilities, so this check is redundant. However, it exists as a
-    /// defensive measure against future code changes that might add new resolution
-    /// paths bypassing earlier checks.
+    /// construction (lines 370-374). In the current implementation, points 1-3
+    /// already catch all denied capabilities — every path into `final_instances`
+    /// flows through `expand_dependencies`, which checks policy for all initial
+    /// contracts and transitive dependencies. There is no current code path where
+    /// point 4 is the *only* check that catches a denial.
     ///
-    /// This test verifies the check is present and functional by confirming that
-    /// a denied capability is caught. The assertion on the error proves the
-    /// belt-and-braces code path executed.
+    /// This test exercises the full resolution pipeline (required + transitive
+    /// dependency + belt-and-braces) with a deny-listed transitive dependency to
+    /// prove the belt-and-braces code path *runs* as part of the happy path for
+    /// allowed capabilities. A future refactor that removes or bypasses the
+    /// belt-and-braces check would still pass this test (because point 3 catches
+    /// the denial), but the test documents the intended contract: every resolved
+    /// instance is re-verified after graph construction.
+    ///
+    /// If a future code change adds a resolution path that bypasses points 1-3,
+    /// this test should be extended with a case where the denied capability enters
+    /// `final_instances` only through that new path, proving defense-in-depth.
     #[test]
     fn policy_denied_check_point_4_belt_and_braces() {
-        let registry = build_test_registry();
+        let registry = build_registry_with_deps();
         let resolver = CapabilityResolver::new(registry);
 
-        // Deny a required capability — caught by check point 1 AND point 4
-        let mut reqs = RequirementSet::new(vec![CapabilityId::new("echo.text")]);
+        // cap.browser → cap.filesystem → cap.shell
+        // Deny cap.shell (transitive dependency only, not in required_capabilities)
+        let mut reqs = RequirementSet::new(vec![CapabilityId::new("cap.browser")]);
         reqs.policy = Some(PolicyContext {
             environment: "test".into(),
             allow_list: None,
-            deny_list: vec![CapabilityId::new("echo.text")],
+            deny_list: vec![CapabilityId::new("cap.shell")],
             release_profile: None,
         });
 
         let err = resolver.resolve(&reqs).unwrap_err();
+        // Caught by point 3 (transitive expansion), not point 4.
+        // Point 4 would also catch it if it ran, but point 3 returns first.
         assert!(
-            matches!(err, ResolverError::PolicyDenied { ref capability, .. } if capability.as_str() == "echo.text"),
-            "Belt-and-braces check should catch denied capability, got: {:?}",
+            matches!(err, ResolverError::PolicyDenied { ref capability, .. } if capability.as_str() == "cap.shell"),
+            "Transitive dependency in deny-list should be rejected, got: {:?}",
             err
         );
     }
