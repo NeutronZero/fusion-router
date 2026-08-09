@@ -19,7 +19,7 @@ async fn test_replay_side_effect_freedom_and_bundle_fidelity() {
         .unwrap();
 
     let compiler = CompilerEngine::new();
-    let report = compiler.compile("Test Replay Bundle", &ir, false).await.expect("Compile");
+    let report = compiler.compile("Test Replay Bundle", &ir).await.expect("Compile");
 
     let exec_id = ExecutionId::new();
     let bundle_file = format!("{}.fusion", exec_id.0);

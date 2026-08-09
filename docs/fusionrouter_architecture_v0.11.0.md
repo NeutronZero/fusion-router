@@ -1931,7 +1931,7 @@ The `WorkQueue` scheduler enforces backpressure via `buffer_unordered(max_concur
 
 ### 3.19 Session Continuity & Replay (Phase 5 / ADR-030)
 
-Session continuity decouples static session identity from transient execution snapshots, enabling deterministic replay, inspection, and simulation modes.
+Session continuity decouples static session identity from transient execution snapshots, enabling deterministic replay and inspection modes.
 
 #### Core Types
 

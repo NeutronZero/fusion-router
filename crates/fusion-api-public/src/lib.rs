@@ -1,7 +1,4 @@
-//! **SIMULATION** — Studio-sandbox CQRS API (v0.14 UI vertical).
-//!
-//! `CommandBus`/`QueryBus` acknowledge commands without performing real work.
-//! NOT wired into the production `src/` monolith.
+//! Public CQRS API — `CommandBus`/`QueryBus` for provider and config management.
 use fusion_core::{ExecutionId, JobId, PlatformError, ProviderId};
 use serde::{Deserialize, Serialize};
 

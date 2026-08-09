@@ -609,7 +609,7 @@ impl CoordinatorHaEngine {
         }
     }
 
-    /// Attempts to promote the coordinator to leader using fencing tokens (Invariant 13).
+    /// Attempts to promote the coordinator to leader using fencing tokens (Invariant 12).
     /// Requires proposing a term strictly greater than the current term.
     pub fn promote_to_leader_with_term(&self, proposed_term: u64) -> Result<FencingToken, PlatformError> {
         let mut term = self.current_term.lock();

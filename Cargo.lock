@@ -1312,44 +1312,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fusion-server"
-version = "0.14.5"
-dependencies = [
- "axum",
- "fusion-compiler",
- "fusion-core",
- "fusion-infrastructure",
- "fusion-kernel",
- "fusion-planner",
- "fusion-runtime",
- "fusion-scheduler",
- "fusion-studio-api",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "fusion-studio-api"
-version = "0.14.5"
-dependencies = [
- "axum",
- "chrono",
- "fusion-api-public",
- "fusion-compiler",
- "fusion-core",
- "fusion-ir",
- "fusion-kernel",
- "fusion-planner",
- "fusion-security",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "fusion-worker"
 version = "0.14.5"
 dependencies = [

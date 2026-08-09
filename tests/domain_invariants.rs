@@ -38,7 +38,7 @@ async fn test_domain_invariant_workflow_ir_produces_one_execution_graph() {
         .unwrap();
 
     let compiler = CompilerEngine::new();
-    let report = compiler.compile("Test Domain Compilation", &ir, false).await.expect("Compile");
+    let report = compiler.compile("Test Domain Compilation", &ir).await.expect("Compile");
 
     assert!(!report.graph_id.is_empty(), "ExecutionGraph ID must be present");
     assert_eq!(report.pass_diffs.len(), 11, "Must execute exactly 11 compiler passes");
@@ -72,7 +72,7 @@ fn test_domain_invariant_13_single_worker_lease_exclusivity() {
     let node_id = "node_ast_parser_01";
     let worker_id = "worker_us_east_42";
 
-    // Invariant 13 contract shape: Lease(node_id, worker_id, epoch)
+    // Invariant 12 contract shape: Lease(node_id, worker_id, epoch)
     let lease_key = format!("lease:{}:{}:{}", exec_id.0, node_id, worker_id);
     assert!(lease_key.starts_with("lease:"), "Lease must have unique, deterministic key");
 }

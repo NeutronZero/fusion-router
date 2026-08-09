@@ -213,7 +213,6 @@ impl DefaultScheduler {
                                 total_tokens,
                                 terminal_node_id: instance.terminal_node_id,
                                 final_output: instance.final_output.clone(),
-                                stored_artifacts: Vec::new(),
                             });
                         }
                     }
@@ -409,7 +408,6 @@ impl DefaultScheduler {
             total_tokens,
             terminal_node_id: instance.terminal_node_id,
             final_output: instance.final_output.clone(),
-            stored_artifacts: Vec::new(),
         })
     }
 }

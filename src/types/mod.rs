@@ -9,7 +9,7 @@ pub mod execution_context;
 pub mod anthropic;
 
 pub use error::{PipelineStage, RouterError};
-pub use artifact::{Artifact, ArtifactKind};
+pub use artifact::ArtifactKind;
 pub use anthropic::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -326,8 +326,6 @@ pub struct ExecutionResult {
     pub total_tokens: u64,
     pub terminal_node_id: Option<Uuid>,
     pub final_output: Option<serde_json::Value>,
-    #[serde(skip)]
-    pub stored_artifacts: Vec<Box<dyn Artifact>>,
 }
 
 impl Clone for ExecutionResult {
@@ -341,7 +339,6 @@ impl Clone for ExecutionResult {
             total_tokens: self.total_tokens,
             terminal_node_id: self.terminal_node_id,
             final_output: self.final_output.clone(),
-            stored_artifacts: Vec::new(),
         }
     }
 }

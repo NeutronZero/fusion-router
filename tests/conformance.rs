@@ -18,7 +18,7 @@ fn test_architectural_invariants_exist() {
     assert!(invariants_path.exists(), "docs/architecture/invariants.md must exist");
 
     let content = fs::read_to_string(invariants_path).expect("Read invariants.md");
-    for i in 1..=15 {
+    for i in 1..=14 {
         assert!(content.contains(&format!("Invariant {i}:")), "Must document Invariant {i}");
     }
 }
@@ -57,10 +57,9 @@ fn test_governance_specs_exist() {
 fn test_3_tier_workspace_members_exist() {
     let foundation = ["crates/fusion-core", "crates/fusion-kernel", "crates/fusion-api-internal"];
     let engine = ["crates/fusion-planner", "crates/fusion-compiler", "crates/fusion-scheduler", "crates/fusion-runtime"];
-    let platform = ["crates/fusion-infrastructure", "crates/fusion-api-public", "crates/fusion-studio-api", "crates/fusion-worker-protocol", "crates/fusion-worker"];
-    let app = ["apps/fusion-server"];
+    let platform = ["crates/fusion-infrastructure", "crates/fusion-api-public", "crates/fusion-worker-protocol", "crates/fusion-worker"];
 
-    for p in foundation.iter().chain(engine.iter()).chain(platform.iter()).chain(app.iter()) {
+    for p in foundation.iter().chain(engine.iter()).chain(platform.iter()) {
         let cargo_toml = Path::new(p).join("Cargo.toml");
         assert!(cargo_toml.exists(), "Workspace member {p}/Cargo.toml must exist");
     }

@@ -26,7 +26,7 @@ async fn execute_canonical_pipeline(entry_point: &str, prompt: &str) -> Executio
 
     // 2. Compiler (Must be 100% invoked - Law 1)
     let compiler = CompilerEngine::new();
-    let report = compiler.compile(prompt, &ir, false).await.expect("Compile");
+    let report = compiler.compile(prompt, &ir).await.expect("Compile");
 
     // 3. Construct Canonical ExecutionRecord
     ExecutionRecord {

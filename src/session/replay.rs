@@ -1,21 +1,13 @@
 //! Phase 5D — `ReplayEngine` (`src/session/replay.rs`)
 //!
-//! Event-driven execution replay with 3 explicit modes: Deterministic, Inspection, Simulation.
+//! Event-driven execution replay — reconstructs state from execution traces.
 
-use serde::{Deserialize, Serialize};
 use crate::types::execution_context::{ExecutionEvent, ExecutionState, ExecutionTrace};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ReplayMode {
-    Deterministic, // Reproduce execution step-by-step
-    Inspection,    // Reconstruct state transitions without connector side-effects
-    Simulation,     // Execute using mock connector stubs
-}
 
 pub struct ReplayEngine;
 
 impl ReplayEngine {
-    /// Replays an `ExecutionTrace` in `Inspection` mode without calling connectors or producing side-effects.
+    /// Replays an `ExecutionTrace` without calling connectors or producing side-effects.
     pub fn replay_inspection(trace: &ExecutionTrace) -> ExecutionState {
         let events = trace.events();
         let mut final_state = ExecutionState::Pending;

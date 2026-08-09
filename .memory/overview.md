@@ -1,12 +1,35 @@
 # FusionRouter Overview
 
-**Version:** 0.13.1
+**Version:** 0.14.5
 **License:** MIT OR Apache-2.0
 **Language:** Rust (2021 edition)
 
 ## Project Vision
 
 FusionRouter is an **AI Execution Compiler and Runtime** — an LLM orchestration operating system, event-driven runtime, and release-governed capability platform. It compiles high-level intents into executable DAGs and manages their full lifecycle.
+
+## Architectural Milestones
+
+### v0.14.5 — Simulation Stack Removal
+
+Removed the deprecated FusionStudio simulation stack and unified FusionRouter around a single production execution pipeline.
+
+**Removed:**
+- `crates/fusion-studio-api` — simulation-only Studio BFF (1183 lines)
+- `apps/fusion-server` — simulation sandbox binary (port 8787)
+- `Simulation` variant from `ReplayMode` enum
+- `is_simulation` field from `CompilerReport` and `CompilerEngine::compile()` parameter
+- Dual-stack architecture (production + Studio sandbox)
+
+**Simplified:**
+- Single request path: Axum server → planner → compiler → scheduler → executor
+- Compiler API: `compile(intent, ir)` instead of `compile(intent, ir, is_simulation)`
+- Replay: 2 modes (Deterministic, Inspection) instead of 3
+- Workspace: 2 fewer crates/apps to maintain
+
+**Preserved:**
+- `StubResourceManager` and `simulate_spend()` — test infrastructure, not simulation architecture
+- All `#[cfg(test)]` mocks and failure injection
 
 ## Frozen v0.13 Architecture
 
@@ -30,16 +53,13 @@ planner→compiler→scheduler→executor pipeline remains functional and is now
 with `abi::to_graph::graph_from_abi` binding runtime models). Full reconcile
 beyond those bridges remains v0.14 boundary work.
 
-## Request Paths (dual stack, by design)
+## Request Paths
 
 | Path | Binary | Status |
 |------|--------|--------|
 | Production monolith | `fusion-router` (`src/`, v0.13.x) | **Live request path**: Axum server → planner → `build_compiler` → `lower_to_graph` → scheduler → executor |
-| Studio sandbox | `fusion-server` (`apps/`, v0.14.x) | **Simulation-only**: serves the Studio UI from `fusion-studio-api`; the `fusion-*` workspace crates return placeholder data. Every API response carries `"simulation": true`. Never wired into the monolith. Default port 8787 (`FUSION_STUDIO_PORT` overridable) — distinct from the monolith's 8080 |
 
-There is no feature flag switching between them: they are separate binaries.
-Wiring the Studio crates to the real runtime is v0.14 boundary work; until then
-they are UI-development sandboxes, not a second production stack.
+See `.memory/architecture.md` for the full invariant set.
 
 ## System Pipeline
 

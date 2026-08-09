@@ -9,7 +9,7 @@
 
 Wave 2 of the monolith-to-crate porting effort targets `BudgetOptimisationPass`. Unlike prior ports (ConstraintValidationPass, ControlFlowValidationPass, ModelResolutionPass, CapabilityResolver), this pass holds live shared state — an `Arc<dyn ResourceManager>` with atomic counters that persist *across* compiler invocations. The pass itself is thin (builds a throwaway `ExecutionGraph`, calls `can_afford()`), but the backing `DefaultResourceManager` has real lifecycle complexity.
 
-The crate's `CompilerEngine` is explicitly a simulation (doc comment: "SIMULATION — Studio-sandbox compiler"). The production server is the monolith in `src/main.rs`. This asymmetry shapes the design.
+The crate's `CompilerEngine` is the workspace compiler. The production server is the monolith in `src/main.rs`.
 
 ## Design Questions and Decisions
 
@@ -19,7 +19,7 @@ The crate's `CompilerEngine` is explicitly a simulation (doc comment: "SIMULATIO
 
 - `ResourceManager` trait + `Quota` struct → `crates/fusion-kernel/src/resource/mod.rs` (parallel to `CapabilityRegistry` in `crates/fusion-kernel/src/capability/`)
 - `DefaultResourceManager` → stays in `src/resource/mod.rs` (monolith owns the live instance)
-- `CompilerEngine::new()` in `crates/fusion-compiler/` stays zero-arg — it's simulation-only, doesn't need real budget state
+- `CompilerEngine::new()` in `crates/fusion-compiler/` stays zero-arg — uses `StubResourceManager` for tests
 - `build_compiler()` in `src/compiler/mod.rs` already takes `Arc<dyn ResourceManager>` — no signature change needed
 - **Compatibility ripple: zero.** No existing callers change.
 
@@ -32,7 +32,7 @@ The crate's `CompilerEngine` is explicitly a simulation (doc comment: "SIMULATIO
 - `DefaultResourceManager` with atomic counters remains monolith-internal
 - **Scope note:** This makes the port legitimately smaller than it looks. The complexity was in `DefaultResourceManager`'s reservation/release semantics, but that stays in the monolith for now. The crate gets: trait + state-aware stub + thin pass.
 
-**Deferred to production cutover:** Wiring a live `Arc<dyn ResourceManager>` into the crate's `CompilerEngine`. That decision belongs to whoever starts serving real traffic from `apps/fusion-server`, not to this pass.
+**Deferred to production cutover:** Wiring a live `Arc<dyn ResourceManager>` into the crate's `CompilerEngine`. That decision belongs to whoever starts serving real traffic, not to this pass.
 
 ### Q3: What does equivalence mean for a stateful pass?
 
@@ -99,7 +99,7 @@ This enables the accumulation test cases from Q3. The stub is still a simplified
 ## Consequences
 
 - The trait becomes reusable by future crate-side code without coupling to the monolith's lifecycle
-- The thin-pass-plus-stub pattern is the right default for simulation-only crates
+- The thin-pass-plus-stub pattern is the right default for crate-level testing
 - Equivalence tests for stateful passes are a new pattern — straightforward but distinct from the pure-function pattern used by prior passes
 - The production cutover decision (wiring live state into the crate) is explicitly deferred, not accidentally defaulted into
 - **Cutover requires ~15 lines of adapter boilerplate** where `DefaultResourceManager` adapts its `&ExecutionGraph` signatures to the crate's `(f64, u64)` signatures. This is the explicit cost of keeping the crate decoupled from monolith-internal types.

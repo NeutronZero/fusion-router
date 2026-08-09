@@ -1,6 +1,6 @@
 //! Runtime Resilience Operational Validation Suite (v0.14.4)
 //!
-//! Exercises Invariant 13 single-worker lease exclusivity under crash recovery & partition scenarios.
+//! Exercises Invariant 12 single-worker lease exclusivity under crash recovery & partition scenarios.
 
 use fusion_placement::ExecutionLeaseManager;
 use fusion_worker_protocol::{HeartbeatMessage, WorkerRegistryStore};
@@ -13,7 +13,7 @@ fn test_resilience_worker_crash_and_lease_failover() {
     let lease1 = lease_manager.grant_lease("exec_900", "node_ast", "worker_1", 5000).expect("Grant worker_1");
     assert_eq!(lease1.worker_id, "worker_1");
 
-    // 2. Worker 2 attempts concurrent claim on node 1 -> rejected under Invariant 13
+    // 2. Worker 2 attempts concurrent claim on node 1 -> rejected under Invariant 12
     assert!(lease_manager.grant_lease("exec_900", "node_ast", "worker_2", 5000).is_err());
 
     // 3. Worker 1 crashes (lease revoked) -> Coordinator re-grants to Worker 2

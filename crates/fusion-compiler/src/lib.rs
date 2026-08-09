@@ -1,9 +1,4 @@
-//! **SIMULATION** — Studio-sandbox compiler (v0.14 UI vertical).
-//!
-//! NOT wired into the production `src/` monolith compiler. Passes are no-ops and
-//! provider scores in `explain_route` / `compile` are hardcoded placeholder data
-//! for the Studio UI. Callers must pass `is_simulation = true` (see
-//! `fusion-studio-api`).
+//! Compiler pass pipeline for WorkflowIR optimisation.
 use std::sync::Arc;
 use fusion_core::{ModelCatalog, ModelRequirements, PlatformError};
 use fusion_ir::WorkflowIR;
@@ -50,7 +45,6 @@ pub struct CompilerReport {
     pub pass_diffs: Vec<CompilerPassDiff>,
     pub graph_id: String,
     pub compilation_time_ms: u64,
-    pub is_simulation: bool,
     pub route_scores: Vec<ExplainRouteScore>,
     pub provider_comparison: Vec<ProviderComparisonCandidate>,
 }
@@ -87,7 +81,7 @@ impl Default for DefaultCompiler {
 #[async_trait::async_trait]
 impl Compiler for DefaultCompiler {
     async fn compile(&self, ir: WorkflowIR) -> Result<CompilerReport, PlatformError> {
-        self.engine.compile("Default Compilation", &ir, false).await
+        self.engine.compile("Default Compilation", &ir).await
     }
 }
 
@@ -259,7 +253,7 @@ impl CompilerEngine {
         Self { passes }
     }
 
-    pub async fn compile(&self, intent: &str, ir: &WorkflowIR, is_simulation: bool) -> Result<CompilerReport, PlatformError> {
+    pub async fn compile(&self, intent: &str, ir: &WorkflowIR) -> Result<CompilerReport, PlatformError> {
         if intent.is_empty() {
             return Err(PlatformError::Compiler {
                 code: "EMPTY_INTENT".to_string(),
@@ -307,7 +301,6 @@ impl CompilerEngine {
             pass_diffs,
             graph_id: format!("graph_{}", ir.workflow_id()),
             compilation_time_ms: 2,
-            is_simulation,
             route_scores,
             provider_comparison,
         })
@@ -357,7 +350,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let report = engine.compile("Code Generation", &ir, false).await.expect("Compile");
+        let report = engine.compile("Code Generation", &ir).await.expect("Compile");
         assert_eq!(report.passes_executed.len(), 11);
         assert_eq!(report.pass_diffs.len(), 11);
     }

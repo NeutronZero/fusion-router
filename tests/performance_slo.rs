@@ -33,7 +33,7 @@ async fn test_performance_slo_certification_suite() {
     // 2. Compiler Latency SLO Target (< 20 ms)
     let start_compiler = Instant::now();
     let compiler = CompilerEngine::new();
-    let report = compiler.compile(prompt, &ir, false).await.expect("Compile");
+    let report = compiler.compile(prompt, &ir).await.expect("Compile");
     let compiler_dur_ms = start_compiler.elapsed().as_millis();
     assert!(compiler_dur_ms < 20, "Compiler latency must be < 20ms (actual: {compiler_dur_ms}ms)");
     assert_eq!(report.passes_executed.len(), 11);

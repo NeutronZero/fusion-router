@@ -14,7 +14,7 @@ async fn test_beta_compiler_inspector_journey() {
         .build()
         .expect("build ir");
 
-    let report = engine.compile("Build AST Parser", &ir, false).await.expect("Compile");
+    let report = engine.compile("Build AST Parser", &ir).await.expect("Compile");
 
     // 1. Tab 1: Summary Validation
     assert_eq!(report.intent, "Build AST Parser");

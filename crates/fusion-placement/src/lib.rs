@@ -223,7 +223,7 @@ impl Default for PlacementEngine {
 }
 
 // =========================================================================
-// SPRINT 3: Execution Lease Manager (Invariant 13)
+// SPRINT 3: Execution Lease Manager (Invariant 12)
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,7 +256,7 @@ impl ExecutionLeaseManager {
         }
     }
 
-    /// Grants an exclusive, single-worker lease under Invariant 13.
+    /// Grants an exclusive, single-worker lease under Invariant 12.
     pub fn grant_lease(&self, exec_id: &str, node_id: &str, worker_id: &str, ttl_ms: u64) -> Result<ExecutionLease, PlatformError> {
         let lease_key = format!("lease:{}:{}:{}", exec_id, node_id, worker_id);
         let now_ms = std::time::SystemTime::now()
@@ -267,7 +267,7 @@ impl ExecutionLeaseManager {
         let mut map = self.leases.write().unwrap_or_else(|e| e.into_inner());
         let mut prev_epoch = 0u64;
 
-        // Enforce Invariant 13: Single-Worker Lease Exclusivity & Expiration
+        // Enforce Invariant 12: Single-Worker Lease Exclusivity & Expiration
         for existing in map.values() {
             if existing.execution_id == exec_id && existing.node_id == node_id {
                 if !existing.is_expired(now_ms) {
@@ -358,7 +358,7 @@ mod tests {
         let lease1 = manager.grant_lease("exec_100", "n1", "w1", 30000).expect("Grant lease 1");
         assert_eq!(lease1.epoch, 1);
 
-        // Attempting to grant the same node to w2 must be rejected under Invariant 13
+        // Attempting to grant the same node to w2 must be rejected under Invariant 12
         let err = manager.grant_lease("exec_100", "n1", "w2", 30000);
         assert!(err.is_err(), "Must reject concurrent lease on same node to different worker");
 

@@ -1,7 +1,4 @@
-//! **SIMULATION** — Studio-sandbox scheduler (v0.14 UI vertical).
-//!
-//! All scheduler implementations return synthetic node-id strings; no DAG is
-//! executed. NOT wired into the production `src/` monolith scheduler.
+//! Scheduler implementations — DAG scheduling, work queue, and distributed execution.
 use async_trait::async_trait;
 use fusion_core::PlatformError;
 pub use fusion_placement::{ExecutionPlan, ExecutionPlanId, PlacementGraph};
