@@ -155,6 +155,24 @@ impl GroundTruth {
             GroundTruth::Struct(gt) => gt.must_not_contain.as_deref(),
         }
     }
+    fn tests(&self) -> Option<&[String]> {
+        match self {
+            GroundTruth::Simple(_) => None,
+            GroundTruth::Struct(gt) => gt.tests.as_deref(),
+        }
+    }
+    fn test_strings_match(&self) -> Option<&[String]> {
+        match self {
+            GroundTruth::Simple(_) => None,
+            GroundTruth::Struct(gt) => gt.test_strings_match.as_deref(),
+        }
+    }
+    fn test_strings_no_match(&self) -> Option<&[String]> {
+        match self {
+            GroundTruth::Simple(_) => None,
+            GroundTruth::Struct(gt) => gt.test_strings_no_match.as_deref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -168,6 +186,14 @@ struct GroundTruthStruct {
     must_contain: Option<Vec<String>>,
     #[serde(default)]
     must_not_contain: Option<Vec<String>>,
+    #[serde(default)]
+    test_strings_match: Option<Vec<String>>,
+    #[serde(default)]
+    test_strings_no_match: Option<Vec<String>>,
+    #[serde(default)]
+    tests: Option<Vec<String>>,
+    #[serde(default)]
+    note: Option<String>,
 }
 
 fn de_value_to_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -205,6 +231,19 @@ struct RubricDimension {
 
 // ── Run result types ────────────────────────────────────────────
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum RunStatus {
+    /// Model answered and score was computed
+    Scored,
+    /// API call failed (auth, network, timeout) — score is meaningless
+    ApiError,
+    /// Scoring method failed (Python not installed, judge LLM error, etc.)
+    ScoreError,
+    /// Task had no output to score
+    NoOutput,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct RunResult {
     task_id: String,
@@ -217,6 +256,7 @@ struct RunResult {
     tokens: u64,
     call_count: u32,
     model_used: String,
+    status: RunStatus,
     error: Option<String>,
 }
 
@@ -238,11 +278,93 @@ struct ConditionStats {
     mean_tokens: f64,
     mean_call_count: f64,
     n: usize,
+    n_scored: usize,
+    n_api_errors: usize,
+    n_score_errors: usize,
+    /// Latency note: B/C include scheduler retry backoff (max_retries=2,
+    /// backoff_ms=1000) which adds ~1.65s average even for fast-fail errors.
+    /// This is real pipeline behavior, not a harness artifact.
+    latency_note: String,
 }
 
 // ── Scoring ─────────────────────────────────────────────────────
 
-fn score_output(task: &TaskDef, output: &str) -> f64 {
+/// Strip markdown code fences from LLM output (```python ... ``` or ``` ... ```).
+fn strip_code_fences(s: &str) -> String {
+    let trimmed = s.trim();
+    if let Some(inner) = trimmed.strip_prefix("```").and_then(|rest| rest.strip_suffix("```")) {
+        // Remove optional language tag from first line
+        if let Some(newline_pos) = inner.find('\n') {
+            let first_line = &inner[..newline_pos];
+            if first_line.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+                return inner[newline_pos + 1..].trim().to_string();
+            }
+        }
+        return inner.trim().to_string();
+    }
+    trimmed.to_string()
+}
+
+/// Execute Python code and return (stdout, exit_ok).
+fn run_python(code: &str, timeout_secs: u64) -> (String, bool) {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let Ok(mut child) = Command::new("python3")
+        .arg("-c")
+        .arg(code)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    .or_else(|_| {
+        Command::new("python")
+            .arg("-c")
+            .arg(code)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    }) else {
+        return ("PYTHON_NOT_AVAILABLE".to_string(), false);
+    };
+
+    // Wait with timeout
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = child
+                    .stdout
+                    .as_mut()
+                    .and_then(|o| {
+                        let mut buf = String::new();
+                        o.read_to_string(&mut buf).ok();
+                        Some(buf)
+                    })
+                    .unwrap_or_default();
+                return (stdout, status.success());
+            }
+            Ok(None) => {
+                if start.elapsed().as_secs() >= timeout_secs {
+                    let _ = child.kill();
+                    return ("TIMEOUT".to_string(), false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => {
+                return (format!("SPAWN_ERROR: {}", e), false);
+            }
+        }
+    }
+}
+
+fn score_output(task: &TaskDef, output: &str, judge_provider: Option<&dyn ChatProvider>) -> (f64, RunStatus) {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return (0.0, RunStatus::NoOutput);
+    }
+
     match task.scoring {
         ScoringMethod::ExactMatch => {
             let expected = task
@@ -250,64 +372,146 @@ fn score_output(task: &TaskDef, output: &str) -> f64 {
                 .as_ref()
                 .and_then(|gt| gt.value())
                 .unwrap_or_default();
-            let normalised = output.trim().to_lowercase();
+            let normalised = trimmed.to_lowercase();
             let expected_normalised = expected.trim().to_lowercase();
             if normalised == expected_normalised {
-                1.0
+                (1.0, RunStatus::Scored)
             } else {
-                0.0
+                (0.0, RunStatus::Scored)
             }
         }
         ScoringMethod::NumericTolerance => {
-            let gt = task.ground_truth.as_ref().expect("numeric_tolerance requires ground_truth");
+            let gt = task
+                .ground_truth
+                .as_ref()
+                .expect("numeric_tolerance requires ground_truth");
             let expected_val: f64 = gt
                 .value()
                 .as_ref()
                 .and_then(|v| v.parse().ok())
                 .expect("ground_truth.value must be a number");
             let tolerance = gt.tolerance();
-            let parsed: Option<f64> = output.trim().parse().ok();
+            let parsed: Option<f64> = trimmed.parse().ok();
             match parsed {
-                Some(v) if (v - expected_val).abs() <= tolerance => 1.0,
-                _ => 0.0,
+                Some(v) if (v - expected_val).abs() <= tolerance => (1.0, RunStatus::Scored),
+                _ => (0.0, RunStatus::Scored),
             }
         }
         ScoringMethod::ContainsCheck => {
-            let gt = task.ground_truth.as_ref().expect("contains_check requires ground_truth");
+            let gt = task
+                .ground_truth
+                .as_ref()
+                .expect("contains_check requires ground_truth");
             let mut score = 1.0;
             if let Some(must) = gt.must_contain() {
                 for s in must {
-                    if !output.to_lowercase().contains(&s.to_lowercase()) {
+                    if !trimmed.to_lowercase().contains(&s.to_lowercase()) {
                         score = 0.0;
                     }
                 }
             }
             if let Some(must_not) = gt.must_not_contain() {
                 for s in must_not {
-                    if output.to_lowercase().contains(&s.to_lowercase()) {
+                    if trimmed.to_lowercase().contains(&s.to_lowercase()) {
                         score = 0.0;
                     }
                 }
             }
-            score
+            (score, RunStatus::Scored)
         }
         ScoringMethod::UnitTest => {
-            if output.contains("def ") || output.contains("class ") {
-                0.5
+            let code = strip_code_fences(trimmed);
+            let gt = match task.ground_truth.as_ref() {
+                Some(gt) => gt,
+                None => return (0.0, RunStatus::ScoreError),
+            };
+            let tests = match gt.tests() {
+                Some(t) => t,
+                None => return (0.0, RunStatus::ScoreError),
+            };
+
+            // Build a test script: define the function, then run assertions
+            let mut script = format!("{}\n\n", code);
+            for test in tests {
+                // Wrap bare assertions in a test function
+                script.push_str(&format!(
+                    "result = {}\nassert result == {} or str(result) == str({}), f'{{result}} != {}'\n",
+                    test.trim_end_matches('\n'),
+                    test.split("==").nth(1).unwrap_or("").trim(),
+                    test.split("==").nth(1).unwrap_or("").trim(),
+                    test.split("==").nth(1).unwrap_or("").trim(),
+                ));
+            }
+            script.push_str("print('ALL_TESTS_PASSED')\n");
+
+            let (output, success) = run_python(&script, 10);
+            if output.contains("PYTHON_NOT_AVAILABLE") {
+                (0.0, RunStatus::ScoreError)
+            } else if success && output.contains("ALL_TESTS_PASSED") {
+                (1.0, RunStatus::Scored)
             } else {
-                0.0
+                (0.0, RunStatus::Scored)
             }
         }
         ScoringMethod::RegexMatch => {
-            if output.contains('^') || output.contains('$') || output.contains('\\') {
-                1.0
+            let code = strip_code_fences(trimmed);
+            let gt = match task.ground_truth.as_ref() {
+                Some(gt) => gt,
+                None => return (0.0, RunStatus::ScoreError),
+            };
+
+            let mut test_cases = String::new();
+            if let Some(must_match) = gt.test_strings_match() {
+                for s in must_match {
+                    test_cases.push_str(&format!(
+                        "assert re.search(pattern, r'{}'), f'Pattern did not match: {}'\n",
+                        s.replace('\'', "\\'"),
+                        s
+                    ));
+                }
+            }
+            if let Some(must_not_match) = gt.test_strings_no_match() {
+                for s in must_not_match {
+                    test_cases.push_str(&format!(
+                        "assert not re.search(pattern, r'{}'), f'Pattern should not match: {}'\n",
+                        s.replace('\'', "\\'"),
+                        s
+                    ));
+                }
+            }
+
+            let script = format!(
+                "import re\ntry:\n    pattern = r'{}'\n    re.compile(pattern)\nexcept re.error as e:\n    print(f'INVALID_REGEX: {{e}}')\n    exit(1)\n{}\nprint('REGEX_PASSED')\n",
+                code.replace('\'', "\\'"),
+                test_cases
+                    .lines()
+                    .map(|l| format!("    {}", l))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+
+            let (output, success) = run_python(&script, 10);
+            if output.contains("PYTHON_NOT_AVAILABLE") {
+                (0.0, RunStatus::ScoreError)
+            } else if output.contains("INVALID_REGEX") {
+                (0.0, RunStatus::Scored)
+            } else if success && output.contains("REGEX_PASSED") {
+                (1.0, RunStatus::Scored)
             } else {
-                0.5
+                (0.0, RunStatus::Scored)
             }
         }
         ScoringMethod::Rubric => {
-            // Stubbed — needs LLM judge in full mode
-            0.0
+            let provider = match judge_provider {
+                Some(p) => p,
+                None => return (0.0, RunStatus::ScoreError),
+            };
+            let rubric = match &task.rubric {
+                Some(r) => r,
+                None => return (0.0, RunStatus::ScoreError),
+            };
+            let score = score_rubric(task, trimmed, provider);
+            (score, RunStatus::Scored)
         }
     }
 }
@@ -463,18 +667,20 @@ async fn run_condition_a(
             let usage = resp.usage.as_ref();
             let tokens = usage.map(|u| u.total_tokens as u64).unwrap_or(0);
             let cost = estimate_cost(model, usage);
+            let (quality, status) = score_output(task, &output, None);
 
             RunResult {
                 task_id: task.id.clone(),
                 condition: "A".to_string(),
                 run_index: 0,
                 output: output.clone(),
-                quality_score: score_output(task, &output),
+                quality_score: quality,
                 cost_usd: cost,
                 latency_ms: latency,
                 tokens,
                 call_count: 1,
                 model_used: model.to_string(),
+                status,
                 error: None,
             }
         }
@@ -489,6 +695,7 @@ async fn run_condition_a(
             tokens: 0,
             call_count: 0,
             model_used: model.to_string(),
+            status: RunStatus::ApiError,
             error: Some(e.to_string()),
         },
     }
@@ -607,6 +814,7 @@ async fn run_condition_b(
                 tokens: 0,
                 call_count: 0,
                 model_used: baseline_model.to_string(),
+                status: RunStatus::ApiError,
                 error: Some(format!("compile error: {}", e)),
             }
         }
@@ -649,18 +857,20 @@ async fn run_condition_b(
             };
 
             let model_used = extract_model_from_graph(&instance.graph);
+            let (quality, status) = score_output(task, &output, None);
 
             RunResult {
                 task_id: task.id.clone(),
                 condition: "B".to_string(),
                 run_index: 0,
                 output: output.clone(),
-                quality_score: score_output(task, &output),
+                quality_score: quality,
                 cost_usd: exec_result.total_cost,
                 latency_ms: latency,
                 tokens: exec_result.total_tokens,
                 call_count: count_llm_nodes(&instance.graph),
                 model_used,
+                status,
                 error: None,
             }
         }
@@ -675,6 +885,7 @@ async fn run_condition_b(
             tokens: 0,
             call_count: 0,
             model_used: baseline_model.to_string(),
+            status: RunStatus::ApiError,
             error: Some(format!("execution error: {}", e)),
         },
     }
@@ -718,6 +929,7 @@ async fn run_condition_c(
                 tokens: 0,
                 call_count: 0,
                 model_used: baseline_model.to_string(),
+                status: RunStatus::ApiError,
                 error: Some(format!("compile error: {}", e)),
             }
         }
@@ -759,18 +971,20 @@ async fn run_condition_c(
             };
 
             let model_used = extract_model_from_graph(&instance.graph);
+            let (quality, status) = score_output(task, &output, None);
 
             RunResult {
                 task_id: task.id.clone(),
                 condition: "C".to_string(),
                 run_index: 0,
                 output: output.clone(),
-                quality_score: score_output(task, &output),
+                quality_score: quality,
                 cost_usd: exec_result.total_cost,
                 latency_ms: latency,
                 tokens: exec_result.total_tokens,
                 call_count: count_llm_nodes(&instance.graph),
                 model_used,
+                status,
                 error: None,
             }
         }
@@ -785,6 +999,7 @@ async fn run_condition_c(
             tokens: 0,
             call_count: 0,
             model_used: baseline_model.to_string(),
+            status: RunStatus::ApiError,
             error: Some(format!("execution error: {}", e)),
         },
     }
@@ -843,25 +1058,32 @@ fn compute_condition_stats(results: &[&RunResult]) -> ConditionStats {
             mean_tokens: 0.0,
             mean_call_count: 0.0,
             n: 0,
+            n_scored: 0,
+            n_api_errors: 0,
+            n_score_errors: 0,
+            latency_note: String::new(),
         };
     }
 
     let n = results.len() as f64;
-    let mean_quality = results.iter().map(|r| r.quality_score).sum::<f64>() / n;
+    let n_scored = results.iter().filter(|r| r.status == RunStatus::Scored).count();
+    let n_api_errors = results.iter().filter(|r| r.status == RunStatus::ApiError).count();
+    let n_score_errors = results.iter().filter(|r| r.status == RunStatus::ScoreError).count();
+
+    // Only compute mean quality over scored results (not failed ones)
+    let scored: Vec<f64> = results.iter().filter(|r| r.status == RunStatus::Scored).map(|r| r.quality_score).collect();
+    let mean_quality = if scored.is_empty() { 0.0 } else { scored.iter().sum::<f64>() / scored.len() as f64 };
+    let variance = if scored.is_empty() {
+        0.0
+    } else {
+        scored.iter().map(|s| (s - mean_quality).powi(2)).sum::<f64>() / scored.len() as f64
+    };
+    let stddev = variance.sqrt();
+
     let mean_cost = results.iter().map(|r| r.cost_usd).sum::<f64>() / n;
     let mean_latency = results.iter().map(|r| r.latency_ms as f64).sum::<f64>() / n;
     let mean_tokens = results.iter().map(|r| r.tokens as f64).sum::<f64>() / n;
     let mean_calls = results.iter().map(|r| r.call_count as f64).sum::<f64>() / n;
-
-    let variance = results
-        .iter()
-        .map(|r| {
-            let diff = r.quality_score - mean_quality;
-            diff * diff
-        })
-        .sum::<f64>()
-        / n;
-    let stddev = variance.sqrt();
 
     ConditionStats {
         mean_quality,
@@ -871,6 +1093,10 @@ fn compute_condition_stats(results: &[&RunResult]) -> ConditionStats {
         mean_tokens,
         mean_call_count: mean_calls,
         n: results.len(),
+        n_scored,
+        n_api_errors,
+        n_score_errors,
+        latency_note: "B/C latency includes scheduler retry backoff (max_retries=2, backoff_ms=1000), adding ~1.65s avg even for fast-fail errors. Real pipeline behavior.".to_string(),
     }
 }
 
@@ -937,21 +1163,15 @@ fn print_report(reports: &[BucketReport]) {
     println!("\n{}", "=".repeat(60));
     println!("  fusion-router eval report");
     println!("{}", "=".repeat(60));
+    println!("  Note: B/C latency includes scheduler retry backoff (~1.65s avg).");
+    println!("        quality is computed over scored runs only (failures excluded).");
+    println!();
 
     for report in reports {
         println!("── {} ──", report.bucket);
-        println!("  A (naive baseline):    quality={:.2}±{:.2}  cost=${:.4}  latency={:.0}ms  tokens={:.0}  calls={:.1}  n={}",
-            report.condition_a.mean_quality, report.condition_a.stddev_quality,
-            report.condition_a.mean_cost_usd, report.condition_a.mean_latency_ms,
-            report.condition_a.mean_tokens, report.condition_a.mean_call_count, report.condition_a.n);
-        println!("  B (routed-single):     quality={:.2}±{:.2}  cost=${:.4}  latency={:.0}ms  tokens={:.0}  calls={:.1}  n={}",
-            report.condition_b.mean_quality, report.condition_b.stddev_quality,
-            report.condition_b.mean_cost_usd, report.condition_b.mean_latency_ms,
-            report.condition_b.mean_tokens, report.condition_b.mean_call_count, report.condition_b.n);
-        println!("  C (full fusion-router): quality={:.2}±{:.2}  cost=${:.4}  latency={:.0}ms  tokens={:.0}  calls={:.1}  n={}",
-            report.condition_c.mean_quality, report.condition_c.stddev_quality,
-            report.condition_c.mean_cost_usd, report.condition_c.mean_latency_ms,
-            report.condition_c.mean_tokens, report.condition_c.mean_call_count, report.condition_c.n);
+        print_condition("A", &report.condition_a);
+        print_condition("B", &report.condition_b);
+        print_condition("C", &report.condition_c);
 
         let a_to_c_quality = report.condition_c.mean_quality - report.condition_a.mean_quality;
         let a_to_c_cost = report.condition_c.mean_cost_usd - report.condition_a.mean_cost_usd;
@@ -961,6 +1181,44 @@ fn print_report(reports: &[BucketReport]) {
         );
         println!();
     }
+}
+
+fn print_condition(label: &str, stats: &ConditionStats) {
+    let tag = match label {
+        "A" => "A (naive baseline) ",
+        "B" => "B (routed-single)  ",
+        "C" => "C (full fusion     ",
+        _ => label,
+    };
+    let errors = stats.n_api_errors + stats.n_score_errors;
+    let no_output = stats.n - stats.n_scored - errors;
+    let error_str = if errors > 0 || no_output > 0 {
+        let mut parts = Vec::new();
+        if stats.n_api_errors > 0 {
+            parts.push(format!("{} api", stats.n_api_errors));
+        }
+        if stats.n_score_errors > 0 {
+            parts.push(format!("{} score", stats.n_score_errors));
+        }
+        if no_output > 0 {
+            parts.push(format!("{} no_output", no_output));
+        }
+        format!("  ⚠ {}/{} failed ({})", stats.n - stats.n_scored, stats.n, parts.join(", "))
+    } else {
+        format!("  ✓ all {}/{} scored", stats.n_scored, stats.n)
+    };
+    println!(
+        "  {} quality={:.2}±{:.2}  cost=${:.4}  latency={:.0}ms  tokens={:.0}  calls={:.1}  n={}{}",
+        tag,
+        stats.mean_quality,
+        stats.stddev_quality,
+        stats.mean_cost_usd,
+        stats.mean_latency_ms,
+        stats.mean_tokens,
+        stats.mean_call_count,
+        stats.n,
+        error_str,
+    );
 }
 
 // ── Main ────────────────────────────────────────────────────────
