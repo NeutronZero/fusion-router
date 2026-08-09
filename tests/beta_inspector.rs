@@ -25,8 +25,9 @@ async fn test_beta_compiler_inspector_journey() {
     assert_eq!(report.provider_comparison.len(), 3);
     assert_eq!(report.provider_comparison[0].provider_name, "openrouter");
     // All providers have same total_score (1.0 from budget_score only),
-    // so all are "Selected" (ADR-039: scores not yet differentiated)
-    assert_eq!(report.provider_comparison[0].status, "Selected");
+    // so first is "Alternative" not "Selected" — tied, not uniquely best (ADR-039 D2)
+    assert_eq!(report.provider_comparison[0].status, "Alternative");
+    assert!(report.provider_comparison[0].reason.contains("Tied with"));
 
     // 3. Tab 3: Compiler Pass Explorer & Pass Diffs
     assert_eq!(report.pass_diffs.len(), 11);

@@ -383,17 +383,32 @@ impl CompilerEngine {
 
         let best_score = ranked[0].total_score;
 
+        // Count how many providers share the top score
+        let tied_at_top = ranked.iter()
+            .filter(|s| s.total_score == best_score)
+            .count();
+        let unique_best = tied_at_top == 1;
+
         ranked.into_iter().enumerate().map(|(i, score)| {
-            let status = match i {
-                0 => "Selected",
-                _ if score.total_score >= best_score * 0.9 => "Alternative",
-                _ => "Filtered",
+            let status = if score.total_score == 0.0 {
+                "Unscored"
+            } else if i == 0 && unique_best {
+                "Selected"
+            } else if score.total_score >= best_score * 0.9 {
+                "Alternative"
+            } else {
+                "Filtered"
             };
 
             let reason = if score.total_score == 0.0 {
                 "Score not computed — all sub-scores are None (see ADR-039)".to_string()
-            } else if i == 0 {
+            } else if i == 0 && unique_best {
                 format!("Highest total score ({:.2}) among evaluated providers", score.total_score)
+            } else if i == 0 && !unique_best {
+                format!(
+                    "Tied with {} other provider(s) at {:.2} — selected by position, not a computed decision (see ADR-039 D2)",
+                    tied_at_top - 1, score.total_score
+                )
             } else {
                 let delta = best_score - score.total_score;
                 if delta < 0.05 {
@@ -553,9 +568,10 @@ mod tests {
         ];
         let comparison = CompilerEngine::build_provider_comparison(&scores);
         assert_eq!(comparison.len(), 3);
-        // All scores are 1.0 (only budget_score wired), so first should be Selected
-        assert_eq!(comparison[0].status, "Selected");
-        assert!(comparison[0].reason.contains("Highest total score"));
+        // All scores are 1.0 (tied) — first is "Alternative" not "Selected"
+        // because no provider is uniquely best (see ADR-039 D2)
+        assert_eq!(comparison[0].status, "Alternative");
+        assert!(comparison[0].reason.contains("Tied with 2 other provider(s) at 1.00"));
     }
 
     #[test]
