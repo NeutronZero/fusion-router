@@ -262,6 +262,7 @@ impl CompilerEngine {
             });
         }
 
+        let compile_start = std::time::Instant::now();
         let mut current_ir = ir.clone();
         let mut pass_names = Vec::new();
         let mut pass_diffs = Vec::new();
@@ -282,6 +283,8 @@ impl CompilerEngine {
             });
         }
 
+        let compilation_time_ms = compile_start.elapsed().as_millis() as u64;
+
         let route_scores = vec![
             self.explain_route("openrouter"),
             self.explain_route("zen"),
@@ -300,7 +303,7 @@ impl CompilerEngine {
             passes_executed: pass_names,
             pass_diffs,
             graph_id: format!("graph_{}", ir.workflow_id()),
-            compilation_time_ms: 2,
+            compilation_time_ms,
             route_scores,
             provider_comparison,
         })
