@@ -284,13 +284,23 @@ mod tests {
 
     #[test]
     fn test_matches_keyword_variants() {
-        let availability = ModelAvailability::from_models(&[
-            "gpt-4".into(),
-            "gpt-4-turbo".into(),
-            "gpt-4.5".into(),
-            "my-gpt-4-custom".into(),
-            "my-gpt-4.custom".into(),
+        // True positives: exact match, prefix match with - or ., infix match bounded by - and -/.
+        let pos_availability = ModelAvailability::from_models(&[
+            "gpt-4".into(),             // Exact match
+            "gpt-4-turbo".into(),       // Prefix with '-'
+            "gpt-4.5".into(),           // Prefix with '.'
+            "my-gpt-4-custom".into(),    // Infix bounded by '-' and '-'
+            "my-gpt-4.custom".into(),    // Infix bounded by '-' and '.'
         ]);
-        assert!(availability.has_high_capability);
+        assert!(pos_availability.has_high_capability);
+
+        // True negatives: undelimited substring fragments must NOT match capability keywords.
+        let neg_availability = ModelAvailability::from_models(&[
+            "myclaude-opusmodel".into(), // Missing preceding dash
+            "fakegpt-4".into(),          // Missing preceding dash
+            "gpt-40".into(),             // Missing trailing dash/dot
+        ]);
+        assert!(!neg_availability.has_high_capability);
+        assert!(!neg_availability.has_medium_capability);
     }
 }

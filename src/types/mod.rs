@@ -212,7 +212,7 @@ impl StrategyKind {
             StrategyKind::Debate => std::borrow::Cow::Borrowed("Debate"),
             StrategyKind::ReAct => std::borrow::Cow::Borrowed("ReAct"),
             StrategyKind::Fusion => std::borrow::Cow::Borrowed("Fusion"),
-            StrategyKind::Custom(name) => std::borrow::Cow::Owned(format!("Custom({})", name)),
+            StrategyKind::Custom(name) => std::borrow::Cow::Owned(format!("Custom({name:?})")),
         }
     }
 }
@@ -554,4 +554,29 @@ pub enum SchedulerError {
     CyclicDependency,
     #[error("Internal error: {0}")]
     Internal(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strategy_kind_as_label_matches_debug_format() {
+        let variants = vec![
+            StrategyKind::Single,
+            StrategyKind::Consensus,
+            StrategyKind::Reflection,
+            StrategyKind::Chain,
+            StrategyKind::Debate,
+            StrategyKind::ReAct,
+            StrategyKind::Fusion,
+            StrategyKind::Custom("my_custom_strategy".to_string()),
+        ];
+
+        for variant in variants {
+            let expected = format!("{:?}", variant);
+            let actual = variant.as_label();
+            assert_eq!(actual, expected, "as_label must match Debug format for Prometheus metric label continuity");
+        }
+    }
 }
