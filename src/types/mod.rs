@@ -202,6 +202,21 @@ pub enum StrategyKind {
     Custom(String),
 }
 
+impl StrategyKind {
+    pub fn as_label(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            StrategyKind::Single => std::borrow::Cow::Borrowed("Single"),
+            StrategyKind::Consensus => std::borrow::Cow::Borrowed("Consensus"),
+            StrategyKind::Reflection => std::borrow::Cow::Borrowed("Reflection"),
+            StrategyKind::Chain => std::borrow::Cow::Borrowed("Chain"),
+            StrategyKind::Debate => std::borrow::Cow::Borrowed("Debate"),
+            StrategyKind::ReAct => std::borrow::Cow::Borrowed("ReAct"),
+            StrategyKind::Fusion => std::borrow::Cow::Borrowed("Fusion"),
+            StrategyKind::Custom(name) => std::borrow::Cow::Owned(format!("Custom({})", name)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionGraph {
     pub graph_id: Uuid,
@@ -274,10 +289,12 @@ pub struct FallbackConfig {
     pub provider: String,
 }
 
+use std::sync::Arc;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionInstance {
     pub instance_id: Uuid,
-    pub graph: ExecutionGraph,
+    pub graph: Arc<ExecutionGraph>,
     pub node_states: HashMap<Uuid, NodeState>,
     pub outputs: HashMap<Uuid, serde_json::Value>,
     pub reservation_id: Uuid,

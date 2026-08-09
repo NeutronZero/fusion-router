@@ -39,14 +39,14 @@ impl DefaultScheduler {
 impl crate::scheduler::Scheduler for DefaultScheduler {
     #[tracing::instrument(skip(self, graph), fields(node_count = graph.nodes.len()))]
     fn schedule(&self, graph: ExecutionGraph, reservation: ReservationId) -> ExecutionInstance {
-        let mut node_states = HashMap::new();
+        let mut node_states = HashMap::with_capacity(graph.nodes.len());
         for node in &graph.nodes {
             node_states.insert(node.id, NodeState::Pending);
         }
 
         ExecutionInstance {
             instance_id: Uuid::new_v4(),
-            graph,
+            graph: std::sync::Arc::new(graph),
             node_states,
             outputs: HashMap::new(),
             reservation_id: reservation.0,
@@ -92,11 +92,12 @@ impl DefaultScheduler {
         let start = Instant::now();
         let mut total_tokens: u64 = 0;
         let mut total_cost: f64 = 0.0;
-        let mut retry_counts: HashMap<Uuid, u32> = HashMap::new();
-        let mut retry_backoffs: HashMap<Uuid, Backoff> = HashMap::new();
-        let mut loop_iterations: HashMap<Uuid, u32> = HashMap::new();
+        let n_nodes = instance.graph.nodes.len();
+        let mut retry_counts: HashMap<Uuid, u32> = HashMap::with_capacity(n_nodes);
+        let mut retry_backoffs: HashMap<Uuid, Backoff> = HashMap::with_capacity(n_nodes);
+        let mut loop_iterations: HashMap<Uuid, u32> = HashMap::with_capacity(n_nodes);
 
-        let mut queue = WorkQueue::new(instance.graph.clone());
+        let mut queue = WorkQueue::new(std::sync::Arc::clone(&instance.graph));
 
         // Frozen graph: node positions never change, so an id -> index map
         // turns repeated linear scans into O(1) lookups.
@@ -142,35 +143,37 @@ impl DefaultScheduler {
                 instance.node_states.insert(id, NodeState::Running);
             }
 
-            let node_clones: Vec<_> = ready_ids
-                .iter()
-                .map(|id| queue.graph().nodes[node_index[id]].clone())
-                .collect();
+            let graph = std::sync::Arc::clone(&instance.graph);
             let mut handles = Vec::new();
 
-            for node in node_clones {
-                let span = info_span!("exec_node", node_id = %node.id, instance_id = %instance.instance_id, kind = ?node.kind);
+            for &id in &ready_ids {
+                let node_idx = node_index[&id];
+                let node_id = id;
+                let node_kind = graph.nodes[node_idx].kind.clone();
+                let span = info_span!("exec_node", node_id = %node_id, instance_id = %instance.instance_id, kind = ?node_kind);
                 let cancel_token = cancel.cloned();
+                let graph = std::sync::Arc::clone(&graph);
                 handles.push(
                     async move {
+                        let node = &graph.nodes[node_idx];
                         if let Some(token) = cancel_token {
                             tokio::select! {
                                 biased;
                                 _ = token.cancelled() => {
-                                    (node.id, NodeExecutionResult {
+                                    (node_id, NodeExecutionResult {
                                         state: NodeState::Failed("Cancelled by client".into()),
                                         usage: None,
                                         latency_ms: 0,
                                         output: None,
                                     })
                                 }
-                                result = executor.execute_node(&node) => {
-                                    (node.id, result)
+                                result = executor.execute_node(node) => {
+                                    (node_id, result)
                                 }
                             }
                         } else {
-                            let result = executor.execute_node(&node).await;
-                            (node.id, result)
+                            let result = executor.execute_node(node).await;
+                            (node_id, result)
                         }
                     }
                     .instrument(span),
@@ -232,27 +235,21 @@ impl DefaultScheduler {
 
                         let node_kind = Some(queue.graph().nodes[node_index[&node_id]].kind.clone());
 
-                        let edges: Vec<_> = queue.graph().edges.iter()
-                            .filter(|e| e.from == node_id || e.to == node_id)
-                            .cloned()
-                            .collect();
-
                         match node_kind {
                             Some(ExecutionNodeKind::Conditional) => {
                                 queue.mark_conditional_completed(node_id);
                                 let result_val = instance.outputs.get(&node_id)
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("true");
-                                for edge in &edges {
-                                    if edge.from == node_id {
-                                        let matches = match edge.condition.as_deref() {
-                                            Some(cond) => cond == result_val,
-                                            None => true,
-                                        };
-                                        if matches {
-                                            queue.activate_edge(edge.from, edge.to);
-                                        }
-                                    }
+                                let matched_targets: Vec<Uuid> = queue.outgoing_edges(node_id).iter()
+                                    .filter(|e| match e.condition.as_deref() {
+                                        Some(cond) => cond == result_val,
+                                        None => true,
+                                    })
+                                    .map(|e| e.to)
+                                    .collect();
+                                for to in matched_targets {
+                                    queue.activate_edge(node_id, to);
                                 }
                             }
                             Some(ExecutionNodeKind::Loop) => {
@@ -260,12 +257,8 @@ impl DefaultScheduler {
                                 let should_continue = instance.outputs.get(&node_id)
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
-                                let outgoing: Vec<_> = edges.iter()
-                                    .filter(|e| e.from == node_id)
-                                    .cloned()
-                                    .collect();
                                 if should_continue {
-                                    let body_ids: Vec<Uuid> = outgoing.iter()
+                                    let body_ids: Vec<Uuid> = queue.outgoing_edges(node_id).iter()
                                         .filter(|e| e.condition.as_deref() != Some("exit"))
                                         .map(|e| e.to)
                                         .collect();
@@ -274,22 +267,19 @@ impl DefaultScheduler {
                                     }
                                     queue.reset_loop_body(&body_ids);
                                 } else {
-                                    for edge in &outgoing {
-                                        if edge.condition.as_deref() == Some("exit") {
-                                            queue.activate_edge(edge.from, edge.to);
-                                        }
+                                    let exit_targets: Vec<Uuid> = queue.outgoing_edges(node_id).iter()
+                                        .filter(|e| e.condition.as_deref() == Some("exit"))
+                                        .map(|e| e.to)
+                                        .collect();
+                                    for to in exit_targets {
+                                        queue.activate_edge(node_id, to);
                                     }
                                 }
                             }
                             _ => {
                                 queue.mark_completed(node_id);
-                                let has_loop_back = edges.iter()
-                                    .any(|e| e.from == node_id && e.condition.as_deref() == Some("loop"));
-                                let loop_target = edges.iter()
-                                    .find(|e| e.from == node_id && e.condition.as_deref() == Some("loop"))
-                                    .map(|e| e.to);
-                                if has_loop_back {
-                                    if let Some(loop_node_id) = loop_target {
+                                if queue.has_loop_back_edge(node_id) {
+                                    if let Some(loop_node_id) = queue.loop_back_target(node_id) {
                                         let iter_count = loop_iterations.entry(loop_node_id).or_insert(0);
                                         let max_iters = queue.graph().nodes[node_index[&loop_node_id]]
                                             .config
@@ -304,11 +294,7 @@ impl DefaultScheduler {
                                                 max = max_iters,
                                                 "Loop iteration"
                                             );
-                                            let loop_outgoing: Vec<_> = queue.graph().edges.iter()
-                                                .filter(|e| e.from == loop_node_id)
-                                                .cloned()
-                                                .collect();
-                                            let body_ids: Vec<Uuid> = loop_outgoing.iter()
+                                            let body_ids: Vec<Uuid> = queue.outgoing_edges(loop_node_id).iter()
                                                 .filter(|e| e.condition.as_deref() != Some("exit"))
                                                 .map(|e| e.to)
                                                 .collect();
@@ -328,87 +314,79 @@ impl DefaultScheduler {
                     NodeState::Failed(reason) => {
                         info!(node_id = ?node_id, reason = %reason, latency_ms = latency, "Node failed");
                         let retries = retry_counts.entry(node_id).or_insert(0);
+                        let node = &queue.graph().nodes[node_index[&node_id]];
 
-                        let node_config = Some(queue.graph().nodes[node_index[&node_id]].clone());
-
-                        if let Some(node) = node_config {
-                            if *retries < node.retry_policy.max_retries {
-                                *retries += 1;
+                        if *retries < node.retry_policy.max_retries {
+                            *retries += 1;
+                            info!(
+                                node_id = ?node_id,
+                                attempt = *retries,
+                                max = node.retry_policy.max_retries,
+                                "Retrying node after backoff"
+                            );
+                            if node.retry_policy.backoff_ms > 0 {
+                                let max_ms = node.retry_policy
+                                    .backoff_ms
+                                    .saturating_mul(10);
+                                let backoff = retry_backoffs
+                                    .entry(node_id)
+                                    .or_insert_with(|| Backoff::new(
+                                        node.retry_policy.backoff_ms,
+                                        max_ms,
+                                    ));
+                                tokio::time::sleep(backoff.next()).await;
+                            }
+                            instance.node_states.insert(node_id, NodeState::Pending);
+                            queue.reset_ready(node_id);
+                        } else {
+                            retry_backoffs.remove(&node_id);
+                            if let Some(ref fallback) = node.fallback {
                                 info!(
                                     node_id = ?node_id,
-                                    attempt = *retries,
-                                    max = node.retry_policy.max_retries,
-                                    "Retrying node after backoff"
+                                    fallback_model = %fallback.model,
+                                    "Attempting fallback execution"
                                 );
-                                if node.retry_policy.backoff_ms > 0 {
-                                    let max_ms = node.retry_policy
-                                        .backoff_ms
-                                        .saturating_mul(10);
-                                    let backoff = retry_backoffs
-                                        .entry(node_id)
-                                        .or_insert_with(|| Backoff::new(
-                                            node.retry_policy.backoff_ms,
-                                            max_ms,
-                                        ));
-                                    tokio::time::sleep(backoff.next()).await;
-                                }
-                                instance.node_states.insert(node_id, NodeState::Pending);
-                                queue.reset_ready(node_id);
-                            } else {
-                                retry_backoffs.remove(&node_id);
-                                if let Some(ref fallback) = node.fallback {
-                                    info!(
-                                        node_id = ?node_id,
-                                        fallback_model = %fallback.model,
-                                        "Attempting fallback execution"
-                                    );
-                                    let mut fallback_node = node.clone();
-                                    fallback_node.model = fallback.model.clone();
-                                    let fb_result = executor.execute_node(&fallback_node).await;
-                                    match fb_result.state {
-                                        NodeState::Succeeded => {
-                                            info!(node_id = ?node_id, "Fallback succeeded");
-                                            instance
-                                                .node_states
-                                                .insert(node_id, NodeState::Succeeded);
-                                            queue.mark_completed(node_id);
-                                            let fb_out = fb_result.output.unwrap_or(serde_json::Value::Null);
-                                            instance.outputs.insert(node_id, fb_out.clone());
-                                            instance.terminal_node_id = Some(node_id);
-                                            if fb_out != serde_json::Value::Null {
-                                                instance.final_output = Some(fb_out);
-                                            }
-                                        }
-                                        NodeState::Failed(fb_reason) => {
-                                            instance.node_states.insert(
-                                                node_id,
-                                                NodeState::Failed(format!(
-                                                    "Fallback failed: {}",
-                                                    fb_reason
-                                                )),
-                                            );
-                                            queue.mark_failed(node_id);
-                                        }
-                                        _ => {
-                                            instance.node_states.insert(
-                                                node_id,
-                                                NodeState::Succeeded,
-                                            );
-                                            queue.mark_completed(node_id);
+                                let mut fallback_node = node.clone();
+                                fallback_node.model = fallback.model.clone();
+                                let fb_result = executor.execute_node(&fallback_node).await;
+                                match fb_result.state {
+                                    NodeState::Succeeded => {
+                                        info!(node_id = ?node_id, "Fallback succeeded");
+                                        instance
+                                            .node_states
+                                            .insert(node_id, NodeState::Succeeded);
+                                        queue.mark_completed(node_id);
+                                        let fb_out = fb_result.output.unwrap_or(serde_json::Value::Null);
+                                        instance.outputs.insert(node_id, fb_out.clone());
+                                        instance.terminal_node_id = Some(node_id);
+                                        if fb_out != serde_json::Value::Null {
+                                            instance.final_output = Some(fb_out);
                                         }
                                     }
-                                } else {
-                                    instance
-                                        .node_states
-                                        .insert(node_id, NodeState::Failed(reason));
-                                    queue.mark_failed(node_id);
+                                    NodeState::Failed(fb_reason) => {
+                                        instance.node_states.insert(
+                                            node_id,
+                                            NodeState::Failed(format!(
+                                                "Fallback failed: {}",
+                                                fb_reason
+                                            )),
+                                        );
+                                        queue.mark_failed(node_id);
+                                    }
+                                    _ => {
+                                        instance.node_states.insert(
+                                            node_id,
+                                            NodeState::Succeeded,
+                                        );
+                                        queue.mark_completed(node_id);
+                                    }
                                 }
+                            } else {
+                                instance
+                                    .node_states
+                                    .insert(node_id, NodeState::Failed(reason));
+                                queue.mark_failed(node_id);
                             }
-                        } else {
-                            instance
-                                .node_states
-                                .insert(node_id, NodeState::Failed(reason));
-                            queue.mark_failed(node_id);
                         }
                     }
                     _ => {}
@@ -431,7 +409,7 @@ impl DefaultScheduler {
             total_tokens,
             terminal_node_id: instance.terminal_node_id,
             final_output: instance.final_output.clone(),
-stored_artifacts: Vec::new(),
+            stored_artifacts: Vec::new(),
         })
     }
 }

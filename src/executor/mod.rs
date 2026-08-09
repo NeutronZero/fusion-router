@@ -289,7 +289,7 @@ impl Executor for DefaultExecutor {
     #[tracing::instrument(skip(self, node), fields(node_id = %node.id, model = %node.model, kind = ?node.kind, strategy = ?node.strategy))]
     async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult {
         let start = std::time::Instant::now();
-        let strategy_label = format!("{:?}", node.strategy);
+        let strategy_label = node.strategy.as_label();
         let subgraph = self.resolve_strategy(node).await;
         let mut accumulated_usage: Option<Usage> = None;
         let mut output_value: Option<serde_json::Value> = None;
@@ -300,16 +300,14 @@ impl Executor for DefaultExecutor {
             "strategy execution started"
         );
 
-        // Topologically order nodes by their edges so every node executes
-        // after its dependencies. Cycles or disconnected nodes fall back to
-        // insertion order.
-        let mut incoming: HashMap<uuid::Uuid, Vec<uuid::Uuid>> = HashMap::new();
+        let n_sub_nodes = subgraph.nodes.len();
+        let mut incoming: HashMap<uuid::Uuid, Vec<uuid::Uuid>> = HashMap::with_capacity(n_sub_nodes);
         for edge in &subgraph.edges {
             incoming.entry(edge.to).or_default().push(edge.from);
         }
         let mut remaining: Vec<&ExecutionNode> = subgraph.nodes.iter().collect();
-        let mut completed: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
-        let mut order: Vec<&ExecutionNode> = Vec::with_capacity(subgraph.nodes.len());
+        let mut completed: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::with_capacity(n_sub_nodes);
+        let mut order: Vec<&ExecutionNode> = Vec::with_capacity(n_sub_nodes);
         while !remaining.is_empty() {
             let ready: Vec<&ExecutionNode> = remaining
                 .iter()
@@ -333,7 +331,7 @@ impl Executor for DefaultExecutor {
 
         // Per-node outputs, keyed by node id, so judge/reducer nodes can
         // consume the outputs of their upstream members.
-        let mut node_outputs: HashMap<uuid::Uuid, serde_json::Value> = HashMap::new();
+        let mut node_outputs: HashMap<uuid::Uuid, serde_json::Value> = HashMap::with_capacity(n_sub_nodes);
 
         for sub_node in order {
             match sub_node.kind {
@@ -445,7 +443,7 @@ impl Executor for DefaultExecutor {
                             .map(|c| c.message.content.clone())
                             .map(serde_json::Value::String);
 
-                        if let Some(usage) = response.usage.clone() {
+                        if let Some(usage) = response.usage {
                             accumulated_usage = Some(match accumulated_usage {
                                 Some(acc) => Usage {
                                     prompt_tokens: acc.prompt_tokens + usage.prompt_tokens,
@@ -456,22 +454,12 @@ impl Executor for DefaultExecutor {
                             });
                         }
 
-                        let wants_tools = response
-                            .native_tool_calls
-                            .as_ref()
-                            .map(|c| !c.is_empty())
-                            .unwrap_or(false);
-
-                        if !wants_tools {
-                            break;
-                        }
-
                         // Law 7 / ADR-037: tool execution is fed ONLY from
                         // provider-native tool_calls. Model output text is
                         // never parsed for tool invocation.
-                        let native_calls = response.native_tool_calls.clone().unwrap_or_default();
+                        let native_calls = response.native_tool_calls.as_deref().unwrap_or(&[]);
                         let results = self
-                            .execute_native_tool_calls(sub_node, &native_calls)
+                            .execute_native_tool_calls(sub_node, native_calls)
                             .await;
                         let executed_any = results["tool_calls"]
                             .as_array()
@@ -498,6 +486,12 @@ impl Executor for DefaultExecutor {
 
                         // Feed the results back and let the model continue.
                         request.messages.push(ChatMessage {
+                            role: "assistant".to_string(),
+                            content: response.choices.first()
+                                .map(|c| c.message.content.clone())
+                                .unwrap_or_default(),
+                        });
+                        request.messages.push(ChatMessage {
                             role: "user".to_string(),
                             content: format!("Tool results:\n{}", results),
                         });
@@ -520,8 +514,8 @@ impl Executor for DefaultExecutor {
                         }
                     }
 
-                    if let Some(current) = output_value.clone() {
-                        node_outputs.insert(sub_node.id, current);
+                    if let Some(ref current) = output_value {
+                        node_outputs.insert(sub_node.id, current.clone());
                     }
                 }
                 ExecutionNodeKind::Transform
@@ -589,7 +583,7 @@ impl Executor for DefaultExecutor {
                         &node.fallback,
                         &node.config,
                     );
-                    let mut subgraph = execution_graph_to_subgraph(&eg, node);
+                    let mut subgraph = execution_graph_to_subgraph(eg, node);
                     Self::propagate_parent_messages(node, &mut subgraph);
                     return subgraph;
                 }
@@ -628,13 +622,13 @@ fn strategy_ir_from_node(node: &ExecutionNode) -> StrategyIR {
     crate::compiler::strategy_expansion::strategy_ir_from_node(node)
 }
 
-fn execution_graph_to_subgraph(eg: &ExecutionGraph, template: &ExecutionNode) -> ExecutionSubgraph {
+fn execution_graph_to_subgraph(mut eg: ExecutionGraph, template: &ExecutionNode) -> ExecutionSubgraph {
     let entry_id = eg.nodes.first().map(|n| n.id).unwrap_or(template.id);
     let exit_id = eg.nodes.last().map(|n| n.id).unwrap_or(template.id);
 
     ExecutionSubgraph {
-        nodes: eg.nodes.clone(),
-        edges: eg.edges.clone(),
+        nodes: std::mem::take(&mut eg.nodes),
+        edges: std::mem::take(&mut eg.edges),
         entry_node_id: entry_id,
         exit_node_id: exit_id,
     }

@@ -223,6 +223,7 @@ mod tests {
         let eri = local_eri();
         let result = eri.execute(&abi, &ExecutionTarget::default()).await.unwrap();
         assert_eq!(result.state, ExecutionState::Succeeded);
+        assert!(!result.outputs.is_empty());
         assert_eq!(
             eri.state(&result.execution_id).await.unwrap(),
             ExecutionState::Succeeded

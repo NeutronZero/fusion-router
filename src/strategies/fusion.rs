@@ -29,11 +29,27 @@ impl ModelAvailability {
         let high_keywords = ["gpt-4", "claude-opus", "gemini-ultra", "claude-3.5", "o1", "o3"];
         let medium_keywords = ["gpt-4o-mini", "claude-sonnet", "gemini-pro", "claude-haiku"];
         let matches_keyword = |model: &str, keyword: &str| {
-            model == keyword
-                || model.starts_with(&format!("{keyword}-"))
-                || model.starts_with(&format!("{keyword}."))
-                || model.contains(&format!("-{keyword}-"))
-                || model.contains(&format!("-{keyword}."))
+            if model == keyword {
+                return true;
+            }
+            if let Some(rest) = model.strip_prefix(keyword) {
+                if rest.starts_with('-') || rest.starts_with('.') {
+                    return true;
+                }
+            }
+            let mut search_from = 0;
+            while let Some(idx) = model[search_from..].find(keyword) {
+                let abs_idx = search_from + idx;
+                let preceded_by_dash = abs_idx > 0 && model.as_bytes()[abs_idx - 1] == b'-';
+                let end_idx = abs_idx + keyword.len();
+                let followed_by_dash_or_dot = end_idx < model.len()
+                    && (model.as_bytes()[end_idx] == b'-' || model.as_bytes()[end_idx] == b'.');
+                if preceded_by_dash && followed_by_dash_or_dot {
+                    return true;
+                }
+                search_from = abs_idx + 1;
+            }
+            false
         };
         let has_high = models.iter().any(|m| high_keywords.iter().any(|k| matches_keyword(m, k)));
         let has_medium = models.iter().any(|m| medium_keywords.iter().any(|k| matches_keyword(m, k)));
@@ -264,5 +280,17 @@ mod tests {
 
         assert!(strategy.model_hints.is_none());
         assert!(strategy.sub_strategies.is_empty());
+    }
+
+    #[test]
+    fn test_matches_keyword_variants() {
+        let availability = ModelAvailability::from_models(&[
+            "gpt-4".into(),
+            "gpt-4-turbo".into(),
+            "gpt-4.5".into(),
+            "my-gpt-4-custom".into(),
+            "my-gpt-4.custom".into(),
+        ]);
+        assert!(availability.has_high_capability);
     }
 }

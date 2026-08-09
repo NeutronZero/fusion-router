@@ -1,26 +1,33 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::types::{ExecutionEdge, ExecutionGraph, ExecutionNode, NodeState};
 
 pub struct WorkQueue {
-    graph: ExecutionGraph,
+    graph: Arc<ExecutionGraph>,
     completed: HashSet<Uuid>,
     in_progress: HashSet<Uuid>,
     failed: HashSet<Uuid>,
     ready: HashSet<Uuid>,
     outgoing: HashMap<Uuid, Vec<(Uuid, Option<String>)>>,
     incoming: HashMap<Uuid, Vec<Uuid>>,
+    outgoing_edges_map: HashMap<Uuid, Vec<ExecutionEdge>>,
+    incoming_edges_map: HashMap<Uuid, Vec<ExecutionEdge>>,
     total_incoming: HashMap<Uuid, usize>,
     satisfied_incoming: HashMap<Uuid, usize>,
     activated_edges: HashSet<(Uuid, Uuid)>,
 }
 
 impl WorkQueue {
-    pub fn new(graph: ExecutionGraph) -> Self {
-        let mut outgoing: HashMap<Uuid, Vec<(Uuid, Option<String>)>> = HashMap::new();
-        let mut incoming: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-        let mut total_incoming: HashMap<Uuid, usize> = HashMap::new();
+    pub fn new(graph: impl Into<Arc<ExecutionGraph>>) -> Self {
+        let graph = graph.into();
+        let n_nodes = graph.nodes.len();
+        let mut outgoing: HashMap<Uuid, Vec<(Uuid, Option<String>)>> = HashMap::with_capacity(n_nodes);
+        let mut incoming: HashMap<Uuid, Vec<Uuid>> = HashMap::with_capacity(n_nodes);
+        let mut outgoing_edges_map: HashMap<Uuid, Vec<ExecutionEdge>> = HashMap::with_capacity(n_nodes);
+        let mut incoming_edges_map: HashMap<Uuid, Vec<ExecutionEdge>> = HashMap::with_capacity(n_nodes);
+        let mut total_incoming: HashMap<Uuid, usize> = HashMap::with_capacity(n_nodes);
 
         let mut loop_node_ids: HashSet<Uuid> = HashSet::new();
         for node in &graph.nodes {
@@ -29,12 +36,16 @@ impl WorkQueue {
             }
             outgoing.entry(node.id).or_default();
             incoming.entry(node.id).or_default();
+            outgoing_edges_map.entry(node.id).or_default();
+            incoming_edges_map.entry(node.id).or_default();
             total_incoming.entry(node.id).or_insert(0);
         }
 
         for edge in &graph.edges {
             outgoing.entry(edge.from).or_default().push((edge.to, edge.condition.clone()));
             incoming.entry(edge.to).or_default().push(edge.from);
+            outgoing_edges_map.entry(edge.from).or_default().push(edge.clone());
+            incoming_edges_map.entry(edge.to).or_default().push(edge.clone());
             if !loop_node_ids.contains(&edge.to) {
                 *total_incoming.entry(edge.to).or_insert(0) += 1;
             }
@@ -55,6 +66,8 @@ impl WorkQueue {
             ready,
             outgoing,
             incoming,
+            outgoing_edges_map,
+            incoming_edges_map,
             total_incoming,
             satisfied_incoming: HashMap::new(),
             activated_edges: HashSet::new(),
@@ -187,12 +200,12 @@ impl WorkQueue {
         &self.graph
     }
 
-    pub fn outgoing_edges(&self, node_id: Uuid) -> Vec<&ExecutionEdge> {
-        self.graph.edges.iter().filter(|e| e.from == node_id).collect()
+    pub fn outgoing_edges(&self, node_id: Uuid) -> &[ExecutionEdge] {
+        self.outgoing_edges_map.get(&node_id).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
-    pub fn incoming_edges(&self, node_id: Uuid) -> Vec<&ExecutionEdge> {
-        self.graph.edges.iter().filter(|e| e.to == node_id).collect()
+    pub fn incoming_edges(&self, node_id: Uuid) -> &[ExecutionEdge] {
+        self.incoming_edges_map.get(&node_id).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     pub fn has_loop_back_edge(&self, node_id: Uuid) -> bool {
