@@ -1,5 +1,47 @@
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use crate::config::{AppConfig, CapabilityDescriptor};
 use super::{ModelCapabilities, ModelPricing, ModelRequirements};
+
+/// Step-type to capability requirements mapping.
+/// Declarative: add new step types here instead of scattering match arms.
+fn step_requirements() -> &'static HashMap<&'static str, ModelRequirements> {
+    static MAP: OnceLock<HashMap<&'static str, ModelRequirements>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        let mut m = HashMap::new();
+        m.insert("generate", ModelRequirements {
+            min_reasoning_score: Some(0.5),
+            ..Default::default()
+        });
+        m.insert("judge", ModelRequirements {
+            min_reasoning_score: Some(0.8),
+            ..Default::default()
+        });
+        m.insert("tool_calling", ModelRequirements {
+            requires_tools: true,
+            min_coding_score: Some(0.6),
+            ..Default::default()
+        });
+        m.insert("review", ModelRequirements {
+            min_reasoning_score: Some(0.7),
+            ..Default::default()
+        });
+        m.insert("vision", ModelRequirements {
+            requires_vision: true,
+            ..Default::default()
+        });
+        m.insert("fast", ModelRequirements {
+            max_cost_per_1k_tokens: Some(0.01),
+            ..Default::default()
+        });
+        m.insert("cheap", ModelRequirements {
+            max_cost_per_1k_tokens: Some(0.005),
+            ..Default::default()
+        });
+        m
+    })
+}
 
 #[derive(Debug, Clone)]
 pub struct ModelCandidate {
@@ -59,6 +101,17 @@ impl CapabilityCatalog {
 
     pub fn find_by_provider(&self, provider_name: &str) -> Vec<&ModelCandidate> {
         self.entries.iter().filter(|e| e.provider_name == provider_name).collect()
+    }
+
+    /// Query providers that match a specific step type (e.g., "generate", "judge", "tool_calling").
+    /// Returns candidates sorted by combined score, filtered by the step's requirements.
+    /// If the step type is unknown, returns all entries sorted by score.
+    pub fn query_by_capability(&self, step: &str) -> Vec<ModelCandidate> {
+        let reqs = step_requirements()
+            .get(step)
+            .cloned()
+            .unwrap_or_default();
+        self.resolve(&reqs)
     }
 }
 
