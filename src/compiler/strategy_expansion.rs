@@ -120,7 +120,7 @@ pub(crate) fn strategy_ir_from_node(node: &ExecutionNode) -> StrategyIR {
         },
         StrategyKind::Fusion => StrategyIR::Custom {
             name: "fusion".into(),
-            config: serde_json::json!({}),
+            config: node.config.get("config").cloned().unwrap_or(serde_json::json!({})),
         },
         StrategyKind::Custom(ref name) => StrategyIR::Custom {
             name: name.clone(),

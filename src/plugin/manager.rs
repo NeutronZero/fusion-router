@@ -118,9 +118,10 @@ impl PluginManager {
         manifest: &PluginManifest,
         dir: &str,
     ) -> anyhow::Result<()> {
-        let runtime = self.wasm_runtime.get_or_insert_with(|| {
-            crate::wasm::WasmRuntime::new().expect("Failed to create WasmRuntime")
-        });
+        if self.wasm_runtime.is_none() {
+            self.wasm_runtime = Some(crate::wasm::WasmRuntime::new()?);
+        }
+        let runtime = self.wasm_runtime.as_mut().unwrap();
 
         let wasm_path = Path::new(dir).join(&manifest.plugin.entry);
         let wasm_bytes = std::fs::read(&wasm_path)?;

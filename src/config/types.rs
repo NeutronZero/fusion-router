@@ -1,0 +1,308 @@
+use std::collections::HashMap;
+use serde::Deserialize;
+
+use crate::config::defaults::*;
+use crate::feature_gate::FeatureConfig;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppConfig {
+    #[serde(default)]
+    pub unsafe_dev: bool,
+    pub server: ServerConfig,
+    pub resources: ResourceConfig,
+    #[serde(default)]
+    pub policies: Vec<PolicyConfig>,
+    #[serde(default)]
+    pub providers: HashMap<String, ProviderConfig>,
+    #[serde(default)]
+    pub strategies: StrategyConfig,
+    #[serde(default)]
+    pub tools: ToolsConfig,
+    #[serde(default)]
+    pub auth: AuthConfig,
+    #[serde(default)]
+    pub rate_limiting: RateLimitingConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
+    #[serde(default)]
+    pub model_catalog: crate::types::ModelCatalog,
+    #[serde(default)]
+    pub connectors: HashMap<String, ConnectorConfig>,
+    #[serde(default)]
+    pub features: HashMap<String, FeatureConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServerConfig {
+    #[serde(default = "default_host")]
+    pub host: String,
+    #[serde(default = "default_port")]
+    pub port: u16,
+    #[serde(default = "default_shutdown_timeout")]
+    pub shutdown_timeout_secs: u64,
+    #[serde(default)]
+    pub cors: CorsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CorsConfig {
+    #[serde(default = "default_cors_origins")]
+    pub allowed_origins: Vec<String>,
+    #[serde(default = "default_cors_methods")]
+    pub allowed_methods: Vec<String>,
+    #[serde(default = "default_cors_headers")]
+    pub allowed_headers: Vec<String>,
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            allowed_origins: default_cors_origins(),
+            allowed_methods: default_cors_methods(),
+            allowed_headers: default_cors_headers(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    #[serde(default = "default_auth_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub api_keys: Vec<String>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_auth_enabled(),
+            api_keys: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitingConfig {
+    #[serde(default = "default_rate_limiting_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_rpm")]
+    pub requests_per_minute: u64,
+    #[serde(default = "default_burst")]
+    pub burst_size: u32,
+    #[serde(default = "default_cleanup_interval")]
+    pub cleanup_interval_secs: u64,
+}
+
+impl Default for RateLimitingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_rate_limiting_enabled(),
+            requests_per_minute: default_rpm(),
+            burst_size: default_burst(),
+            cleanup_interval_secs: default_cleanup_interval(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoggingConfig {
+    #[serde(default = "default_log_format")]
+    pub format: String,
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    #[serde(default)]
+    pub directory: Option<String>,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            format: default_log_format(),
+            level: default_log_level(),
+            directory: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResourceConfig {
+    pub max_daily_cost: f64,
+    pub max_daily_tokens: u64,
+    #[serde(default = "default_concurrent")]
+    pub max_concurrent: u32,
+    #[serde(default = "default_max_concurrent_nodes")]
+    pub max_concurrent_nodes: u32,
+    #[serde(default)]
+    pub provider_limits: HashMap<String, ProviderLimitConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderLimitConfig {
+    pub max_daily_cost: f64,
+    pub max_rpm: u32,
+    pub max_tpm: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicyConfig {
+    pub name: String,
+    #[serde(default)]
+    pub priority: u32,
+    #[serde(default)]
+    pub conditions: Vec<PolicyConditionConfig>,
+    #[serde(default)]
+    pub actions: Vec<PolicyActionConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicyConditionConfig {
+    pub field: String,
+    pub operator: String,
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicyActionConfig {
+    pub action_type: String,
+    #[serde(default)]
+    pub params: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderConfig {
+    /// Wire protocol / transport adapter: `openai-chat`, `anthropic`, `gemini`,
+    /// `ollama`, `grpc`, `websocket`, `custom`, or any OpenAI-compatible endpoint.
+    #[serde(default = "default_transport")]
+    pub transport: String,
+    pub base_url: Option<String>,
+    pub api_key_env: Option<String>,
+    /// Direct API key or `"{env:VAR_NAME}"` syntax. Takes precedence over `api_key_env`.
+    pub api_key: Option<String>,
+    /// Custom headers sent with every request to this provider.
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    /// Per-model capability descriptors.
+    #[serde(default)]
+    pub models: HashMap<String, CapabilityDescriptor>,
+    /// Hide these model IDs from the model picker / catalog.
+    #[serde(default)]
+    pub blacklist: Vec<String>,
+    /// Hide every model *except* these IDs. Empty means no restriction.
+    #[serde(default)]
+    pub whitelist: Vec<String>,
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: u32,
+    #[serde(default = "default_cooldown_secs")]
+    pub cooldown_secs: u64,
+    /// Provider-specific options (e.g. `region` for Bedrock, `instanceUrl` for GitLab).
+    #[serde(default)]
+    pub options: HashMap<String, serde_json::Value>,
+
+    // Legacy alias: `provider_type` deserializes into `transport`.
+    #[serde(default, alias = "provider_type")]
+    pub(crate) _legacy_provider_type: Option<String>,
+}
+
+/// Full capability descriptor for a model.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CapabilityDescriptor {
+    pub name: Option<String>,
+    pub context_limit: Option<u32>,
+    pub output_limit: Option<u32>,
+    pub coding_score: Option<f32>,
+    pub reasoning_score: Option<f32>,
+    pub supports_tools: Option<bool>,
+    pub supports_streaming: Option<bool>,
+    pub supports_vision: Option<bool>,
+    pub supports_audio: Option<bool>,
+    pub supports_pdf: Option<bool>,
+    pub supports_json_mode: Option<bool>,
+    pub supports_thinking: Option<bool>,
+    pub supports_parallel_tools: Option<bool>,
+    pub supports_structured_output: Option<bool>,
+    pub input_cost_per_1k: Option<f64>,
+    pub output_cost_per_1k: Option<f64>,
+    pub latency_ms: Option<u64>,
+    pub availability: Option<f32>,
+    pub reliability: Option<f32>,
+    pub tokenizer: Option<String>,
+}
+
+impl ProviderConfig {
+    pub fn effective_transport(&self) -> &str {
+        if !self.transport.is_empty() && self.transport != "openai-compatible" {
+            return &self.transport;
+        }
+        if let Some(legacy) = &self._legacy_provider_type {
+            return legacy;
+        }
+        &self.transport
+    }
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            transport: default_transport(),
+            base_url: None,
+            api_key_env: None,
+            api_key: None,
+            headers: HashMap::new(),
+            models: HashMap::new(),
+            blacklist: Vec::new(),
+            whitelist: Vec::new(),
+            failure_threshold: default_failure_threshold(),
+            cooldown_secs: default_cooldown_secs(),
+            options: HashMap::new(),
+            _legacy_provider_type: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ConnectorConfig {
+    pub connector_type: String,
+    #[serde(default)]
+    pub config: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StrategyConfig {
+    #[serde(default = "default_consensus_count")]
+    pub consensus_count: u32,
+}
+
+impl Default for StrategyConfig {
+    fn default() -> Self {
+        Self { consensus_count: default_consensus_count() }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolsConfig {
+    #[serde(default = "default_allowed_shell_commands")]
+    pub allowed_shell_commands: Vec<String>,
+    #[serde(default = "default_shell_timeout_secs")]
+    pub shell_timeout_secs: u64,
+    #[serde(default = "default_allowed_read_directories")]
+    pub allowed_read_directories: Vec<String>,
+    #[serde(default = "default_enable_http_tool")]
+    pub enable_http_tool: bool,
+    #[serde(default = "default_allow_auto_exec")]
+    pub allow_auto_exec: bool,
+    #[serde(default = "default_allow_unrestricted_args")]
+    pub allow_unrestricted_args: bool,
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            allowed_shell_commands: default_allowed_shell_commands(),
+            shell_timeout_secs: default_shell_timeout_secs(),
+            allowed_read_directories: default_allowed_read_directories(),
+            enable_http_tool: default_enable_http_tool(),
+            allow_auto_exec: default_allow_auto_exec(),
+            allow_unrestricted_args: default_allow_unrestricted_args(),
+        }
+    }
+}

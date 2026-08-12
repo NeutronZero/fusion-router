@@ -60,8 +60,39 @@ impl SemanticCache {
         max_entries: usize,
         dimensions: usize,
     ) -> Self {
-        Self::try_new(embedder, similarity_threshold, max_entries, dimensions)
-            .expect("Failed to initialize SemanticCache HNSW index")
+        Self::try_new(embedder.clone(), similarity_threshold, max_entries, dimensions).unwrap_or_else(|e| {
+            tracing::error!(error = %e, "Failed to initialize HNSW index for SemanticCache");
+            let options = IndexOptions {
+                dimensions,
+                metric: MetricKind::Cos,
+                quantization: ScalarKind::F32,
+                connectivity: 16,
+                expansion_add: 128,
+                expansion_search: 64,
+                multi: false,
+            };
+            let index = Index::new(&options).unwrap_or_else(|err| {
+                tracing::error!(error = %err, "Failed fallback Index creation");
+                Index::new(&IndexOptions {
+                    dimensions,
+                    metric: MetricKind::Cos,
+                    quantization: ScalarKind::F32,
+                    connectivity: 2,
+                    expansion_add: 2,
+                    expansion_search: 2,
+                    multi: false,
+                }).expect("minimal HNSW index options are valid")
+            });
+            Self {
+                embedder,
+                entries: RwLock::new(HashMap::new()),
+                index: Arc::new(std::sync::Mutex::new(index)),
+                similarity_threshold,
+                max_entries,
+                next_label: AtomicU64::new(0),
+                dimensions,
+            }
+        })
     }
 
     pub async fn get(&self, query: &str) -> Option<Value> {

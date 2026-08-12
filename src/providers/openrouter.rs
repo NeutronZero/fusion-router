@@ -17,7 +17,7 @@ pub fn new_openrouter_provider_with_base_url(
     ));
     let transport = Box::new(
         HttpTransport::new(Duration::from_secs(600))
-            .expect("failed to build HTTP transport for openrouter provider"),
+            .unwrap_or_default(),
     );
     Provider::new(model, transport, api_key)
 }

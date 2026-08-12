@@ -169,12 +169,16 @@ impl HTTPRequestTool {
 
 impl Default for HTTPRequestTool {
     fn default() -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to build configured HTTP client for HTTPRequestTool, falling back to default Client");
+                reqwest::Client::new()
+            });
         Self {
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("Failed to create HTTP client"),
+            client,
             allowed_hosts: Vec::new(),
             allowed_schemes: vec!["https".to_string()],
         }

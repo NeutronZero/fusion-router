@@ -84,7 +84,15 @@ impl HttpTransport {
 
 impl Default for HttpTransport {
     fn default() -> Self {
-        Self::new(Duration::from_secs(30)).expect("default HTTP client build failed")
+        Self::new(Duration::from_secs(30)).unwrap_or_else(|e| {
+            tracing::error!(error = %e, "failed to build configured HTTP client for transport; falling back to default Client");
+            Self {
+                client: Client::new(),
+                backoff_base_ms: DEFAULT_BACKOFF_BASE_MS,
+                backoff_max_ms: DEFAULT_BACKOFF_MAX_MS,
+                max_retries: DEFAULT_MAX_RETRIES,
+            }
+        })
     }
 }
 

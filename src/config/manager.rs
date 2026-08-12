@@ -62,7 +62,7 @@ impl ConfigManager {
 
     pub fn register_subscriber(&self, subscriber: Box<dyn ConfigSubscriber + Send + Sync>) {
         self.subscribers.write()
-            .expect("ConfigManager subscriber lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .push(subscriber);
     }
 
@@ -83,9 +83,9 @@ impl ConfigManager {
             config: Arc::new(new_config),
         };
 
-        let subscribers = self.subscribers.read()
-            .expect("ConfigManager subscriber lock poisoned");
-        let mut ordered: Vec<_> = subscribers.iter().collect();
+        let subscribers_guard = self.subscribers.read()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut ordered: Vec<_> = subscribers_guard.iter().collect();
         ordered.sort_by_key(|s| s.priority());
 
         for subscriber in &ordered {

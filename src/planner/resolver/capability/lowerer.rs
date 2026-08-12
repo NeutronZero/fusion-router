@@ -67,7 +67,9 @@ impl CapabilityGraphLowerer {
             let node_id = deterministic_uuid(cap_id);
             id_map.insert(cap_id.clone(), node_id);
 
-            let node = cap_graph.get_node(cap_id).expect("node from topological sort must exist");
+            let Some(node) = cap_graph.get_node(cap_id) else {
+                continue;
+            };
             total_cost += (node.contract.estimated_cost_usd * 1000.0) as u64;
 
             let mut config = std::collections::HashMap::new();

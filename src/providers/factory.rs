@@ -119,12 +119,13 @@ pub fn create_provider_target(
                         }
                     });
 
-                    let (model_id, model_cfg) = if models_cfg.is_empty() {
-                        (format!("{}-model", provider_name), CapabilityDescriptor::default())
-                    } else {
-                        let (id, mc) = models_cfg.iter().next().unwrap();
-                        (id.clone(), mc.clone())
-                    };
+                    let (model_id, model_cfg) = models_cfg
+                        .iter()
+                        .next()
+                        .map(|(id, mc)| (id.clone(), mc.clone()))
+                        .unwrap_or_else(|| {
+                            (format!("{}-model", provider_name), CapabilityDescriptor::default())
+                        });
 
                     let model = GenericOpenAIModel::new(
                         model_id,
@@ -133,12 +134,11 @@ pub fn create_provider_target(
                         &model_cfg,
                         format!("{}/", provider_name),
                     );
+                    let transport = super::HttpTransport::new(GENERIC_TIMEOUT)
+                        .unwrap_or_default();
                     Arc::new(super::Provider::new(
                         Box::new(model),
-                        Box::new(
-                            super::HttpTransport::new(GENERIC_TIMEOUT)
-                                .expect("failed to build HTTP transport"),
-                        ),
+                        Box::new(transport),
                         api_key.clone(),
                     ))
                 }
@@ -206,12 +206,13 @@ pub fn create_protected_target(
                         }
                     });
 
-                    let (model_id, model_cfg) = if models_cfg.is_empty() {
-                        (format!("{}-model", provider_name), CapabilityDescriptor::default())
-                    } else {
-                        let (id, mc) = models_cfg.iter().next().unwrap();
-                        (id.clone(), mc.clone())
-                    };
+                    let (model_id, model_cfg) = models_cfg
+                        .iter()
+                        .next()
+                        .map(|(id, mc)| (id.clone(), mc.clone()))
+                        .unwrap_or_else(|| {
+                            (format!("{}-model", provider_name), CapabilityDescriptor::default())
+                        });
 
                     let model = GenericOpenAIModel::new(
                         model_id,
@@ -220,12 +221,11 @@ pub fn create_protected_target(
                         &model_cfg,
                         format!("{}/", provider_name),
                     );
+                    let transport = super::HttpTransport::new(GENERIC_TIMEOUT)
+                        .unwrap_or_default();
                     Arc::new(super::Provider::new(
                         Box::new(model),
-                        Box::new(
-                            super::HttpTransport::new(GENERIC_TIMEOUT)
-                                .expect("failed to build HTTP transport"),
-                        ),
+                        Box::new(transport),
                         api_key.clone(),
                     ))
                 }

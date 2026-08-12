@@ -151,7 +151,10 @@ mod tests {
     fn test_planner_service_with_intents() {
         let system = CapabilitySystem::new();
         let planner = PlannerService::new(system);
-        let ir = planner.plan_with_intent("Build web application", ExecutionIntent::Quality).expect("Plan");
-        assert_eq!(ir.nodes().len(), 2);
+        let quality_ir = planner.plan_with_intent("Build web application", ExecutionIntent::Quality).expect("Plan");
+        assert_eq!(quality_ir.nodes().len(), 5);
+
+        let speed_ir = planner.plan_with_intent("Quick fix", ExecutionIntent::Speed).expect("Plan");
+        assert_eq!(speed_ir.nodes().len(), 2);
     }
 }

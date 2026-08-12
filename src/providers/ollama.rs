@@ -7,7 +7,7 @@ pub fn new_ollama_provider() -> Provider {
     let model = Box::new(OllamaModel::new("ollama-model".to_string()));
     let transport = Box::new(
         HttpTransport::new(Duration::from_secs(30))
-            .expect("failed to build HTTP transport for ollama provider"),
+            .unwrap_or_default(),
     );
     Provider::new(model, transport, String::new())
 }
