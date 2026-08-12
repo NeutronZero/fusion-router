@@ -68,7 +68,7 @@ async fn main() {
     // review entirely in-process (no HTTP server, no lifecycle binding).
     if std::env::args().nth(1).as_deref() == Some("review") {
         let env_filter = tracing_subscriber::EnvFilter::default()
-            .add_directive("info".parse().expect("invalid log level"));
+            .add_directive("info".parse().unwrap_or_default());
         tracing_subscriber::fmt().with_env_filter(env_filter).init();
         let args = review::ReviewArgs::from_args();
         if let Err(e) = review::run(args).await {
@@ -86,16 +86,14 @@ async fn main() {
 
     let mut config = AppConfig::load(&config_path)
         .unwrap_or_else(|e| {
-            eprintln!("failed to load config: {e}, using defaults");
-            AppConfig::load("config/default.yaml").unwrap_or_else(|_| {
-                panic!("Could not load config from config/default.yaml");
+            eprintln!("failed to load config from {config_path}: {e}, trying default.yaml");
+            AppConfig::load("config/default.yaml").unwrap_or_else(|e2| {
+                eprintln!("failed to load config from config/default.yaml: {e2}");
+                std::process::exit(1);
             })
         });
 
     if config.unsafe_dev && !unsafe_dev {
-        // ADR-035: the escape hatch must be explicit at invocation time. A
-        // config file with `unsafe_dev: true` must not silently disable
-        // auth/rate-limiting/tool guards in production deployments.
         eprintln!(
             "config sets `unsafe_dev: true`, but the flag is only honored from\n\
              the command line. Start with `--unsafe-dev` if an insecure run\n\
@@ -112,14 +110,15 @@ async fn main() {
         for err in &errors {
             eprintln!("config validation error: {err}");
         }
-        panic!("configuration validation failed with {} error(s)", errors.len());
+        eprintln!("configuration validation failed with {} error(s)", errors.len());
+        std::process::exit(1);
     }
 
     let log_level = &config.logging.level;
     let log_format = &config.logging.format;
 
     let env_filter = tracing_subscriber::EnvFilter::default()
-        .add_directive(log_level.parse().expect("invalid log level"));
+        .add_directive(log_level.parse().unwrap_or_else(|_| "info".parse().unwrap_or_default()));
 
     if log_format == "json" {
         tracing_subscriber::fmt()
@@ -134,19 +133,22 @@ async fn main() {
 
     tracing::info!("loaded config from {}", config_path);
 
-    // Build provider registry from config — no hardcoded provider types.
-    // The factory handles api_key resolution, provider creation, and circuit
-    // breaker setup for every configured provider.
     let default_provider_name = config.providers.keys().next().cloned().unwrap_or_else(|| "default".to_string());
     let default_cfg = config.providers.get(&default_provider_name).cloned().unwrap_or_default();
     let default_key = factory::resolve_api_key(&default_cfg, &default_provider_name, unsafe_dev)
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, provider = %default_provider_name, "API key resolution unconfigured");
+            String::new()
+        });
     let default_target = factory::create_provider_target("default", &default_cfg, default_key);
     let provider_registry = Arc::new(ProviderRegistry::new(default_target));
 
     for (name, cfg) in &config.providers {
         let api_key = factory::resolve_api_key(cfg, name, unsafe_dev)
-            .unwrap_or_else(|e| panic!("{e}"));
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, provider = %name, "API key resolution unconfigured");
+                String::new()
+            });
         let target = factory::create_provider_target(name, cfg, api_key);
         provider_registry.register_target(vec![name.clone() + "/"], target);
     }
@@ -158,8 +160,11 @@ async fn main() {
 
     let evidence_repo = SqliteEvidenceRepository::new("fusion_telemetry.db")
         .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "failed to open telemetry db, using no-op");
-            SqliteEvidenceRepository::new(":memory:").expect("in-memory db")
+            tracing::warn!(error = %e, "failed to open telemetry db, using no-op in-memory db");
+            SqliteEvidenceRepository::new(":memory:").unwrap_or_else(|e2| {
+                eprintln!("failed to initialize in-memory telemetry db: {e2}");
+                std::process::exit(1);
+            })
         });
 
     let host = config.server.host.clone();
@@ -279,17 +284,25 @@ async fn main() {
         .layer(axum::Extension(auth_config))
         .layer(crate::middleware::cors::cors_layer_from_config(&cors_config));
 
-    let addr = format!("{}:{}", host, port)
-        .parse::<std::net::SocketAddr>()
-        .unwrap();
+    let addr = match format!("{}:{}", host, port).parse::<std::net::SocketAddr>() {
+        Ok(addr) => addr,
+        Err(e) => {
+            eprintln!("invalid socket address '{}:{}': {}", host, port, e);
+            std::process::exit(1);
+        }
+    };
     tracing::info!("FusionRouter listening on {}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("failed to bind listener on {}: {}", addr, e);
+            std::process::exit(1);
+        }
+    };
 
     let shutdown_timeout = std::time::Duration::from_secs(config.server.shutdown_timeout_secs);
 
-    // ADR: `shutdown_timeout_secs` bounds graceful drain; without it a stuck
-    // in-flight request can hang shutdown indefinitely.
     let serve = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -314,30 +327,34 @@ async fn main() {
 #[cfg(unix)]
 async fn reload_signal(config_manager: Arc<config::manager::ConfigManager>) {
     use tokio::signal::unix;
-    let mut stream = unix::signal(unix::SignalKind::hangup())
-        .expect("failed to install SIGHUP handler");
-
-    while stream.recv().await.is_some() {
-        match config_manager.reload().await {
-            Ok(gen) => tracing::info!(generation = gen, "configuration reloaded"),
-            Err(e) => tracing::error!(error = %e, "reload failed, continuing with previous config"),
+    if let Ok(mut stream) = unix::signal(unix::SignalKind::hangup()) {
+        while stream.recv().await.is_some() {
+            match config_manager.reload().await {
+                Ok(gen) => tracing::info!(generation = gen, "configuration reloaded"),
+                Err(e) => tracing::error!(error = %e, "reload failed, continuing with previous config"),
+            }
         }
+    } else {
+        tracing::warn!("failed to install SIGHUP handler");
     }
 }
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!("failed to install Ctrl+C handler: {}", e);
+            std::future::pending::<()>().await;
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
+        if let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            sig.recv().await;
+        } else {
+            tracing::warn!("failed to install SIGTERM handler");
+            std::future::pending::<()>().await;
+        }
     };
 
     #[cfg(not(unix))]

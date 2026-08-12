@@ -13,9 +13,9 @@ impl Plugin for BrowserPlugin {
     fn metadata(&self) -> PluginMetadata {
         PluginMetadata {
             name: "fusion-connector-browser".into(),
-            version: semver::Version::parse("0.1.0").unwrap(),
-            api_version: semver::Version::parse("0.1.0").unwrap(),
-            min_compiler_version: semver::Version::parse("0.9.0").unwrap(),
+            version: semver::Version::new(0, 1, 0),
+            api_version: semver::Version::new(0, 1, 0),
+            min_compiler_version: semver::Version::new(0, 9, 0),
             capabilities: vec![CapabilityId::new("browser.navigate")],
         }
     }
@@ -25,7 +25,7 @@ impl CapabilityPlugin for BrowserPlugin {
     fn capabilities(&self) -> Vec<CapabilityContract> {
         vec![CapabilityContract {
             id: CapabilityId::new("browser.navigate"),
-            version: semver::Version::parse("0.1.0").unwrap(),
+            version: semver::Version::new(0, 1, 0),
             description: "Navigates a browser to a URL (not implemented — fails closed until a browser driver exists)".into(),
             inputs_schema: json!({"type": "object", "properties": {"url": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"content": {"type": "string"}}}),

@@ -211,9 +211,7 @@ fn drain_utf8(carry: &mut Vec<u8>) -> String {
             None => {
                 let valid = e.valid_up_to();
                 if valid > 0 {
-                    let text = std::str::from_utf8(&carry[..valid])
-                        .expect("valid_up_to bytes are valid UTF-8")
-                        .to_string();
+                    let text = String::from_utf8_lossy(&carry[..valid]).into_owned();
                     carry.drain(..valid);
                     text
                 } else {

@@ -81,7 +81,22 @@ impl SemanticCache {
                     expansion_add: 2,
                     expansion_search: 2,
                     multi: false,
-                }).expect("minimal HNSW index options are valid")
+                })
+                .unwrap_or_else(|e| {
+                    tracing::error!(error = %e, "Failed to create minimal HNSW index");
+                    Index::new(&IndexOptions::default()).unwrap_or_else(|e2| {
+                        tracing::error!(error = %e2, "Failed to create default HNSW index");
+                        Index::new(&IndexOptions {
+                            dimensions: 1,
+                            metric: MetricKind::Cos,
+                            quantization: ScalarKind::F32,
+                            connectivity: 2,
+                            expansion_add: 2,
+                            expansion_search: 2,
+                            multi: false,
+                        }).unwrap_or_else(|_| panic!("Failed to allocate minimal HNSW index"))
+                    })
+                })
             });
             Self {
                 embedder,

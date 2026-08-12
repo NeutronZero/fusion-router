@@ -30,9 +30,9 @@ impl Plugin for FilesystemPlugin {
     fn metadata(&self) -> PluginMetadata {
         PluginMetadata {
             name: "fusion-connector-filesystem".into(),
-            version: semver::Version::parse("0.1.0").unwrap(),
-            api_version: semver::Version::parse("0.1.0").unwrap(),
-            min_compiler_version: semver::Version::parse("0.9.0").unwrap(),
+            version: semver::Version::new(0, 1, 0),
+            api_version: semver::Version::new(0, 1, 0),
+            min_compiler_version: semver::Version::new(0, 9, 0),
             capabilities: vec![CapabilityId::new("fs.read")],
         }
     }
@@ -42,7 +42,7 @@ impl CapabilityPlugin for FilesystemPlugin {
     fn capabilities(&self) -> Vec<CapabilityContract> {
         vec![CapabilityContract {
             id: CapabilityId::new("fs.read"),
-            version: semver::Version::parse("0.1.0").unwrap(),
+            version: semver::Version::new(0, 1, 0),
             description: "Reads a file from the filesystem".into(),
             inputs_schema: json!({"type": "object", "properties": {"path": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"content": {"type": "string"}}}),

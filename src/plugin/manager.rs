@@ -19,8 +19,10 @@ pub struct CompatibilityChecker;
 impl CompatibilityChecker {
     /// Validates if `metadata` is compatible with the running engine.
     pub fn validate(metadata: &PluginMetadata) -> Result<(), String> {
-        let current_api = semver::Version::parse(CURRENT_API_VERSION).unwrap();
-        let current_compiler = semver::Version::parse(CURRENT_COMPILER_VERSION).unwrap();
+        let current_api = semver::Version::parse(CURRENT_API_VERSION)
+            .map_err(|e| format!("Invalid CURRENT_API_VERSION: {e}"))?;
+        let current_compiler = semver::Version::parse(CURRENT_COMPILER_VERSION)
+            .map_err(|e| format!("Invalid CURRENT_COMPILER_VERSION: {e}"))?;
 
         // API MAJOR version compatibility check
         if metadata.api_version.major != current_api.major {
@@ -121,7 +123,7 @@ impl PluginManager {
         if self.wasm_runtime.is_none() {
             self.wasm_runtime = Some(crate::wasm::WasmRuntime::new()?);
         }
-        let runtime = self.wasm_runtime.as_mut().unwrap();
+        let runtime = self.wasm_runtime.as_mut().ok_or_else(|| anyhow::anyhow!("WasmRuntime initialization failed"))?;
 
         let wasm_path = Path::new(dir).join(&manifest.plugin.entry);
         let wasm_bytes = std::fs::read(&wasm_path)?;

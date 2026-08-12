@@ -28,9 +28,9 @@ impl Plugin for GitHubPlugin {
     fn metadata(&self) -> PluginMetadata {
         PluginMetadata {
             name: "fusion-connector-github".into(),
-            version: semver::Version::parse("0.1.0").unwrap(),
-            api_version: semver::Version::parse("0.1.0").unwrap(),
-            min_compiler_version: semver::Version::parse("0.9.0").unwrap(),
+            version: semver::Version::new(0, 1, 0),
+            api_version: semver::Version::new(0, 1, 0),
+            min_compiler_version: semver::Version::new(0, 9, 0),
             capabilities: vec![CapabilityId::new("github.issue.create")],
         }
     }
@@ -40,7 +40,7 @@ impl CapabilityPlugin for GitHubPlugin {
     fn capabilities(&self) -> Vec<CapabilityContract> {
         vec![CapabilityContract {
             id: CapabilityId::new("github.issue.create"),
-            version: semver::Version::parse("0.1.0").unwrap(),
+            version: semver::Version::new(0, 1, 0),
             description: "Creates an issue on GitHub".into(),
             inputs_schema: json!({"type": "object", "properties": {"repo": {"type": "string"}, "title": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"issue_url": {"type": "string"}}}),

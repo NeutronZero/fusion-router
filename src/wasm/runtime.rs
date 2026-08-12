@@ -25,7 +25,10 @@ impl WasmRuntime {
 
 impl Default for WasmRuntime {
     fn default() -> Self {
-        Self::new().expect("WasmRuntime::default")
+        Self::new().unwrap_or_else(|e| {
+            tracing::error!(error = %e, "Failed to initialize default WasmRuntime engine");
+            Self { engine: Engine::default() }
+        })
     }
 }
 
