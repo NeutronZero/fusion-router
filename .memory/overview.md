@@ -15,7 +15,7 @@ FusionRouter is an **AI Execution Compiler and Runtime** — an LLM orchestratio
 Removed the deprecated FusionStudio simulation stack and unified FusionRouter around a single production execution pipeline.
 
 **Removed:**
-- `crates/fusion-studio-api` — simulation-only Studio BFF (1183 lines)
+- **crates/fusion-studio-api** — simulation-only Studio BFF (1183 lines)
 - `apps/fusion-server` — simulation sandbox binary (port 8787)
 - `Simulation` variant from `ReplayMode` enum
 - `is_simulation` field from `CompilerReport` and `CompilerEngine::compile()` parameter

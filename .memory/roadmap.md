@@ -4,11 +4,9 @@
 |-----------|---------------------------------|--------------|
 | v0.12.x   | Capability Platform             | Complete     |
 | v0.13.0   | Architecture Freeze             | Complete     |
-| v0.14.1   | Engine Unification              | Complete     |
-| v0.14.2   | Studio BFF Vertical Integration | Complete     |
-| v0.14.3   | Distributed Execution Primitives| Complete     |
-| v0.14.4   | Systems Audit & Hardening       | Complete     |
-| v0.14.5   | Realistic Validation under Load | In Progress  |
+| v0.14.0   | LTS Foundation & Governance     | Complete     |
+| v0.14.5   | Multi-Model Review & Remediation| Complete     |
+| v0.15.0   | Distributed Architecture & Scale| Active       |
 
 The **v0.13.x** series is the implementation series for the frozen v0.13.0 architecture.
 

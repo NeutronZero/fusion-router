@@ -1,6 +1,6 @@
 # FusionRouter v0.14 LTS Foundation — Compiler-Driven AI Orchestration Platform
 
-[![Version](https://img.shields.io/badge/version-0.14.0--LTS-blue.svg)](https://github.com/NeutronZero/fusion-router/releases/tag/v0.14.0)
+[![Version](https://img.shields.io/badge/version-0.14.5--LTS-blue.svg)](https://github.com/NeutronZero/fusion-router/releases/tag/v0.14.5)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Architecture](https://img.shields.io/badge/architecture-AF--005%20frozen-purple.svg)](docs/developer/handbook.md)
 [![Status](https://img.shields.io/badge/status-LTS%20Foundation%20Certified-success.svg)](docs/governance/v1-readiness-report.md)

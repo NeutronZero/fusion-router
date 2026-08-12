@@ -73,7 +73,7 @@ bypass the workflow shape and run a single ensemble node:
 - `RequestStrategy` fields (all serde-defaulted): `kind` (`"Consensus"`),
   `count` (3), `members` (empty ⇒ each member uses the provider's routed
   default), `max_tool_rounds` (8).
-- `process_request` (`src/server/handlers.rs`) maps the kind to
+- `process_request` (`src/operations/handlers.rs`) maps the kind to
   `StrategyKind` and replaces the plan with one `IRNodeKind::Generate`
   carrying `count`/`members`/`max_tool_rounds`. Messages and the tool
   allowlist are restored by `CompilationStep` (see above).

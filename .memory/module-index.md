@@ -26,13 +26,13 @@
 **CapabilityContract** — `crates/fusion-plugin-api/src/lib.rs` — Declarative capability ABI contract
 **CapabilityExecutor** (trait) — `crates/fusion-plugin-api/src/lib.rs` — Capability execution trait
 **CapabilityExecutor** (module) — `src/executor/capability_executor.rs` — Unified capability dispatch
-**CapabilityGraph** — `src/planner/resolver/capability/graph.rs` — Capability dependency DAG
+**CapabilityGraph** — `crates/fusion-kernel/src/capability/graph.rs` — Capability dependency DAG
 **CapabilityHostServices** (trait) — `docs/adrs/adr-019-capability-host-interface.md` — WASM host service interface
 **CapabilityId** — `crates/fusion-plugin-api/src/lib.rs` — Strongly-typed capability identifier
 **CapabilityInstance** — `crates/fusion-plugin-api/src/lib.rs` — Bound runtime execution object
 **CapabilityManifestBuilder** — `crates/fusion-capability-sdk/src/manifest.rs` — Plugin manifest builder
 **CapabilityPlugin** (trait) — `crates/fusion-plugin-api/src/lib.rs` — Capability declaration trait
-**CapabilityRegistry** — `src/capability/registry.rs` — Immutable capability registry (frozen after startup)
+**CapabilityRegistry** — `crates/fusion-kernel/src/capability/registry.rs` — Immutable capability registry (frozen after startup)
 **CapabilityResolver** — `src/planner/resolver/capability/resolver.rs` — Resolves abstract capability references
 **CapabilityTrait** — `crates/fusion-plugin-api/src/lib.rs` — Capability semantic traits (Streaming, LongContext, ...)
 **CheckpointEngine** — `src/session/checkpoint.rs` — Session snapshot creation at intervals

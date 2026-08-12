@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn build_runs_full_structural_validation() -> Result<(), ValidationError> {
-        let err = WorkflowBuilder::new().task("a", "A")?.loop_edge("a", "a")?.build().unwrap_err();
+        let err = WorkflowBuilder::new().task("a", "A")?.task("b", "B")?.sequential("a", "b")?.sequential("b", "a")?.build().unwrap_err();
         assert_eq!(err, ValidationError::MissingRoot);
         Ok(())
     }

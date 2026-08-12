@@ -149,4 +149,4 @@ Run the appropriate script after starting FusionRouter.
 
 ## Architecture
 
-See [FusionRouter v0.10.0 Architecture Specification](docs/fusionrouter_architecture_v0.10.0.md) for the full pipeline, compiler design, DAG execution model, and scheduling algorithm.
+See [FusionRouter Architecture Specification](docs/architecture/specification.md) and [Developer Handbook](docs/developer/handbook.md) for the full pipeline, compiler design, DAG execution model, and scheduling algorithm.

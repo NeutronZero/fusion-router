@@ -210,6 +210,6 @@ All gate tooling is owned by Epic M (Compatibility & Release Engineering) unless
 
 ## 6. References
 
-- [v0.11 Roadmap — Section 2: Platform Invariants](../roadmap-v0.11.md#2-platform-invariants--v10-release-gates)
-- [ADR-027 — Architecture Conformance Testing](../docs/adr/ADR-027-architecture-conformance-testing.md) (phase invariants)
-- [Architecture Debt Register](../docs/architecture/architecture_debt_register.md)
+- [Implementation Roadmap](../implementation/roadmap.md)
+- [ADR-027 — Architecture Conformance Testing](../adr/ADR-027-compiler-phase-invariants.md) (phase invariants)
+- [Architecture Debt Register](../architecture/architecture_debt_register.md)

@@ -3,8 +3,7 @@
 use std::sync::Arc;
 use wasmtime::{Config, Engine, Linker, Module, Store};
 use fusion_plugin_api::{CapabilityContract, CapabilityId, Permission};
-use fusion_router::capability::registry::InMemoryCapabilityRegistry;
-use fusion_router::capability::CapabilityRegistry;
+use fusion_kernel::capability::{CapabilityRegistry, InMemoryCapabilityRegistry};
 use fusion_router::events::bus::BroadcastEventBus;
 use fusion_router::runtime::host_services::CapabilityHostServices;
 use fusion_router::runtime::linker::configure_linker;

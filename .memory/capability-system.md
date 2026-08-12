@@ -8,7 +8,7 @@ The capability system provides a unified abstraction for extending FusionRouter 
 
 ## Architecture
 
-### Capability Registry (`src/capability/registry.rs`)
+### Capability Registry (`crates/fusion-kernel/src/capability/registry.rs`)
 
 - Mutable during initialization, **frozen** after startup (ADR-021)
 - Immutable `CapabilityRegistry` at runtime
@@ -22,7 +22,7 @@ The capability system provides a unified abstraction for extending FusionRouter 
 - Uses `CapabilityGraph` for dependency DAG traversal
 - LRU cache for resolved capability plans
 
-### Capability Graph (`src/planner/resolver/capability/graph.rs`)
+### Capability Graph (`crates/fusion-kernel/src/capability/graph.rs`)
 
 - Dependency DAG between capabilities
 - Ensures correct ordering of capability execution
