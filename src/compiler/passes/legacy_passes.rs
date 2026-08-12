@@ -266,6 +266,19 @@ mod tests {
     use crate::providers::ModelRequirements;
     use uuid::Uuid;
 
+    fn test_catalog() -> ModelCatalog {
+        ModelCatalog {
+            code: "test-code-model".into(),
+            debug: "test-debug-model".into(),
+            architecture: "test-arch-model".into(),
+            general: "test-general-model".into(),
+            creative: "test-creative-model".into(),
+            analysis: "test-analysis-model".into(),
+            fast: "test-fast-model".into(),
+            cheap: "test-cheap-model".into(),
+        }
+    }
+
     fn make_ir(model: Option<String>) -> WorkflowIR {
         WorkflowIR {
             plan_id: Uuid::new_v4(),
@@ -288,18 +301,18 @@ mod tests {
     #[tokio::test]
     async fn test_default_model_is_fast() {
         let pass = ModelResolutionPass {
-            model_catalog: ModelCatalog::default(),
+            model_catalog: test_catalog(),
             model_requirements: None,
         };
         let ir = make_ir(None);
         let result = pass.apply(ir).await.unwrap();
-        assert_eq!(result.nodes[0].model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(result.nodes[0].model.as_deref(), Some("test-fast-model"));
     }
 
     #[tokio::test]
     async fn test_tools_requirement_picks_code_model() {
         let pass = ModelResolutionPass {
-            model_catalog: ModelCatalog::default(),
+            model_catalog: test_catalog(),
             model_requirements: Some(ModelRequirements {
                 requires_tools: true,
                 ..Default::default()
@@ -307,13 +320,13 @@ mod tests {
         };
         let ir = make_ir(None);
         let result = pass.apply(ir).await.unwrap();
-        assert_eq!(result.nodes[0].model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(result.nodes[0].model.as_deref(), Some("test-code-model"));
     }
 
     #[tokio::test]
     async fn test_high_reasoning_picks_architecture() {
         let pass = ModelResolutionPass {
-            model_catalog: ModelCatalog::default(),
+            model_catalog: test_catalog(),
             model_requirements: Some(ModelRequirements {
                 min_reasoning_score: Some(0.85),
                 ..Default::default()
@@ -321,13 +334,13 @@ mod tests {
         };
         let ir = make_ir(None);
         let result = pass.apply(ir).await.unwrap();
-        assert_eq!(result.nodes[0].model.as_deref(), Some("claude-opus-4-20250514"));
+        assert_eq!(result.nodes[0].model.as_deref(), Some("test-arch-model"));
     }
 
     #[tokio::test]
     async fn test_explicit_model_not_overridden() {
         let pass = ModelResolutionPass {
-            model_catalog: ModelCatalog::default(),
+            model_catalog: test_catalog(),
             model_requirements: Some(ModelRequirements {
                 requires_tools: true,
                 ..Default::default()

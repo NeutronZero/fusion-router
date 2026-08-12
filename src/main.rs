@@ -42,35 +42,11 @@ mod operations;
 mod review;
 
 use config::AppConfig;
-use providers::circuit_breaker::CircuitBreaker;
-use providers::openrouter::OpenRouterProvider;
+use providers::factory;
 use providers::registry::ProviderRegistry;
-use providers::router::ProviderTarget;
-use providers::zen::ZenProvider;
 use scheduler::connector_resolver::ConnectorResolver;
 use scheduler::connector_subscriber::ConnectorSubscriber;
 use telemetry::SqliteEvidenceRepository;
-
-/// Resolves an API key from the environment, failing fast in release builds
-/// instead of silently substituting placeholder credentials. The placeholder
-/// escape hatch is limited to debug builds and explicit `--unsafe-dev` runs.
-fn resolve_api_key(env_var: &str, placeholder: &str, unsafe_dev: bool) -> anyhow::Result<String> {
-    if let Ok(key) = std::env::var(env_var) {
-        if !key.trim().is_empty() {
-            return Ok(key);
-        }
-    }
-    if cfg!(debug_assertions) || unsafe_dev {
-        tracing::warn!(
-            env_var = %env_var,
-            "API key missing; using placeholder key (debug/--unsafe-dev only)"
-        );
-        return Ok(placeholder.to_string());
-    }
-    anyhow::bail!(
-        "API key environment variable '{env_var}' is required but missing or empty"
-    )
-}
 
 #[tokio::main]
 async fn main() {
@@ -158,61 +134,25 @@ async fn main() {
 
     tracing::info!("loaded config from {}", config_path);
 
-    let openrouter_key = resolve_api_key("OPENROUTER_API_KEY", "test-key", unsafe_dev)
+    // Build provider registry from config — no hardcoded provider types.
+    // The factory handles api_key resolution, provider creation, and circuit
+    // breaker setup for every configured provider.
+    let default_provider_name = config.providers.keys().next().cloned().unwrap_or_else(|| "default".to_string());
+    let default_cfg = config.providers.get(&default_provider_name).cloned().unwrap_or_default();
+    let default_key = factory::resolve_api_key(&default_cfg, &default_provider_name, unsafe_dev)
         .unwrap_or_else(|e| panic!("{e}"));
-    let default_target = ProviderTarget::new(
-        "default".to_string(),
-        CircuitBreaker::new(5, 3, 30),
-        Box::new(move || -> Arc<dyn providers::ChatProvider + Send + Sync> {
-            Arc::new(OpenRouterProvider::new(openrouter_key.clone()))
-        }),
-    );
+    let default_target = factory::create_provider_target("default", &default_cfg, default_key);
     let provider_registry = Arc::new(ProviderRegistry::new(default_target));
 
     for (name, cfg) in &config.providers {
-        let api_key = match cfg.api_key_env.as_ref() {
-            Some(var) => resolve_api_key(var, &format!("test-key-{name}"), unsafe_dev)
-                .unwrap_or_else(|e| panic!("{e}")),
-            None if cfg!(debug_assertions) || unsafe_dev => {
-                tracing::warn!(
-                    provider = %name,
-                    "no api_key_env configured; using placeholder key (debug/--unsafe-dev only)"
-                );
-                format!("test-key-{name}")
-            }
-            None => panic!(
-                "provider '{name}' has no api_key_env configured; refusing to run without a credential"
-            ),
-        };
-
-        let circuit_breaker = CircuitBreaker::new(
-            cfg.failure_threshold,
-            3,
-            cfg.cooldown_secs,
-        );
-
-        let factory_name = name.clone();
-        let factory_key = api_key.clone();
-        let target = ProviderTarget::new(
-            name.clone(),
-            circuit_breaker,
-            Box::new(move || -> Arc<dyn providers::ChatProvider + Send + Sync> {
-                if factory_name == "openrouter" {
-                    Arc::new(OpenRouterProvider::new(factory_key.clone()))
-                } else {
-                    Arc::new(ZenProvider::new(factory_key.clone()))
-                }
-            }),
-        );
-
+        let api_key = factory::resolve_api_key(cfg, name, unsafe_dev)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let target = factory::create_provider_target(name, cfg, api_key);
         provider_registry.register_target(vec![name.clone() + "/"], target);
     }
 
-    tracing::info!(
-        "providers configured: opencode-zen={}, openrouter={}",
-        std::env::var("OPENCODEZEN_API_KEY").is_ok(),
-        std::env::var("OPENROUTER_API_KEY").is_ok(),
-    );
+    let configured_providers: Vec<String> = config.providers.keys().cloned().collect();
+    tracing::info!("providers configured: {:?}", configured_providers);
 
     let resource_manager = resource::DefaultResourceManager::new(config.to_quota());
 

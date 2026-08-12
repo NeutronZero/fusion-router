@@ -19,11 +19,8 @@ use uuid::Uuid;
 
 use crate::config::AppConfig;
 use crate::executor::DefaultExecutor;
-use crate::providers::circuit_breaker::CircuitBreaker;
-use crate::providers::openrouter::OpenRouterProvider;
+use crate::providers::factory;
 use crate::providers::registry::ProviderRegistry;
-use crate::providers::router::ProviderTarget;
-use crate::providers::zen::ZenProvider;
 use crate::scheduler::default::DefaultScheduler;
 use crate::scheduler::Scheduler;
 use crate::strategies::consensus::ConsensusStrategy;
@@ -33,61 +30,20 @@ use crate::tools::builtin::{CalculatorTool, FileReadTool};
 use crate::tools::{HTTPRequestTool, ShellCommandTool, ToolRegistry};
 use crate::types::{ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata, ReservationId, RetryPolicy, StrategyKind};
 
-/// Resolves an API key from the environment, mirroring `main::resolve_api_key`.
-fn resolve_api_key(env_var: &str, placeholder: &str, unsafe_dev: bool) -> anyhow::Result<String> {
-    if let Ok(key) = std::env::var(env_var) {
-        if !key.trim().is_empty() {
-            return Ok(key);
-        }
-    }
-    if cfg!(debug_assertions) || unsafe_dev {
-        tracing::warn!(env_var = %env_var, "API key missing; placeholder (debug/--unsafe-dev only)");
-        return Ok(placeholder.to_string());
-    }
-    anyhow::bail!("API key environment variable '{env_var}' is required but missing or empty")
-}
-
 /// Builds the same provider registry the main server uses.
 pub fn build_provider_registry(
     config: &AppConfig,
     unsafe_dev: bool,
 ) -> anyhow::Result<Arc<ProviderRegistry>> {
-    let openrouter_key = resolve_api_key("OPENROUTER_API_KEY", "test-key", unsafe_dev)?;
-    let default_target = ProviderTarget::new(
-        "default".to_string(),
-        CircuitBreaker::new(5, 3, 30),
-        Box::new(move || -> Arc<dyn crate::providers::ChatProvider + Send + Sync> {
-            Arc::new(OpenRouterProvider::new(openrouter_key.clone()))
-        }),
-    );
+    let default_provider_name = config.providers.keys().next().cloned().unwrap_or_else(|| "default".to_string());
+    let default_cfg = config.providers.get(&default_provider_name).cloned().unwrap_or_default();
+    let default_key = factory::resolve_api_key(&default_cfg, &default_provider_name, unsafe_dev)?;
+    let default_target = factory::create_provider_target("default", &default_cfg, default_key);
     let registry = Arc::new(ProviderRegistry::new(default_target));
 
     for (name, cfg) in &config.providers {
-        let api_key = match cfg.api_key_env.as_ref() {
-            Some(var) => resolve_api_key(var, &format!("test-key-{name}"), unsafe_dev)?,
-            None if cfg!(debug_assertions) || unsafe_dev => {
-                tracing::warn!(provider = %name, "no api_key_env configured; placeholder key");
-                format!("test-key-{name}")
-            }
-            None => anyhow::bail!(
-                "provider '{name}' has no api_key_env configured; refusing to run"
-            ),
-        };
-
-        let circuit_breaker = CircuitBreaker::new(cfg.failure_threshold, 3, cfg.cooldown_secs);
-        let factory_name = name.clone();
-        let factory_key = api_key.clone();
-        let target = ProviderTarget::new(
-            name.clone(),
-            circuit_breaker,
-            Box::new(move || -> Arc<dyn crate::providers::ChatProvider + Send + Sync> {
-                if factory_name == "openrouter" {
-                    Arc::new(OpenRouterProvider::new(factory_key.clone()))
-                } else {
-                    Arc::new(ZenProvider::new(factory_key.clone()))
-                }
-            }),
-        );
+        let api_key = factory::resolve_api_key(cfg, name, unsafe_dev)?;
+        let target = factory::create_provider_target(name, cfg, api_key);
         registry.register_target(vec![name.clone() + "/"], target);
     }
 
@@ -130,11 +86,7 @@ impl Default for ReviewArgs {
     fn default() -> Self {
         Self {
             config_path: std::env::var("FUSION_CONFIG").unwrap_or_else(|_| "config/self-analysis.yaml".into()),
-            members: vec![
-                "zen/deepseek-v4-flash-free".into(),
-                "openrouter/openai/gpt-oss-20b:free".into(),
-                "openrouter/nvidia/nemotron-3-nano-30b-a3b:free".into(),
-            ],
+            members: vec![],
             max_tool_rounds: 6,
             files: vec![
                 "src/executor/mod.rs".into(),

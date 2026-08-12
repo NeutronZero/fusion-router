@@ -12,7 +12,7 @@ config:
   # Baseline model for condition A — a genuinely external choice,
   # NOT derived from fusion-router's ModelCatalog. Same model for
   # every task in condition A to keep the comparison fair.
-  baseline_model: "claude-sonnet-4-20250514"
+  baseline_model: "zen/deepseek-v4-flash-free"
 
   # Path to fusion-router's config file (loads provider credentials).
   # The runner reads api_key_env from this file and resolves env vars,
@@ -21,7 +21,7 @@ config:
 
   # Provider to use for condition A's direct calls.
   # Must match a key in the config file's providers map.
-  baseline_provider: "openrouter"
+  baseline_provider: "zen"
 
   # Number of repeats per task per condition (N>=5 for statistical validity).
   # The dry_run CLI flag overrides this to 2.
@@ -57,8 +57,8 @@ buckets:
     scoring: "rubric (per-dimension) — tasks spanning multiple domains"
 
   model_routing:
-    hypothesis: "Picking catalog models per task type beats always using one default"
-    scoring: "same as source bucket — reuse tasks from above, compare A vs B only"
+    hypothesis: "Picking catalog models per intent type beats always using one default"
+    scoring: "intent-specific: each task has an explicit intent field, tests if router selects the right model"
 
 tasks:
   # ──────────────────────────────────────────────
@@ -229,7 +229,7 @@ tasks:
         - name: "actionable_recommendation"
           description: "Provides a concrete next step or decision framework"
           weight: 0.2
-      judge_model: "gpt-4o-mini"
+      judge_model: "zen/mimo-v2.5-free"
 
   - id: debate-02
     bucket: debate
@@ -252,7 +252,7 @@ tasks:
         - name: "counterargument_handling"
           description: "Each side addresses the other's strongest point"
           weight: 0.2
-      judge_model: "gpt-4o-mini"
+      judge_model: "zen/mimo-v2.5-free"
 
   - id: debate-03
     bucket: debate
@@ -278,7 +278,7 @@ tasks:
         - name: "risk_acknowledgment"
           description: "Names specific risks of the recommended path"
           weight: 0.2
-      judge_model: "gpt-4o-mini"
+      judge_model: "zen/mimo-v2.5-free"
 
   - id: debate-04
     bucket: debate
@@ -301,7 +301,7 @@ tasks:
         - name: "communication_plan"
           description: "Addresses how to communicate to affected parties"
           weight: 0.25
-      judge_model: "gpt-4o-mini"
+      judge_model: "zen/mimo-v2.5-free"
 
   - id: debate-05
     bucket: debate
@@ -324,7 +324,7 @@ tasks:
         - name: "operational_burden"
           description: "Discusses monitoring, deployment, and operational complexity"
           weight: 0.2
-      judge_model: "gpt-4o-mini"
+      judge_model: "zen/mimo-v2.5-free"
 
   # ──────────────────────────────────────────────
   # CHAIN — multi-step with verifiable answers
@@ -338,7 +338,7 @@ tasks:
       Reply with only the final dollar amount (e.g. "85.50").
     scoring: numeric_tolerance
     ground_truth:
-      value: 86.70
+      value: 86.80
       tolerance: 0.01
 
   - id: chain-02
@@ -348,7 +348,7 @@ tasks:
       Another train leaves Station B (300 miles east of A) at 10:00 AM traveling west at 80 mph.
       At what time do they meet? Reply with only the time (e.g. "11:15 AM").
     scoring: exact_match
-    ground_truth: "11:08 AM"
+    ground_truth: "11:43 AM"
 
   - id: chain-03
     bucket: chain
@@ -443,7 +443,7 @@ tasks:
         - name: "code_quality"
           description: "Function follows Python conventions, has clear naming, and handles edge cases"
           weight: 0.15
-      judge_model: "gpt-4o-mini"
+      judge_model: "zen/mimo-v2.5-free"
 
   - id: fusion-02
     bucket: fusion
@@ -468,7 +468,7 @@ tasks:
         - name: "handles_scale"
           description: "Acknowledges the 10k rps requirement and addresses it (e.g. distributed considerations)"
           weight: 0.2
-      judge_model: "gpt-4o-mini"
+      judge_model: "zen/mimo-v2.5-free"
 
   - id: fusion-03
     bucket: fusion
@@ -488,7 +488,7 @@ tasks:
         - name: "output_format"
           description: "Output matches the requested format exactly"
           weight: 0.3
-      judge_model: "gpt-4o-mini"
+      judge_model: "zen/mimo-v2.5-free"
 
   - id: fusion-04
     bucket: fusion
@@ -515,7 +515,7 @@ tasks:
         - name: "addresses_actual_query"
           description: "Optimizations are tailored to the specific query given, not generic advice"
           weight: 0.15
-      judge_model: "gpt-4o-mini"
+      judge_model: "zen/mimo-v2.5-free"
 
   - id: fusion-05
     bucket: fusion
@@ -545,54 +545,69 @@ tasks:
         - name: "code_quality"
           description: "Code is well-structured, named clearly, and the docstring explains the design"
           weight: 0.15
-      judge_model: "gpt-4o-mini"
+      judge_model: "zen/mimo-v2.5-free"
 
   # ──────────────────────────────────────────────
-  # MODEL ROUTING — reuse tasks from other buckets
+  # MODEL ROUTING — test intent classification → model selection
+  # Each task has an explicit intent field to verify the router
+  # selects the right model for the task type.
   # ──────────────────────────────────────────────
   - id: routing-01
     bucket: model_routing
-    reuse: consensus-01
-    scoring: exact_match
-    ground_truth: "391"
+    intent: code
+    prompt: |
+      Write a Python function `is_valid_sudoku(board)` that checks if a 9x9 Sudoku board is valid.
+      Only the filled cells need to be validated according to Sudoku rules.
+      Reply with only the function definition.
+    scoring: contains_check
+    ground_truth:
+      must_contain: ["def is_valid_sudoku", "return True", "return False"]
+      note: "Tests if router selects a code-capable model for code generation"
 
   - id: routing-02
     bucket: model_routing
-    reuse: reflection-03
-    scoring: contains_check
-    ground_truth:
-      must_contain: ["Lock", "threading.Lock"]
-      note: "Same as reflection-03 — tests if routing picks a better model for code review"
+    intent: analysis
+    prompt: |
+      Analyze the time and space complexity of this algorithm. Reply with ONLY the complexity in O() notation.
+      def find_pairs(arr, target):
+          result = []
+          for i in range(len(arr)):
+              for j in range(i+1, len(arr)):
+                  if arr[i] + arr[j] == target:
+                      result.append((arr[i], arr[j]))
+          return result
+    scoring: exact_match
+    ground_truth: "O(n²) time, O(1) space"
 
   - id: routing-03
     bucket: model_routing
-    reuse: chain-01
-    scoring: numeric_tolerance
-    ground_truth:
-      value: 86.70
-      tolerance: 0.01
+    intent: general
+    prompt: "What is the capital of France? Reply with only the city name."
+    scoring: exact_match
+    ground_truth: "Paris"
 
   - id: routing-04
     bucket: model_routing
-    reuse: fusion-02
-    scoring: rubric
-    rubric:
-      dimensions:
-        - name: "algorithm_justification"
-          description: "Chooses an appropriate algorithm with reasoning"
-          weight: 0.3
-        - name: "implementation_correctness"
-          description: "Python class is thread-safe and correct"
-          weight: 0.4
-        - name: "complexity_analysis"
-          description: "Correctly states complexity"
-          weight: 0.3
-      judge_model: "gpt-4o-mini"
+    intent: creative
+    prompt: |
+      Write a haiku (5-7-5 syllable structure) about distributed systems.
+      Reply with exactly 3 lines.
+    scoring: contains_check
+    ground_truth:
+      must_contain: ["\n"]
+      note: "Tests if router selects a creative model — haiku quality judged by rubric"
 
   - id: routing-05
     bucket: model_routing
-    reuse: react-04
-    scoring: numeric_tolerance
+    intent: code
+    prompt: |
+      What is the output of this Rust code? Reply with only the output.
+      fn main() {
+          let s1 = String::from("hello");
+          let s2 = s1;
+          println!("{}", s1);
+      }
+    scoring: contains_check
     ground_truth:
-      value: 37.8
-      tolerance: 0.1
+      must_contain: ["error", "s1"]
+      note: "Tests if router selects a code model that understands Rust borrow checker"

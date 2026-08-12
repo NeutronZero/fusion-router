@@ -52,7 +52,7 @@ impl std::fmt::Display for ResolverError {
 
 impl std::error::Error for ResolverError {}
 
-/// Context for policy evaluation (stub — used in Task 5).
+/// Context for policy evaluation, restricting capability resolution by allow/deny lists.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PolicyContext {
     pub environment: String,

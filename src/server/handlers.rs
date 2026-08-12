@@ -81,8 +81,12 @@ impl AppState {
         let _ = workflow_registry.load_dir("workflows");
         let workflow_registry = Arc::new(workflow_registry);
 
+        let capability_catalog = crate::providers::capability_catalog::CapabilityCatalog::from_config(&config);
         let planner: Arc<dyn Planner + Send + Sync> = Arc::new(
-            crate::planner::IntentPlanner::new(config.model_catalog.clone()),
+            crate::planner::IntentPlanner::with_capability_catalog(
+                config.model_catalog.clone(),
+                capability_catalog,
+            ),
         );
 
         let resource_manager = Arc::new(resource_manager);

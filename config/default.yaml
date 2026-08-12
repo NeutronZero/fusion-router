@@ -45,15 +45,90 @@ strategies:
 
 providers:
   zen:
+    transport: "zen"
     base_url: "https://opencode.ai/zen/v1"
     api_key_env: "OPENCODEZEN_API_KEY"
     failure_threshold: 5
     cooldown_secs: 30
   openrouter:
+    transport: "openrouter"
     base_url: "https://openrouter.ai/api/v1"
     api_key_env: "OPENROUTER_API_KEY"
     failure_threshold: 5
     cooldown_secs: 30
+
+  # Generic OpenAI-compatible providers (covers 75+ providers).
+  # Set transport to any recognized name for automatic base_url defaults,
+  # or provide an explicit base_url for custom endpoints.
+  #
+  # Examples (uncomment to enable):
+  #
+  # deepseek:
+  #   transport: "openai-chat"
+  #   api_key_env: "DEEPSEEK_API_KEY"
+  #   models:
+  #     deepseek-chat:
+  #       name: "DeepSeek V4 Pro"
+  #       context_limit: 128000
+  #       output_limit: 8192
+  #       coding_score: 0.9
+  #       reasoning_score: 0.85
+  #       supports_tools: true
+  #       supports_streaming: true
+  #       supports_vision: false
+  #       supports_thinking: true
+  #       input_cost_per_1k: 0.00014
+  #       output_cost_per_1k: 0.00028
+  #       latency_ms: 500
+  #       availability: "high"
+  #
+  # groq:
+  #   transport: "openai-chat"
+  #   api_key_env: "GROQ_API_KEY"
+  #   models:
+  #     llama-3.3-70b-versatile:
+  #       name: "Llama 3.3 70B"
+  #       context_limit: 128000
+  #       output_limit: 4096
+  #       coding_score: 0.75
+  #       reasoning_score: 0.7
+  #       supports_tools: true
+  #       supports_streaming: true
+  #       input_cost_per_1k: 0.00059
+  #       output_cost_per_1k: 0.00079
+  #       latency_ms: 200
+  #       availability: "high"
+  #
+  # custom-ollama:
+  #   transport: "openai-chat"
+  #   base_url: "http://localhost:11434/v1"
+  #   models:
+  #     llama3.2:
+  #       name: "Llama 3.2 (local)"
+  #       context_limit: 8192
+  #       output_limit: 2048
+  #       supports_tools: false
+  #       supports_vision: false
+  #       latency_ms: 100
+  #       availability: "local"
+  #
+  # helicone:
+  #   transport: "openai-chat"
+  #   base_url: "https://ai-gateway.helicone.ai"
+  #   headers:
+  #     Helicone-Cache-Enabled: "true"
+  #     Helicone-User-Id: "fusion-router"
+  #   models:
+  #     gpt-4o:
+  #       name: "GPT-4o via Helicone"
+  #       context_limit: 128000
+  #       coding_score: 0.92
+  #       reasoning_score: 0.88
+  #     claude-sonnet-4-20250514:
+  #       name: "Claude Sonnet 4 via Helicone"
+  #       context_limit: 200000
+  #       coding_score: 0.93
+  #       reasoning_score: 0.91
 
 connectors:
   my-github:
@@ -115,3 +190,15 @@ features:
     enabled: false
   wasm-plugins:
     enabled: false
+
+# Model catalog (provider-agnostic role -> model mapping)
+# Configure these for your deployment; empty strings will cause resolution errors
+model_catalog:
+  code: ""
+  debug: ""
+  architecture: ""
+  general: ""
+  creative: ""
+  analysis: ""
+  fast: ""
+  cheap: ""

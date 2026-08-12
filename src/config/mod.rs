@@ -197,12 +197,119 @@ pub struct PolicyActionConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderConfig {
+    /// Wire protocol / transport adapter: `openai-chat`, `anthropic`, `gemini`,
+    /// `ollama`, `grpc`, `websocket`, `custom`, or any OpenAI-compatible endpoint.
+    #[serde(default = "default_transport")]
+    pub transport: String,
     pub base_url: Option<String>,
     pub api_key_env: Option<String>,
+    /// Direct API key or `"{env:VAR_NAME}"` syntax. Takes precedence over `api_key_env`.
+    pub api_key: Option<String>,
+    /// Custom headers sent with every request to this provider.
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    /// Per-model capability descriptors.
+    #[serde(default)]
+    pub models: HashMap<String, CapabilityDescriptor>,
+    /// Hide these model IDs from the model picker / catalog.
+    #[serde(default)]
+    pub blacklist: Vec<String>,
+    /// Hide every model *except* these IDs. Empty means no restriction.
+    #[serde(default)]
+    pub whitelist: Vec<String>,
     #[serde(default = "default_failure_threshold")]
     pub failure_threshold: u32,
     #[serde(default = "default_cooldown_secs")]
     pub cooldown_secs: u64,
+    /// Provider-specific options (e.g. `region` for Bedrock, `instanceUrl` for GitLab).
+    #[serde(default)]
+    pub options: HashMap<String, serde_json::Value>,
+
+    // Legacy alias: `provider_type` deserializes into `transport`.
+    #[serde(default, alias = "provider_type")]
+    pub(crate) _legacy_provider_type: Option<String>,
+}
+
+/// Full capability descriptor for a model.
+///
+/// The compiler resolves model selection from these fields — never from
+/// vendor names or model IDs. Every field is optional; unspecified fields
+/// fall back to sensible defaults.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CapabilityDescriptor {
+    /// Display name (e.g. "Claude Sonnet 4").
+    pub name: Option<String>,
+    // ── Context ──────────────────────────────────────────────
+    /// Maximum input context tokens.
+    pub context_limit: Option<u32>,
+    /// Maximum output tokens.
+    pub output_limit: Option<u32>,
+    // ── Quality scores (0.0 – 1.0) ─────────────────────────
+    /// Coding capability score.
+    pub coding_score: Option<f32>,
+    /// Reasoning capability score.
+    pub reasoning_score: Option<f32>,
+    // ── Modality ────────────────────────────────────────────
+    pub supports_tools: Option<bool>,
+    pub supports_streaming: Option<bool>,
+    pub supports_vision: Option<bool>,
+    pub supports_audio: Option<bool>,
+    pub supports_pdf: Option<bool>,
+    pub supports_json_mode: Option<bool>,
+    pub supports_thinking: Option<bool>,
+    pub supports_parallel_tools: Option<bool>,
+    pub supports_structured_output: Option<bool>,
+    // ── Cost ────────────────────────────────────────────────
+    /// Cost per 1k input tokens.
+    pub input_cost_per_1k: Option<f64>,
+    /// Cost per 1k output tokens.
+    pub output_cost_per_1k: Option<f64>,
+    // ── Performance ─────────────────────────────────────────
+    /// Median latency in milliseconds.
+    pub latency_ms: Option<u64>,
+    /// Availability score (0.0 – 1.0, 1.0 = always available).
+    pub availability: Option<f32>,
+    /// Reliability score (0.0 – 1.0, 1.0 = never errors).
+    pub reliability: Option<f32>,
+    // ── Tokenizer ───────────────────────────────────────────
+    /// Tokenizer identifier (e.g. "cl100k", "o200k", "SentencePiece").
+    pub tokenizer: Option<String>,
+}
+
+impl ProviderConfig {
+    /// Returns the effective transport, resolving legacy `provider_type` alias.
+    pub fn effective_transport(&self) -> &str {
+        if !self.transport.is_empty() && self.transport != "openai-compatible" {
+            return &self.transport;
+        }
+        if let Some(legacy) = &self._legacy_provider_type {
+            return legacy;
+        }
+        &self.transport
+    }
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            transport: default_transport(),
+            base_url: None,
+            api_key_env: None,
+            api_key: None,
+            headers: HashMap::new(),
+            models: HashMap::new(),
+            blacklist: Vec::new(),
+            whitelist: Vec::new(),
+            failure_threshold: default_failure_threshold(),
+            cooldown_secs: default_cooldown_secs(),
+            options: HashMap::new(),
+            _legacy_provider_type: None,
+        }
+    }
+}
+
+fn default_transport() -> String {
+    "openai-chat".to_string()
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -578,6 +685,15 @@ resources:
             !config.tools.allow_unrestricted_args,
             "unrestricted shell args must default to false"
         );
+        // New provider config defaults
+        let p = ProviderConfig::default();
+        assert_eq!(p.transport, "openai-chat");
+        assert!(p.api_key.is_none());
+        assert!(p.headers.is_empty());
+        assert!(p.models.is_empty());
+        assert!(p.blacklist.is_empty());
+        assert!(p.whitelist.is_empty());
+        assert!(p.options.is_empty());
     }
 
     #[test]

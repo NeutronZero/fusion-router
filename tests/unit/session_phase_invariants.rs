@@ -63,7 +63,7 @@ async fn session_invariant_checkpoint_idempotence() {
 #[tokio::test]
 async fn session_invariant_store_isolation_parity() {
     let mem_store = InMemorySessionStore::new();
-    let sql_store = SqliteSessionStore::new();
+    let sql_store = SqliteSessionStore::new(":memory:").unwrap();
     let session_id = SessionId::new();
 
     let session = ExecutionSession {

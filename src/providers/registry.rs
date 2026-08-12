@@ -198,59 +198,18 @@ impl ConfigSubscriber for ProviderRegistry {
     }
 
     fn prepare(&self, _old: &ConfigSnapshot, new: &ConfigSnapshot) -> Result<(), ReloadError> {
+        use super::factory;
+
         let mut candidates = HashMap::new();
 
         for (name, cfg) in &new.config.providers {
-            let api_key = cfg
-                .api_key_env
-                .as_ref()
-                .ok_or_else(|| ReloadError::Subscriber {
+            let api_key = factory::resolve_api_key(cfg, name, false)
+                .map_err(|e| ReloadError::Subscriber {
                     name: "ProviderRegistry".into(),
-                    reason: format!("Missing api_key_env for provider '{}'", name),
-                })
-                .and_then(|var_name| {
-                    std::env::var(var_name).map_err(|_| ReloadError::Subscriber {
-                        name: "ProviderRegistry".into(),
-                        reason: format!(
-                            "Missing env var {} for provider '{}'",
-                            var_name, name
-                        ),
-                    })
+                    reason: e.to_string(),
                 })?;
 
-            let circuit_breaker = super::circuit_breaker::CircuitBreaker::new(
-                cfg.failure_threshold,
-                3,
-                cfg.cooldown_secs,
-            );
-
-            let factory_name = name.clone();
-            let factory_key = api_key.clone();
-            let factory_base_url = cfg.base_url.clone();
-            let target = super::router::ProviderTarget::new(
-                name.clone(),
-                circuit_breaker,
-                Box::new(move || -> Arc<dyn super::ChatProvider + Send + Sync> {
-                    let base_url = factory_base_url.clone();
-                    if factory_name == "openrouter" {
-                        Arc::new(super::openrouter::OpenRouterProvider::with_base_url(
-                            factory_key.clone(),
-                            base_url,
-                        ))
-                    } else if factory_name == "zen" {
-                        Arc::new(super::zen::ZenProvider::with_base_url(
-                            factory_key.clone(),
-                            base_url,
-                        ))
-                    } else {
-                        Arc::new(super::openrouter::OpenRouterProvider::with_base_url(
-                            factory_key.clone(),
-                            base_url,
-                        ))
-                    }
-                }),
-            );
-
+            let target = factory::create_reload_target(name, cfg, api_key);
             candidates.insert(name.clone(), Arc::new(target));
         }
 
@@ -346,15 +305,19 @@ mod tests {
 
     fn cheap_caps() -> ModelCapabilities {
         ModelCapabilities {
-            coding_score: 0.5, reasoning_score: 0.5, max_context_tokens: 32_000,
-            supports_tools: false, supports_streaming: true, supports_vision: false, supports_json_mode: true,
+            coding_score: 0.5, reasoning_score: 0.5, max_context_tokens: 32_000, max_output_tokens: 0,
+            supports_tools: false, supports_streaming: true, supports_vision: false,
+            supports_audio: false, supports_pdf: false, supports_json_mode: true,
+            supports_thinking: false, supports_parallel_tools: false, supports_structured_output: false,
         }
     }
 
     fn premium_caps() -> ModelCapabilities {
         ModelCapabilities {
-            coding_score: 0.95, reasoning_score: 0.95, max_context_tokens: 200_000,
-            supports_tools: true, supports_streaming: true, supports_vision: true, supports_json_mode: true,
+            coding_score: 0.95, reasoning_score: 0.95, max_context_tokens: 200_000, max_output_tokens: 0,
+            supports_tools: true, supports_streaming: true, supports_vision: true,
+            supports_audio: false, supports_pdf: false, supports_json_mode: true,
+            supports_thinking: false, supports_parallel_tools: false, supports_structured_output: false,
         }
     }
 

@@ -42,7 +42,7 @@ fn bench_consensus(c: &mut Criterion) {
 
     for count in [2u32, 3, 5] {
         let strategy = ConsensusStrategy { count };
-        let ir = StrategyIR::Consensus { count };
+        let ir = StrategyIR::Consensus { count, members: vec![] };
 
         group.bench_function(format!("ConsensusStrategy/{}", count), |b| {
             b.iter(|| {

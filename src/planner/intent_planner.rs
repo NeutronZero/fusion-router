@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::Planner;
+use crate::providers::capability_catalog::CapabilityCatalog;
 use crate::types::execution::ExecutionIntent;
 use crate::types::{
     ComplexityLevel, EvidenceSnapshot, IRMetadata, IRNode, IRNodeKind, Intent,
@@ -12,11 +13,16 @@ use crate::types::{
 
 pub struct IntentPlanner {
     pub model_catalog: ModelCatalog,
+    pub capability_catalog: Option<CapabilityCatalog>,
 }
 
 impl IntentPlanner {
     pub fn new(model_catalog: ModelCatalog) -> Self {
-        Self { model_catalog }
+        Self { model_catalog, capability_catalog: None }
+    }
+
+    pub fn with_capability_catalog(model_catalog: ModelCatalog, catalog: CapabilityCatalog) -> Self {
+        Self { model_catalog, capability_catalog: Some(catalog) }
     }
 
     fn build_quality(&self, model: &str) -> WorkflowIR {
@@ -195,13 +201,23 @@ impl IntentPlanner {
     }
 
     fn select_model(&self, requirements: &Requirements) -> String {
-        match requirements.intent_classification {
+        let base_model = match requirements.intent_classification {
             Intent::Code | Intent::Debug => self.model_catalog.code.clone(),
             Intent::Architecture => self.model_catalog.architecture.clone(),
             Intent::Analysis => self.model_catalog.analysis.clone(),
             Intent::Creative => self.model_catalog.creative.clone(),
             Intent::General => self.model_catalog.general.clone(),
+        };
+
+        if let Some(ref catalog) = self.capability_catalog {
+            let model_reqs = requirements.model_requirements.clone().unwrap_or_default();
+            let candidates = catalog.resolve(&model_reqs);
+            if let Some(best) = candidates.first() {
+                return format!("{}/{}", best.provider_name, best.model_id);
+            }
         }
+
+        base_model
     }
 
     /// Resolves required capability contracts via the `CapabilityResolver`.
@@ -268,7 +284,16 @@ mod tests {
     }
 
     fn make_planner() -> IntentPlanner {
-        IntentPlanner::new(ModelCatalog::default())
+        IntentPlanner::new(ModelCatalog {
+            code: "test-code-model".into(),
+            debug: "test-debug-model".into(),
+            architecture: "test-arch-model".into(),
+            general: "test-general-model".into(),
+            creative: "test-creative-model".into(),
+            analysis: "test-analysis-model".into(),
+            fast: "test-fast-model".into(),
+            cheap: "test-cheap-model".into(),
+        })
     }
 
     #[tokio::test]

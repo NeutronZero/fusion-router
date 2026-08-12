@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub mod zen_model;
 pub mod openrouter_model;
 pub mod ollama_model;
+pub mod generic_openai_model;
 pub mod router;
 pub mod ollama;
 pub mod zen;
@@ -13,6 +14,9 @@ pub mod openrouter;
 pub mod circuit_breaker;
 pub mod circuit_breaking_provider;
 pub mod registry;
+pub mod factory;
+pub mod provider_with_headers;
+pub mod capability_catalog;
 
 #[allow(unused_imports)]
 pub use registry::ProviderRegistry;
@@ -24,10 +28,36 @@ pub struct ModelCapabilities {
     pub coding_score: f32,
     pub reasoning_score: f32,
     pub max_context_tokens: u32,
+    pub max_output_tokens: u32,
     pub supports_tools: bool,
     pub supports_streaming: bool,
     pub supports_vision: bool,
+    pub supports_audio: bool,
+    pub supports_pdf: bool,
     pub supports_json_mode: bool,
+    pub supports_thinking: bool,
+    pub supports_parallel_tools: bool,
+    pub supports_structured_output: bool,
+}
+
+impl Default for ModelCapabilities {
+    fn default() -> Self {
+        Self {
+            coding_score: 0.0,
+            reasoning_score: 0.0,
+            max_context_tokens: 0,
+            max_output_tokens: 0,
+            supports_tools: false,
+            supports_streaming: false,
+            supports_vision: false,
+            supports_audio: false,
+            supports_pdf: false,
+            supports_json_mode: false,
+            supports_thinking: false,
+            supports_parallel_tools: false,
+            supports_structured_output: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,6 +202,7 @@ pub trait Model: Send + Sync {
 }
 
 pub use crate::transport::{Transport, TransportRequest, TransportResponse};
+pub use crate::transport::HttpTransport;
 
 #[async_trait]
 pub trait ChatProvider: Send + Sync {
@@ -281,10 +312,16 @@ mod tests {
             coding_score: 0.9,
             reasoning_score: 0.85,
             max_context_tokens: 128_000,
+            max_output_tokens: 0,
             supports_tools: true,
             supports_streaming: true,
             supports_vision: true,
+            supports_audio: false,
+            supports_pdf: false,
             supports_json_mode: true,
+            supports_thinking: false,
+            supports_parallel_tools: false,
+            supports_structured_output: false,
         }
     }
 
@@ -347,10 +384,16 @@ mod tests {
             coding_score: 0.1,
             reasoning_score: 0.1,
             max_context_tokens: 1_000,
+            max_output_tokens: 0,
             supports_tools: false,
             supports_streaming: false,
             supports_vision: false,
+            supports_audio: false,
+            supports_pdf: false,
             supports_json_mode: false,
+            supports_thinking: false,
+            supports_parallel_tools: false,
+            supports_structured_output: false,
         };
         assert!(req.matches(&minimal, &base_pricing()));
     }

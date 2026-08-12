@@ -379,14 +379,14 @@ pub struct ModelCatalog {
 impl Default for ModelCatalog {
     fn default() -> Self {
         Self {
-            code: "claude-sonnet-4-20250514".into(),
-            debug: "claude-sonnet-4-20250514".into(),
-            architecture: "claude-opus-4-20250514".into(),
-            general: "gpt-4o".into(),
-            creative: "claude-sonnet-4-20250514".into(),
-            analysis: "claude-opus-4-20250514".into(),
-            fast: "gpt-4o-mini".into(),
-            cheap: "gpt-4o-mini".into(),
+            code: String::new(),
+            debug: String::new(),
+            architecture: String::new(),
+            general: String::new(),
+            creative: String::new(),
+            analysis: String::new(),
+            fast: String::new(),
+            cheap: String::new(),
         }
     }
 }

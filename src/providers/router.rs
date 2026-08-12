@@ -367,8 +367,10 @@ mod tests {
             vec!["fallback/".into()],
             mock_target("fallback-model", true),
             crate::providers::ModelCapabilities {
-                coding_score: 0.5, reasoning_score: 0.5, max_context_tokens: 32_000,
-                supports_tools: false, supports_streaming: true, supports_vision: false, supports_json_mode: true,
+                coding_score: 0.5, reasoning_score: 0.5, max_context_tokens: 32_000, max_output_tokens: 0,
+                supports_tools: false, supports_streaming: true, supports_vision: false,
+                supports_audio: false, supports_pdf: false, supports_json_mode: true,
+                supports_thinking: false, supports_parallel_tools: false, supports_structured_output: false,
             },
             crate::providers::ModelPricing { input_cost_per_1k: 0.15, output_cost_per_1k: 0.60 },
         );

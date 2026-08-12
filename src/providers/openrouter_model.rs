@@ -33,10 +33,16 @@ impl Model for OpenRouterModel {
             coding_score: 0.95,
             reasoning_score: 0.95,
             max_context_tokens: 200000,
+            max_output_tokens: 0,
             supports_tools: true,
             supports_streaming: true,
             supports_vision: true,
+            supports_audio: false,
+            supports_pdf: false,
             supports_json_mode: true,
+            supports_thinking: false,
+            supports_parallel_tools: false,
+            supports_structured_output: false,
         }
     }
 
