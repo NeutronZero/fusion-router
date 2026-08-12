@@ -45,7 +45,7 @@ impl ResumeEngine {
             .await?
             .ok_or_else(|| format!("Session not found: {}", session_id))?;
 
-        let current_api_version = semver::Version::parse("0.1.0").unwrap();
+        let current_api_version = semver::Version::new(0, 1, 0);
         if expected_api_version != &current_api_version {
             return Err(format!(
                 "Resume compatibility check failed: expected API version {}, got {}",

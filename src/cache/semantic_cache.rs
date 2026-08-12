@@ -94,7 +94,10 @@ impl SemanticCache {
                             expansion_add: 2,
                             expansion_search: 2,
                             multi: false,
-                        }).unwrap_or_else(|_| panic!("Failed to allocate minimal HNSW index"))
+                        }).unwrap_or_else(|e3| {
+                            tracing::error!(error = %e3, "Failed to allocate minimal HNSW index");
+                            std::process::exit(1);
+                        })
                     })
                 })
             });
