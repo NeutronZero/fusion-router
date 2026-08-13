@@ -737,9 +737,6 @@ impl CompilerPass for DeadNodeEliminationPass {
             return Ok(ir);
         }
 
-        // Collect node IDs for fast lookup
-        let node_ids: HashSet<uuid::Uuid> = ir.nodes.iter().map(|n| n.id).collect();
-
         // If there are no edges, keep all nodes (nothing can be unreachable)
         if ir.edges.is_empty() {
             return Ok(ir);

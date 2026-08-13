@@ -314,9 +314,10 @@ async fn law1_build_compiler_produces_mandatory_passes() {
     for mandatory in [
         "constraint_validation",
         "control_flow_validation",
+        "dead_node_elimination",
         "model_resolution",
         "budget_optimisation",
-        "PolicyCompilerPass",
+        "policy",
     ] {
         assert!(names.contains(&mandatory), "missing mandatory pass {mandatory}: {names:?}");
     }

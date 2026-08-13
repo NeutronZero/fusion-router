@@ -21,6 +21,22 @@ pub struct DefaultCompiler {
     pub passes: Vec<Box<dyn CompilerPass + Send + Sync>>,
 }
 
+/// Phase 6 adapts a `fusion_compiler` pass onto the host-side `CompilerPass`
+/// trait. Both traits operate on the same `fusion_types::WorkflowIR` and
+/// `CompilerError`, so this is a pure delegation.
+struct CratesPass(Box<dyn fusion_compiler::CompilerPass>);
+
+#[async_trait]
+impl CompilerPass for CratesPass {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
+        self.0.apply(ir).await
+    }
+}
+
 /// Builds the mandatory compiler pass pipeline (ADR-034 / Law 1).
 ///
 /// This is the sole production construction path for `DefaultCompiler`.
@@ -28,22 +44,32 @@ pub struct DefaultCompiler {
 /// through a compiler produced here; an empty pass list is never
 /// constructible from this factory. A supplied `PolicyIR` appends the
 /// policy pass (deny = compile error, per Law 2).
+///
+/// Phase 6: the pipeline IS the crates pipeline
+/// (`fusion_compiler::build_compiler`, aligned incl. `dead_node_elimination`).
+/// The only monolith pieces left are the host-facing trait object and the
+/// explicit policy / resource bridges.
 pub fn build_compiler(
     model_catalog: crate::types::ModelCatalog,
     resource_manager: Arc<dyn crate::resource::ResourceManager>,
     policy_ir: Option<crate::policy::ir::PolicyIR>,
 ) -> DefaultCompiler {
+    let kernel_rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(
+        crate::resource::kernel_adapter::KernelResourceManager::new(resource_manager),
+    );
     let mut passes: Vec<Box<dyn CompilerPass + Send + Sync>> = vec![
-        Box::new(passes::ConstraintValidationPass),
-        Box::new(passes::ControlFlowValidationPass),
-        Box::new(passes::ModelResolutionPass {
-            model_catalog,
-            model_requirements: None,
-        }),
-        Box::new(passes::BudgetOptimisationPass { resource_manager }),
+        Box::new(CratesPass(Box::new(fusion_compiler::ConstraintValidationPass))),
+        Box::new(CratesPass(Box::new(fusion_compiler::ControlFlowValidationPass))),
+        Box::new(CratesPass(Box::new(fusion_compiler::DeadNodeEliminationPass))),
+        Box::new(CratesPass(Box::new(fusion_compiler::ModelResolutionPass::new(model_catalog)))),
+        Box::new(CratesPass(Box::new(fusion_compiler::BudgetOptimisationPass {
+            resource_manager: kernel_rm,
+        }))),
     ];
     if let Some(ir) = policy_ir {
-        passes.push(Box::new(passes::policy::PolicyCompilerPass::new(ir)));
+        passes.push(Box::new(CratesPass(Box::new(fusion_compiler::PolicyCompilerPass::new(
+            ir.into(),
+        )))));
     }
     DefaultCompiler { passes }
 }
@@ -72,74 +98,12 @@ impl Compiler for DefaultCompiler {
             }
         }
 
-        lower_to_graph(current)
+        // Phase 6: lowering happens in the crates compiler
+        // (`fusion_compiler::lower_to_graph`), which attaches compile-time
+        // strategy subgraphs (Consensus) — the same production path the
+        // workspace tests exercise.
+        fusion_compiler::lower_to_graph(current)
     }
-}
-
-pub(crate) fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
-    let mut exec_nodes = Vec::new();
-    let mut exec_edges = Vec::new();
-
-    for ir_node in &ir.nodes {
-        exec_nodes.push(crate::types::ExecutionNode {
-            id: ir_node.id,
-            kind: match ir_node.kind {
-                crate::types::IRNodeKind::Generate => crate::types::ExecutionNodeKind::LLMGenerate,
-                crate::types::IRNodeKind::Review => crate::types::ExecutionNodeKind::LLMReview,
-                crate::types::IRNodeKind::Judge => crate::types::ExecutionNodeKind::LLMJudge,
-                crate::types::IRNodeKind::Transform => crate::types::ExecutionNodeKind::Transform,
-                crate::types::IRNodeKind::Gate => crate::types::ExecutionNodeKind::Gate,
-                crate::types::IRNodeKind::Conditional => crate::types::ExecutionNodeKind::Conditional,
-                crate::types::IRNodeKind::Loop => crate::types::ExecutionNodeKind::Loop,
-                crate::types::IRNodeKind::Split => crate::types::ExecutionNodeKind::Split,
-                crate::types::IRNodeKind::Join => crate::types::ExecutionNodeKind::Join,
-                crate::types::IRNodeKind::Barrier => crate::types::ExecutionNodeKind::Barrier,
-            },
-            strategy: ir_node.strategy.clone(),
-            model: ir_node.model.clone().unwrap_or_default(),
-            retry_policy: crate::types::RetryPolicy {
-                max_retries: 2,
-                backoff_ms: 1000,
-            },
-            fallback: None,
-            config: ir_node.config.clone(),
-            subgraph: None,
-        });
-    }
-
-    for ir_edge in &ir.edges {
-        exec_edges.push(crate::types::ExecutionEdge {
-            from: ir_edge.from,
-            to: ir_edge.to,
-            condition: ir_edge.condition.clone(),
-        });
-    }
-
-    // Compile-time strategy expansion: lower every non-passthrough strategy
-    // node into a prebuilt `ExecutionSubgraph` (pure, deterministic — see
-    // `strategy_expansion`). The executor executes these subgraphs directly
-    // and no longer lowers strategies on the live path.
-    for node in &mut exec_nodes {
-        node.subgraph = strategy_expansion::expanded_subgraph(node);
-    }
-
-    let total_cost = (ir.metadata.estimated_cost * 1000.0) as u64;
-    let total_tokens = ir.metadata.estimated_tokens;
-
-    Ok(ExecutionGraph {
-        graph_id: ir.plan_id,
-        nodes: exec_nodes,
-        edges: exec_edges,
-        metadata: crate::types::GraphMetadata {
-            estimated_cost: ir.metadata.estimated_cost,
-            estimated_tokens: ir.metadata.estimated_tokens,
-            max_depth: 1,
-            node_count: ir.nodes.len() as u32,
-        },
-        primitive_graph_hash: 0,
-        total_tokens,
-        total_cost,
-    })
 }
 
 #[cfg(test)]
@@ -226,10 +190,11 @@ mod tests {
             vec![
                 "constraint_validation",
                 "control_flow_validation",
+                "dead_node_elimination",
                 "model_resolution",
                 "budget_optimisation",
             ],
-            "mandatory pass pipeline must be present and ordered"
+            "mandatory pass pipeline must match the crates factory (Phase 6 alignment)"
         );
         assert!(!compiler.passes.is_empty(), "Law 1: no execution path may use an empty pass pipeline");
     }
@@ -301,5 +266,56 @@ mod tests {
         };
         let result = compiler.compile(empty_ir).await;
         assert!(result.is_err(), "ExecutionGraph construction is impossible after compiler failure");
+    }
+
+    #[tokio::test]
+    async fn phase6_consensus_expands_through_crates_lower() {
+        let compiler = test_compiler();
+        let mut ir = test_ir();
+        ir.nodes[0].strategy = crate::types::StrategyKind::Consensus;
+        ir.nodes[0].model = Some("orchestrator".into());
+        let graph = compiler.compile(ir).await.expect("compile must succeed");
+        assert_eq!(graph.nodes.len(), 1, "top-level node count unchanged");
+        let subgraph = graph.nodes[0]
+            .subgraph
+            .as_ref()
+            .expect("consensus node must carry a compile-time subgraph (crates expansion)");
+        assert_eq!(subgraph.nodes.len(), 4, "3 members + 1 judge");
+        assert_eq!(subgraph.nodes[3].kind, crate::types::ExecutionNodeKind::LLMJudge);
+        assert_eq!(subgraph.exit_node_id, subgraph.nodes[3].id);
+    }
+
+    #[tokio::test]
+    async fn phase6_dead_node_elimination_is_live() {
+        // Phase 6 alignment: the production pipeline includes the crates
+        // dead-node pass, so isolated nodes in multi-node graphs are dropped.
+        let compiler = test_compiler();
+        let mut ir = test_ir();
+        ir.nodes.push(crate::types::IRNode {
+            id: uuid::Uuid::new_v4(),
+            kind: crate::types::IRNodeKind::Generate,
+            strategy: crate::types::StrategyKind::Single,
+            model: None,
+            config: std::collections::HashMap::new(),
+        });
+        // Third node has NO edges at all — unreachable and must be eliminated.
+        ir.nodes.push(crate::types::IRNode {
+            id: uuid::Uuid::new_v4(),
+            kind: crate::types::IRNodeKind::Generate,
+            strategy: crate::types::StrategyKind::Single,
+            model: None,
+            config: std::collections::HashMap::new(),
+        });
+        ir.edges.push(crate::types::IREdge {
+            from: ir.nodes[0].id,
+            to: ir.nodes[1].id,
+            condition: None,
+        });
+        let graph = compiler.compile(ir).await.expect("compile must succeed");
+        assert_eq!(
+            graph.nodes.len(),
+            2,
+            "unreachable isolated node must be eliminated by dead_node_elimination"
+        );
     }
 }

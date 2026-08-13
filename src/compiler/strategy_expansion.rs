@@ -1,10 +1,12 @@
 //! Compile-time strategy expansion.
 //!
-//! Strategy lowering (`Strategy::lower` → `PrimitiveGraph` →
-//! `to_execution_graph` → `ExecutionSubgraph`) happens here, inside the
-//! compiler, and the resulting subgraph is attached to the node as
-//! `ExecutionNode.subgraph`. The executor executes the prebuilt subgraph
-//! directly and no longer lowers strategies on the live path.
+//! Phase 6: compile-time lowering for production now happens in
+//! `fusion_compiler::strategy_expansion` (see `build_compiler` and
+//! `src/review.rs`). This module keeps the full 7-strategy lowering alive
+//! because the executor's runtime fallback (`strategy_resolver`) still builds
+//! `StrategyIR` here via `strategy_ir_from_node`. The remaining entry points
+//! (`expanded_subgraph` & helpers) are dead in the lib/build graph and are
+//! removed in the Phase 6.6 cleanup.
 //!
 //! The lowering is pure and deterministic: `to_execution_graph` derives node
 //! UUIDs from the primitive-graph hash, so identical inputs produce identical
@@ -25,6 +27,7 @@ use crate::strategies::single::SingleStrategy;
 use crate::types::{ExecutionNode, ExecutionSubgraph, StrategyKind};
 
 /// Maps a `StrategyKind` to its registry key (lowercased descriptor name).
+#[allow(dead_code)]
 pub(crate) fn strategy_name(kind: &StrategyKind) -> &str {
     match kind {
         StrategyKind::Single => "single",
@@ -39,6 +42,7 @@ pub(crate) fn strategy_name(kind: &StrategyKind) -> &str {
 }
 
 /// Registry of the built-in strategies, shared across compilations.
+#[allow(dead_code)]
 fn default_strategy_registry() -> &'static StrategyRegistry {
     static REGISTRY: OnceLock<StrategyRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| {
@@ -129,6 +133,7 @@ pub(crate) fn strategy_ir_from_node(node: &ExecutionNode) -> StrategyIR {
     }
 }
 
+#[allow(dead_code)]
 fn execution_graph_to_subgraph(eg: &crate::types::ExecutionGraph, template: &ExecutionNode) -> ExecutionSubgraph {
     let entry_id = eg.nodes.first().map(|n| n.id).unwrap_or(template.id);
     let exit_id = eg.nodes.last().map(|n| n.id).unwrap_or(template.id);
@@ -146,6 +151,7 @@ fn execution_graph_to_subgraph(eg: &crate::types::ExecutionGraph, template: &Exe
 /// Returns `None` for passthrough nodes (Single strategy), unregistered
 /// strategy kinds (e.g. Custom WASM strategies not available at compile
 /// time), and when lowering fails — the node then executes as itself.
+#[allow(dead_code)]
 pub(crate) fn expanded_subgraph(node: &ExecutionNode) -> Option<ExecutionSubgraph> {
     if node.strategy == StrategyKind::Single {
         return None;

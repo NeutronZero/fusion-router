@@ -248,7 +248,9 @@ pub async fn run(args: ReviewArgs) -> anyhow::Result<()> {
         config: node_config,
         subgraph: None,
     };
-    let subgraph = crate::compiler::strategy_expansion::expanded_subgraph(&node)
+    // Phase 6: compile-time expansion comes from the crates compiler
+    // (Consensus) — same production path as `build_compiler`.
+    let subgraph = fusion_compiler::strategy_expansion::expanded_subgraph(&node)
         .ok_or_else(|| anyhow::anyhow!("consensus expansion produced no subgraph"))?;
     node.subgraph = Some(subgraph);
 
