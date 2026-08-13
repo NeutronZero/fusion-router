@@ -1,6 +1,7 @@
 //! Policy Compilation Subsystem Module (`src/policy/mod.rs`)
 
 pub mod ast;
+pub mod bridge;
 pub mod diagnostics;
 pub mod ir;
 pub mod precedence;

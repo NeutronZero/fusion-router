@@ -7,6 +7,7 @@ pub mod cancelling_stream;
 pub mod guard;
 pub mod budget;
 pub mod stream_meter;
+pub mod kernel_adapter;
 
 pub use guard::ResourceGuard;
 pub use budget::BudgetEnvelope;
