@@ -8,8 +8,12 @@ use fusion_router::strategies::consensus::ConsensusStrategy;
 use fusion_router::strategies::Strategy;
 use fusion_router::types::{ChatCompletionRequest, ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind};
 
-const ROADMAP: &str = include_str!("../docs/roadmap-v0.9.md");
 const CONSENSUS_COUNT: u32 = 3;
+
+fn roadmap_context() -> String {
+    std::fs::read_to_string(format!("{}/docs/repair-phase0-scope.md", env!("CARGO_MANIFEST_DIR")))
+        .unwrap_or_else(|_| "FusionRouter v0.9 roadmap: full roadmap document is unavailable.".to_string())
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -67,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     let user_message = format!(
         "Analyze the following FusionRouter v0.9 roadmap. Identify the single most \
          important risk, the single most important strength, and what should change:\n\n{}",
-        ROADMAP
+        roadmap_context()
     );
 
     let mut responses: Vec<(usize, String)> = Vec::new();

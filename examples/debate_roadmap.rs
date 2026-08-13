@@ -10,7 +10,10 @@ use fusion_router::strategies::single::SingleStrategy;
 use fusion_router::strategies::Strategy;
 use fusion_router::types::{ChatCompletionRequest, ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind};
 
-const ROADMAP: &str = include_str!("../docs/roadmap-v0.9.md");
+fn roadmap_context() -> String {
+    std::fs::read_to_string(format!("{}/docs/repair-phase0-scope.md", env!("CARGO_MANIFEST_DIR")))
+        .unwrap_or_else(|_| "FusionRouter v0.9 roadmap: full roadmap document is unavailable.".to_string())
+}
 
 struct Role {
     name: &'static str,
@@ -71,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
 
     let user_message = format!(
         "Analyze the following FusionRouter v0.9 roadmap document and provide your perspective:\n\n{}",
-        ROADMAP
+        roadmap_context()
     );
 
     // ── Phase 1: Compiler Pipeline (FanOut / Barrier / Reducer) ──────────────

@@ -43,7 +43,7 @@ async fn test_domain_invariant_workflow_ir_produces_one_execution_graph() {
     let report = compiler.compile("Test Domain Compilation", &exec_ir).await.expect("Compile");
 
     assert!(!report.graph_id.is_empty(), "ExecutionGraph ID must be present");
-    assert_eq!(report.pass_diffs.len(), 4, "Must execute exactly 4 compiler passes");
+    assert_eq!(report.pass_diffs.len(), 5, "Must execute exactly 5 compiler passes");
 }
 
 #[test]
@@ -59,10 +59,16 @@ fn test_domain_invariant_replay_references_immutable_bundle() {
     assert!(bundle_id.ends_with(".fusion"), "ExecutionBundle must be a .fusion archive");
 }
 
-#[test]
-fn test_domain_invariant_studio_projections_derived_from_execution() {
+#[tokio::test]
+async fn test_domain_invariant_studio_projections_derived_from_execution() {
     let compiler = CompilerEngine::new();
-    let score = compiler.explain_route("openrouter");
+    let planning_ir = WorkflowBuilder::new()
+        .task("n1", "CodeGeneration")
+        .unwrap()
+        .build()
+        .unwrap();
+    let exec_ir = workflow_to_types(&planning_ir).expect("Adapter conversion");
+    let score = compiler.explain_route("openrouter", "Code Generation", &exec_ir).await;
 
     assert_eq!(score.provider_name, "openrouter");
     assert!(score.total_score > 0.0, "Route analysis must compute positive total score");
