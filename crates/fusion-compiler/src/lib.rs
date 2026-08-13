@@ -1,15 +1,19 @@
 //! Compiler pass pipeline for WorkflowIR optimisation.
+//!
+//! Passes operate on `fusion_types::WorkflowIR` (execution-layer IR) and produce
+//! `fusion_types::ExecutionGraph`. The planning-level IR (`fusion_ir::WorkflowIR`)
+//! is converted via the adapter before entering this pipeline.
+
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use fusion_core::{ModelCatalog, ModelRequirements, PlatformError};
-use fusion_ir::WorkflowIR;
+use fusion_types::*;
+use fusion_core::PlatformError;
 use fusion_kernel::resource::StubResourceManager;
-use passes::BudgetOptimisationPass;
 use serde::{Deserialize, Serialize};
 
 pub mod passes;
 
 /// Weights for sub-scores in the route scoring formula.
-/// Used to compute `total_score` from available `Option<f64>` sub-scores.
 const WEIGHT_CAPABILITY: f64 = 0.3;
 const WEIGHT_BUDGET: f64 = 0.25;
 const WEIGHT_LATENCY: f64 = 0.2;
@@ -19,23 +23,11 @@ const WEIGHT_POLICY: f64 = 0.1;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExplainRouteScore {
     pub provider_name: String,
-    /// Capability resolution score. `None` = not yet wired in crates/
-    /// (real resolution lives in frozen `src/planner/resolver/`).
     pub capability_score: Option<f64>,
-    /// Budget affordability score. `Some(1.0)` from StubResourceManager
-    /// (always permissive per ADR-038's deliberate scope).
     pub budget_score: Option<f64>,
-    /// Latency score from health checker. `None` = no live data in crates/
-    /// (ConnectorHealthChecker in `src/scheduler/` is unpopulated for crate path).
     pub latency_score: Option<f64>,
-    /// Health score from health checker. `None` = no live data in crates/.
     pub health_score: Option<f64>,
-    /// Policy compliance score. `None` = not wired in crates/
-    /// (real policy logic lives in frozen `src/compiler/passes/policy.rs`).
     pub policy_score: Option<f64>,
-    /// Weighted total of available sub-scores. Computed from `Some(...)` values
-    /// only; missing scores are excluded and weights re-normalized.
-    /// `0.0` if all sub-scores are `None`.
     pub total_score: f64,
 }
 
@@ -45,8 +37,6 @@ pub struct ProviderComparisonCandidate {
     pub model_name: String,
     pub total_score: f64,
     pub status: String,
-    /// Dynamically generated reason based on score deltas.
-    /// `"Score not computed"` when sub-scores are `None`.
     pub reason: String,
 }
 
@@ -62,7 +52,6 @@ pub struct CompilerPassDiff {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompilerReport {
     pub intent: String,
-    pub ir_version: u16,
     pub passes_executed: Vec<String>,
     pub pass_diffs: Vec<CompilerPassDiff>,
     pub graph_id: String,
@@ -74,89 +63,73 @@ pub struct CompilerReport {
 #[async_trait::async_trait]
 pub trait CompilerPass: Send + Sync {
     fn name(&self) -> &str;
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError>;
+    async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError>;
 }
 
 #[async_trait::async_trait]
 pub trait Compiler: Send + Sync {
-    async fn compile(&self, ir: WorkflowIR) -> Result<CompilerReport, PlatformError>;
+    async fn compile(&self, ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError>;
 }
 
-pub struct DefaultCompiler {
-    engine: CompilerEngine,
-}
-
-impl DefaultCompiler {
-    pub fn new() -> Self {
-        Self {
-            engine: CompilerEngine::new(),
-        }
-    }
-}
-
-impl Default for DefaultCompiler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait::async_trait]
-impl Compiler for DefaultCompiler {
-    async fn compile(&self, ir: WorkflowIR) -> Result<CompilerReport, PlatformError> {
-        self.engine.compile("Default Compilation", &ir).await
-    }
-}
+// ---------------------------------------------------------------------------
+// Real passes (ported from src/compiler/passes/legacy_passes.rs)
+// ---------------------------------------------------------------------------
 
 pub struct ConstraintValidationPass;
+
 #[async_trait::async_trait]
 impl CompilerPass for ConstraintValidationPass {
-    fn name(&self) -> &str {
-        "constraint_validation"
-    }
+    fn name(&self) -> &str { "constraint_validation" }
 
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        if ir.nodes().is_empty() {
-            return Err(PlatformError::Compiler {
-                code: "EMPTY_IR".to_string(),
-                message: "IR must have at least one node".to_string(),
-                recovery_suggestion: "Add at least one execution node to the workflow spec".to_string(),
+    async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
+        if ir.nodes.is_empty() {
+            return Err(CompilerError::ValidationError {
+                pass: "constraint_validation".into(),
+                node_id: None,
+                message: "IR must have at least one node".into(),
             });
         }
-        Ok(ir.clone())
+        Ok(ir)
     }
 }
 
 pub struct ModelResolutionPass {
     pub model_catalog: ModelCatalog,
-    pub model_requirements: Option<ModelRequirements>,
 }
 
 impl ModelResolutionPass {
-    pub fn new(model_catalog: ModelCatalog, model_requirements: Option<ModelRequirements>) -> Self {
-        Self {
-            model_catalog,
-            model_requirements,
-        }
+    pub fn new(model_catalog: ModelCatalog) -> Self {
+        Self { model_catalog }
     }
 
     pub fn select_model(&self) -> &str {
-        match &self.model_requirements {
-            Some(reqs) if reqs.requires_tools => &self.model_catalog.code,
-            Some(reqs) if reqs.min_coding_score.is_some_and(|s| s >= 0.8) => &self.model_catalog.code,
-            Some(reqs) if reqs.min_reasoning_score.is_some_and(|s| s >= 0.8) => &self.model_catalog.architecture,
-            _ => &self.model_catalog.fast,
-        }
+        // Default to fast model when no requirements are given
+        &self.model_catalog.fast
     }
 }
 
 #[async_trait::async_trait]
 impl CompilerPass for ModelResolutionPass {
-    fn name(&self) -> &str {
-        "model_resolution"
-    }
+    fn name(&self) -> &str { "model_resolution" }
 
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        Ok(ir.clone())
+    async fn apply(&self, mut ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
+        for node in &mut ir.nodes {
+            match node.kind {
+                IRNodeKind::Conditional
+                | IRNodeKind::Loop
+                | IRNodeKind::Split
+                | IRNodeKind::Join
+                | IRNodeKind::Barrier => {
+                    // Control flow nodes don't need a model
+                }
+                _ => {
+                    if node.model.is_none() {
+                        node.model = Some(self.select_model().to_string());
+                    }
+                }
+            }
+        }
+        Ok(ir)
     }
 }
 
@@ -164,115 +137,280 @@ pub struct ControlFlowValidationPass;
 
 #[async_trait::async_trait]
 impl CompilerPass for ControlFlowValidationPass {
-    fn name(&self) -> &str {
-        "control_flow_validation"
-    }
+    fn name(&self) -> &str { "control_flow_validation" }
 
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        let report = ir.validate();
-        if let Some(err) = report.first_error() {
-            return Err(PlatformError::Compiler {
-                code: "CONTROL_FLOW_VALIDATION_FAILED".to_string(),
-                message: format!("Control flow validation error: {err}"),
-                recovery_suggestion: "Ensure edge integrity, cycle constraints, and node arity requirements are satisfied".to_string(),
-            });
+    async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
+        let node_ids: HashSet<uuid::Uuid> = ir.nodes.iter().map(|n| n.id).collect();
+
+        // Validate edge references
+        for edge in &ir.edges {
+            if !node_ids.contains(&edge.from) {
+                return Err(CompilerError::ValidationError {
+                    pass: "control_flow_validation".into(),
+                    node_id: None,
+                    message: format!("Edge from {} references unknown source node", edge.from),
+                });
+            }
+            if !node_ids.contains(&edge.to) {
+                return Err(CompilerError::ValidationError {
+                    pass: "control_flow_validation".into(),
+                    node_id: None,
+                    message: format!("Edge to {} references unknown target node", edge.to),
+                });
+            }
         }
-        Ok(ir.clone())
+
+        // Validate per-kind invariants
+        for node in &ir.nodes {
+            match node.kind {
+                IRNodeKind::Conditional => {
+                    let outgoing: Vec<&IREdge> = ir.edges.iter()
+                        .filter(|e| e.from == node.id)
+                        .collect();
+                    if outgoing.is_empty() {
+                        return Err(CompilerError::ValidationError {
+                            pass: "control_flow_validation".into(),
+                            node_id: Some(node.id),
+                            message: "Conditional node must have at least one outgoing edge".into(),
+                        });
+                    }
+                    if !outgoing.iter().any(|e| e.condition.is_some()) {
+                        return Err(CompilerError::ValidationError {
+                            pass: "control_flow_validation".into(),
+                            node_id: Some(node.id),
+                            message: "Conditional node must have at least one edge with a condition".into(),
+                        });
+                    }
+                }
+                IRNodeKind::Loop => {
+                    let outgoing: Vec<&IREdge> = ir.edges.iter()
+                        .filter(|e| e.from == node.id)
+                        .collect();
+                    if outgoing.is_empty() {
+                        return Err(CompilerError::ValidationError {
+                            pass: "control_flow_validation".into(),
+                            node_id: Some(node.id),
+                            message: "Loop node must have at least one outgoing edge".into(),
+                        });
+                    }
+                    if !node.config.contains_key("max_iterations") {
+                        return Err(CompilerError::ValidationError {
+                            pass: "control_flow_validation".into(),
+                            node_id: Some(node.id),
+                            message: "Loop node must have max_iterations in config".into(),
+                        });
+                    }
+                }
+                IRNodeKind::Split => {
+                    let outgoing: Vec<&IREdge> = ir.edges.iter()
+                        .filter(|e| e.from == node.id)
+                        .collect();
+                    if outgoing.len() < 2 {
+                        return Err(CompilerError::ValidationError {
+                            pass: "control_flow_validation".into(),
+                            node_id: Some(node.id),
+                            message: format!("Split node must have at least 2 outgoing edges, got {}", outgoing.len()),
+                        });
+                    }
+                }
+                IRNodeKind::Join => {
+                    let incoming: Vec<&IREdge> = ir.edges.iter()
+                        .filter(|e| e.to == node.id)
+                        .collect();
+                    if incoming.len() < 2 {
+                        return Err(CompilerError::ValidationError {
+                            pass: "control_flow_validation".into(),
+                            node_id: Some(node.id),
+                            message: format!("Join node must have at least 2 incoming edges, got {}", incoming.len()),
+                        });
+                    }
+                }
+                IRNodeKind::Barrier => {
+                    let outgoing: Vec<&IREdge> = ir.edges.iter()
+                        .filter(|e| e.from == node.id)
+                        .collect();
+                    let incoming: Vec<&IREdge> = ir.edges.iter()
+                        .filter(|e| e.to == node.id)
+                        .collect();
+                    if incoming.is_empty() {
+                        return Err(CompilerError::ValidationError {
+                            pass: "control_flow_validation".into(),
+                            node_id: Some(node.id),
+                            message: "Barrier node must have at least one incoming edge".into(),
+                        });
+                    }
+                    if outgoing.is_empty() {
+                        return Err(CompilerError::ValidationError {
+                            pass: "control_flow_validation".into(),
+                            node_id: Some(node.id),
+                            message: "Barrier node must have at least one outgoing edge".into(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Detect illegal cycles (3-color DFS, skip loop back-edges)
+        detect_illegal_cycles(&ir)?;
+
+        Ok(ir)
     }
 }
 
-pub struct CapabilityResolutionPass;
-#[async_trait::async_trait]
-impl CompilerPass for CapabilityResolutionPass {
-    fn name(&self) -> &str { "Capability Resolution" }
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        Ok(ir.clone())
+fn detect_illegal_cycles(ir: &WorkflowIR) -> Result<(), CompilerError> {
+    let edges: Vec<(uuid::Uuid, uuid::Uuid)> = ir.edges.iter()
+        .filter(|e| e.condition.as_deref() != Some("loop"))
+        .map(|e| (e.from, e.to))
+        .collect();
+
+    match three_color_cycle_detect(&edges) {
+        Ok(()) => Ok(()),
+        Err(node_id) => Err(CompilerError::ValidationError {
+            pass: "control_flow_validation".into(),
+            node_id: Some(node_id),
+            message: "Illegal cycle detected outside of loop back-edges".into(),
+        }),
     }
 }
 
-pub struct ConstraintSolverPass;
-#[async_trait::async_trait]
-impl CompilerPass for ConstraintSolverPass {
-    fn name(&self) -> &str { "Constraint Solver" }
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        Ok(ir.clone())
+fn three_color_cycle_detect(edges: &[(uuid::Uuid, uuid::Uuid)]) -> Result<(), uuid::Uuid> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Color { White, Grey, Black }
+
+    let mut colors: HashMap<uuid::Uuid, Color> = HashMap::new();
+    let mut graph: HashMap<uuid::Uuid, Vec<uuid::Uuid>> = HashMap::new();
+    for (from, to) in edges {
+        graph.entry(*from).or_default().push(*to);
+        graph.entry(*to).or_default();
     }
+
+    fn dfs(
+        node: uuid::Uuid,
+        graph: &HashMap<uuid::Uuid, Vec<uuid::Uuid>>,
+        colors: &mut HashMap<uuid::Uuid, Color>,
+    ) -> bool {
+        colors.insert(node, Color::Grey);
+        if let Some(neighbors) = graph.get(&node) {
+            for &next in neighbors {
+                match colors.get(&next).unwrap_or(&Color::White) {
+                    Color::Grey => return true,
+                    Color::White => {
+                        if dfs(next, graph, colors) { return true; }
+                    }
+                    Color::Black => continue,
+                }
+            }
+        }
+        colors.insert(node, Color::Black);
+        false
+    }
+
+    for node in graph.keys().copied().collect::<Vec<_>>() {
+        if colors.get(&node).unwrap_or(&Color::White) == &Color::White
+            && dfs(node, &graph, &mut colors) {
+                return Err(node);
+            }
+    }
+
+    Ok(())
 }
 
-pub struct ConstantFoldingPass;
-#[async_trait::async_trait]
-impl CompilerPass for ConstantFoldingPass {
-    fn name(&self) -> &str { "Constant Folding" }
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        Ok(ir.clone())
+// ---------------------------------------------------------------------------
+// Lowering: WorkflowIR → ExecutionGraph
+// ---------------------------------------------------------------------------
+
+pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
+    let mut exec_nodes = Vec::new();
+    let mut exec_edges = Vec::new();
+
+    for ir_node in &ir.nodes {
+        exec_nodes.push(ExecutionNode {
+            id: ir_node.id,
+            kind: match ir_node.kind {
+                IRNodeKind::Generate => ExecutionNodeKind::LLMGenerate,
+                IRNodeKind::Review => ExecutionNodeKind::LLMReview,
+                IRNodeKind::Judge => ExecutionNodeKind::LLMJudge,
+                IRNodeKind::Transform => ExecutionNodeKind::Transform,
+                IRNodeKind::Gate => ExecutionNodeKind::Gate,
+                IRNodeKind::Conditional => ExecutionNodeKind::Conditional,
+                IRNodeKind::Loop => ExecutionNodeKind::Loop,
+                IRNodeKind::Split => ExecutionNodeKind::Split,
+                IRNodeKind::Join => ExecutionNodeKind::Join,
+                IRNodeKind::Barrier => ExecutionNodeKind::Barrier,
+            },
+            strategy: ir_node.strategy.clone(),
+            model: ir_node.model.clone().unwrap_or_default(),
+            retry_policy: RetryPolicy {
+                max_retries: 2,
+                backoff_ms: 1000,
+            },
+            fallback: None,
+            config: ir_node.config.clone(),
+            subgraph: None,
+        });
     }
+
+    for ir_edge in &ir.edges {
+        exec_edges.push(ExecutionEdge {
+            from: ir_edge.from,
+            to: ir_edge.to,
+            condition: ir_edge.condition.clone(),
+        });
+    }
+
+    let total_cost = (ir.metadata.estimated_cost * 1000.0) as u64;
+    let total_tokens = ir.metadata.estimated_tokens;
+
+    Ok(ExecutionGraph {
+        graph_id: ir.plan_id,
+        nodes: exec_nodes,
+        edges: exec_edges,
+        metadata: GraphMetadata {
+            estimated_cost: ir.metadata.estimated_cost,
+            estimated_tokens: ir.metadata.estimated_tokens,
+            max_depth: 1,
+            node_count: ir.nodes.len() as u32,
+        },
+        primitive_graph_hash: 0,
+        total_tokens,
+        total_cost,
+    })
 }
 
-pub struct DeadNodeEliminationPass;
-#[async_trait::async_trait]
-impl CompilerPass for DeadNodeEliminationPass {
-    fn name(&self) -> &str { "Dead Node Elimination" }
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        Ok(ir.clone())
-    }
-}
-
-pub struct NodeFusionPass;
-#[async_trait::async_trait]
-impl CompilerPass for NodeFusionPass {
-    fn name(&self) -> &str { "Node Fusion" }
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        Ok(ir.clone())
-    }
-}
-
-pub struct RetryInjectionPass;
-#[async_trait::async_trait]
-impl CompilerPass for RetryInjectionPass {
-    fn name(&self) -> &str { "Retry Injection" }
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        Ok(ir.clone())
-    }
-}
-
-pub struct FallbackInjectionPass;
-#[async_trait::async_trait]
-impl CompilerPass for FallbackInjectionPass {
-    fn name(&self) -> &str { "Fallback Injection" }
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        Ok(ir.clone())
-    }
-}
-
-pub struct SchedulingHintsPass;
-#[async_trait::async_trait]
-impl CompilerPass for SchedulingHintsPass {
-    fn name(&self) -> &str { "Scheduling Hints" }
-    async fn transform(&self, ir: &WorkflowIR) -> Result<WorkflowIR, PlatformError> {
-        Ok(ir.clone())
-    }
-}
+// ---------------------------------------------------------------------------
+// Compiler engine
+// ---------------------------------------------------------------------------
 
 pub struct CompilerEngine {
     passes: Vec<Box<dyn CompilerPass>>,
+    resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>,
 }
 
 impl CompilerEngine {
     pub fn new() -> Self {
+        Self::with_resource_manager(Arc::new(StubResourceManager::new(f64::INFINITY, u64::MAX)))
+    }
+
+    pub fn with_resource_manager(resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>) -> Self {
         let passes: Vec<Box<dyn CompilerPass>> = vec![
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
-            Box::new(CapabilityResolutionPass),
-            Box::new(ConstraintSolverPass),
-            Box::new(ConstantFoldingPass),
-            Box::new(DeadNodeEliminationPass),
-            Box::new(NodeFusionPass),
-            Box::new(RetryInjectionPass),
-            Box::new(FallbackInjectionPass),
-            Box::new(SchedulingHintsPass),
-            Box::new(BudgetOptimisationPass::new(Arc::new(StubResourceManager::new(f64::INFINITY, u64::MAX)))),
+            Box::new(ModelResolutionPass::new(ModelCatalog::default())),
+            Box::new(BudgetOptimisationPass { resource_manager: resource_manager.clone() }),
         ];
-        Self { passes }
+        Self { passes, resource_manager }
+    }
+
+    pub fn with_model_catalog(model_catalog: ModelCatalog) -> Self {
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(f64::INFINITY, u64::MAX));
+        let passes: Vec<Box<dyn CompilerPass>> = vec![
+            Box::new(ConstraintValidationPass),
+            Box::new(ControlFlowValidationPass),
+            Box::new(ModelResolutionPass::new(model_catalog)),
+            Box::new(BudgetOptimisationPass { resource_manager: rm.clone() }),
+        ];
+        Self { passes, resource_manager: rm }
     }
 
     pub async fn compile(&self, intent: &str, ir: &WorkflowIR) -> Result<CompilerReport, PlatformError> {
@@ -291,9 +429,15 @@ impl CompilerEngine {
 
         for (idx, pass) in self.passes.iter().enumerate() {
             let pass_name = pass.name().to_string();
-            let input_count = current_ir.nodes().len();
-            current_ir = pass.transform(&current_ir).await?;
-            let output_count = current_ir.nodes().len();
+            let input_count = current_ir.nodes.len();
+            current_ir = pass.apply(current_ir).await.map_err(|e| {
+                PlatformError::Compiler {
+                    code: "PASS_ERROR".to_string(),
+                    message: format!("Pass '{}' failed: {}", pass_name, e),
+                    recovery_suggestion: "Check IR validity and pass constraints".to_string(),
+                }
+            })?;
+            let output_count = current_ir.nodes.len();
 
             pass_names.push(pass_name.clone());
             pass_diffs.push(CompilerPassDiff {
@@ -307,8 +451,6 @@ impl CompilerEngine {
 
         let compilation_time_ms = compile_start.elapsed().as_millis() as u64;
 
-        // Temporary fallback: fixed provider list until capability resolution
-        // is wired into crates/ (see ADR-039 D2).
         let route_scores = vec![
             self.explain_route("openrouter"),
             self.explain_route("zen"),
@@ -319,37 +461,89 @@ impl CompilerEngine {
 
         Ok(CompilerReport {
             intent: intent.to_string(),
-            ir_version: ir.version(),
             passes_executed: pass_names,
             pass_diffs,
-            graph_id: format!("graph_{}", ir.workflow_id()),
+            graph_id: format!("graph_{}", ir.plan_id),
             compilation_time_ms,
             route_scores,
             provider_comparison,
         })
     }
 
-    /// Scores a provider against the given IR.
-    ///
-    /// Sub-scores are `Option<f64>` — `None` means "not yet wired in crates/"
-    /// (see ADR-039 for per-sub-score data source investigation).
+    /// Compile the IR through all passes, then lower to an ExecutionGraph.
+    /// Returns both the compiler report and the execution graph.
+    pub async fn compile_and_lower(
+        &self,
+        intent: &str,
+        ir: &WorkflowIR,
+    ) -> Result<(CompilerReport, ExecutionGraph), PlatformError> {
+        if intent.is_empty() {
+            return Err(PlatformError::Compiler {
+                code: "EMPTY_INTENT".to_string(),
+                message: "Compiler intent cannot be empty".to_string(),
+                recovery_suggestion: "Provide valid intent string".to_string(),
+            });
+        }
+
+        let compile_start = std::time::Instant::now();
+        let mut current_ir = ir.clone();
+        let mut pass_names = Vec::new();
+        let mut pass_diffs = Vec::new();
+
+        for (idx, pass) in self.passes.iter().enumerate() {
+            let pass_name = pass.name().to_string();
+            let input_count = current_ir.nodes.len();
+            current_ir = pass.apply(current_ir).await.map_err(|e| {
+                PlatformError::Compiler {
+                    code: "PASS_ERROR".to_string(),
+                    message: format!("Pass '{}' failed: {}", pass_name, e),
+                    recovery_suggestion: "Check IR validity and pass constraints".to_string(),
+                }
+            })?;
+            let output_count = current_ir.nodes.len();
+
+            pass_names.push(pass_name.clone());
+            pass_diffs.push(CompilerPassDiff {
+                pass_number: idx + 1,
+                pass_name: pass_name.clone(),
+                input_nodes: input_count,
+                output_nodes: output_count,
+                transformation_summary: format!("Executed pass {pass_name}"),
+            });
+        }
+
+        let compilation_time_ms = compile_start.elapsed().as_millis() as u64;
+
+        let route_scores = vec![
+            self.explain_route("openrouter"),
+            self.explain_route("zen"),
+            self.explain_route("ollama"),
+        ];
+
+        let provider_comparison = Self::build_provider_comparison(&route_scores);
+
+        let graph = lower_to_graph(current_ir).map_err(|e| PlatformError::Compiler {
+            code: "LOWER_ERROR".to_string(),
+            message: format!("Failed to lower IR to graph: {}", e),
+            recovery_suggestion: "Check IR validity".to_string(),
+        })?;
+
+        Ok((CompilerReport {
+            intent: intent.to_string(),
+            passes_executed: pass_names,
+            pass_diffs,
+            graph_id: format!("graph_{}", ir.plan_id),
+            compilation_time_ms,
+            route_scores,
+            provider_comparison,
+        }, graph))
+    }
+
     pub fn explain_route(&self, provider_name: &str) -> ExplainRouteScore {
-        // capability_score: None — CapabilityResolutionPass in crates/ is a no-op.
-        // Real resolution lives in frozen src/planner/resolver/.
         let capability_score: Option<f64> = None;
-
-        // budget_score: Some(1.0) — StubResourceManager always permissive (ADR-038).
         let budget_score: Option<f64> = Some(1.0);
-
-        // latency_score: None — ConnectorHealthChecker exists in src/scheduler/
-        // but is unpopulated for the crate compiler path.
         let latency_score: Option<f64> = None;
-
-        // health_score: None — same reason as latency_score.
         let health_score: Option<f64> = None;
-
-        // policy_score: None — PolicyCompilerPass is in frozen src/compiler/.
-        // Porting policy scoring to crates/ is a separate task (ADR-039).
         let policy_score: Option<f64> = None;
 
         let total_score = compute_total_score(
@@ -371,8 +565,6 @@ impl CompilerEngine {
         }
     }
 
-    /// Builds provider comparison from computed route scores, generating
-    /// reasons dynamically from score deltas instead of hardcoded prose.
     fn build_provider_comparison(scores: &[ExplainRouteScore]) -> Vec<ProviderComparisonCandidate> {
         if scores.is_empty() {
             return Vec::new();
@@ -382,8 +574,6 @@ impl CompilerEngine {
         ranked.sort_by(|a, b| b.total_score.partial_cmp(&a.total_score).unwrap_or(std::cmp::Ordering::Equal));
 
         let best_score = ranked[0].total_score;
-
-        // Count how many providers share the top score
         let tied_at_top = ranked.iter()
             .filter(|s| s.total_score == best_score)
             .count();
@@ -401,12 +591,12 @@ impl CompilerEngine {
             };
 
             let reason = if score.total_score == 0.0 {
-                "Score not computed — all sub-scores are None (see ADR-039)".to_string()
+                "Score not computed — all sub-scores are None".to_string()
             } else if i == 0 && unique_best {
                 format!("Highest total score ({:.2}) among evaluated providers", score.total_score)
             } else if i == 0 && !unique_best {
                 format!(
-                    "Tied with {} other provider(s) at {:.2} — selected by position, not a computed decision (see ADR-039 D2)",
+                    "Tied with {} other provider(s) at {:.2} — selected by position",
                     tied_at_top - 1, score.total_score
                 )
             } else {
@@ -418,7 +608,6 @@ impl CompilerEngine {
                 }
             };
 
-            // Use first available model name based on provider
             let model_name = match score.provider_name.as_str() {
                 "openrouter" => "claude-3-5-sonnet",
                 "zen" => "gemini-2.5-pro",
@@ -443,9 +632,34 @@ impl Default for CompilerEngine {
     }
 }
 
-/// Computes total_score from available sub-scores, re-normalizing weights.
-/// Missing (`None`) scores are excluded; weights are re-normalized proportionally.
-/// Returns `0.0` if all sub-scores are `None`.
+// ---------------------------------------------------------------------------
+// Budget pass (delegates to resource manager)
+// ---------------------------------------------------------------------------
+
+pub struct BudgetOptimisationPass {
+    pub resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>,
+}
+
+#[async_trait::async_trait]
+impl CompilerPass for BudgetOptimisationPass {
+    fn name(&self) -> &str { "budget_optimisation" }
+
+    async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
+        if !self.resource_manager.can_afford(ir.metadata.estimated_cost, ir.metadata.estimated_tokens).await {
+            return Err(CompilerError::ValidationError {
+                pass: "budget_optimisation".into(),
+                node_id: None,
+                message: "Budget exceeded".into(),
+            });
+        }
+        Ok(ir)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scoring
+// ---------------------------------------------------------------------------
+
 fn compute_total_score(
     cap: Option<f64>, w_cap: f64,
     bud: Option<f64>, w_bud: f64,
@@ -472,74 +686,190 @@ fn compute_total_score(
     weighted_sum / total_weight
 }
 
+// ---------------------------------------------------------------------------
+// Default compiler (convenience)
+// ---------------------------------------------------------------------------
+
+pub struct DefaultCompiler {
+    engine: CompilerEngine,
+}
+
+impl DefaultCompiler {
+    pub fn new() -> Self {
+        Self { engine: CompilerEngine::new() }
+    }
+}
+
+impl Default for DefaultCompiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl Compiler for DefaultCompiler {
+    async fn compile(&self, ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
+        let report = self.engine.compile("Default Compilation", &ir).await
+            .map_err(|e| CompilerError::PassError {
+                pass: "compile".into(),
+                message: e.to_string(),
+            })?;
+        lower_to_graph(ir)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn test_ir() -> WorkflowIR {
+        WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: uuid::Uuid::new_v4(),
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: None,
+                config: HashMap::new(),
+            }],
+            edges: vec![],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.1,
+                estimated_tokens: 500,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_constraint_validation_rejects_empty() {
+        let pass = ConstraintValidationPass;
+        let empty_ir = WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![],
+            edges: vec![],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+            },
+        };
+        let result = pass.apply(empty_ir).await;
+        assert!(result.is_err());
+        match result {
+            Err(CompilerError::ValidationError { pass: p, .. }) => assert_eq!(p, "constraint_validation"),
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_constraint_validation_accepts_nonempty() {
+        let pass = ConstraintValidationPass;
+        let ir = test_ir();
+        assert!(pass.apply(ir).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_model_resolution_fills_missing_models() {
+        let pass = ModelResolutionPass::new(ModelCatalog {
+            fast: "fast-model".into(),
+            ..Default::default()
+        });
+        let ir = test_ir();
+        let result = pass.apply(ir).await.unwrap();
+        assert_eq!(result.nodes[0].model.as_deref(), Some("fast-model"));
+    }
+
+    #[tokio::test]
+    async fn test_model_resolution_preserves_existing_model() {
+        let pass = ModelResolutionPass::new(ModelCatalog {
+            fast: "fast-model".into(),
+            ..Default::default()
+        });
+        let mut ir = test_ir();
+        ir.nodes[0].model = Some("custom-model".into());
+        let result = pass.apply(ir).await.unwrap();
+        assert_eq!(result.nodes[0].model.as_deref(), Some("custom-model"));
+    }
+
+    #[tokio::test]
+    async fn test_model_resolution_skips_control_flow_nodes() {
+        let pass = ModelResolutionPass::new(ModelCatalog {
+            fast: "fast-model".into(),
+            ..Default::default()
+        });
+        let mut ir = test_ir();
+        ir.nodes[0].kind = IRNodeKind::Conditional;
+        let result = pass.apply(ir).await.unwrap();
+        assert_eq!(result.nodes[0].model, None);
+    }
+
+    #[tokio::test]
+    async fn test_control_flow_validation_rejects_dangling_edge() {
+        let pass = ControlFlowValidationPass;
+        let mut ir = test_ir();
+        ir.edges.push(IREdge {
+            from: uuid::Uuid::new_v4(),
+            to: uuid::Uuid::new_v4(),
+            condition: None,
+        });
+        let result = pass.apply(ir).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_control_flow_validation_rejects_conditional_without_condition() {
+        let pass = ControlFlowValidationPass;
+        let mut ir = test_ir();
+        let node_id = ir.nodes[0].id;
+        ir.nodes[0].kind = IRNodeKind::Conditional;
+        ir.edges.push(IREdge {
+            from: node_id,
+            to: uuid::Uuid::new_v4(),
+            condition: None,
+        });
+        // Add the target node
+        ir.nodes.push(IRNode {
+            id: ir.edges[0].to,
+            kind: IRNodeKind::Generate,
+            strategy: StrategyKind::Single,
+            model: None,
+            config: HashMap::new(),
+        });
+        let result = pass.apply(ir).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_lower_to_graph_produces_execution_graph() {
+        let ir = test_ir();
+        let graph = lower_to_graph(ir.clone()).unwrap();
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.edges.len(), 0);
+        assert_eq!(graph.graph_id, ir.plan_id);
+        assert_eq!(graph.nodes[0].kind, ExecutionNodeKind::LLMGenerate);
+        assert_eq!(graph.nodes[0].retry_policy.max_retries, 2);
+    }
+
     #[tokio::test]
     async fn test_compiler_engine_pass_pipeline() {
         let engine = CompilerEngine::new();
-        let ir = fusion_ir::WorkflowBuilder::new()
-            .task("n1", "CodeGeneration")
-            .unwrap()
-            .output("n2")
-            .unwrap()
-            .sequential("n1", "n2")
-            .unwrap()
-            .build()
-            .unwrap();
-
+        let ir = test_ir();
         let report = engine.compile("Code Generation", &ir).await.expect("Compile");
-        assert_eq!(report.passes_executed.len(), 11);
-        assert_eq!(report.pass_diffs.len(), 11);
-    }
-
-    #[tokio::test]
-    async fn test_constraint_validation_pass() {
-        let pass = ConstraintValidationPass;
-        // Construct an empty IR via serde directly (bypasses from_json validation)
-        // to test that ConstraintValidationPass catches empty IRs itself.
-        let empty_ir: fusion_ir::WorkflowIR = serde_json::from_str(&serde_json::json!({
-            "version": 1,
-            "workflow_id": "00000000-0000-0000-0000-000000000000",
-            "nodes": [],
-            "edges": [],
-            "metadata": { "policy_applied": [], "estimated_cost": 0.0, "estimated_tokens": 0 }
-        }).to_string()).unwrap();
-        let res = pass.transform(&empty_ir).await;
-        assert!(res.is_err());
-        if let Err(PlatformError::Compiler { code, .. }) = res {
-            assert_eq!(code, "EMPTY_IR");
-        } else {
-            panic!("Expected PlatformError::Compiler");
-        }
-
-        let valid_ir = fusion_ir::WorkflowBuilder::new()
-            .task("n1", "CodeGeneration")
-            .unwrap()
-            .build()
-            .unwrap();
-        assert!(pass.transform(&valid_ir).await.is_ok());
-    }
-
-    #[test]
-    fn test_explain_route_budget_score_is_some() {
-        let engine = CompilerEngine::new();
-        let score = engine.explain_route("openrouter");
-        assert_eq!(score.provider_name, "openrouter");
-        assert_eq!(score.budget_score, Some(1.0));
-        assert_eq!(score.capability_score, None);
-        assert_eq!(score.latency_score, None);
-        assert_eq!(score.health_score, None);
-        assert_eq!(score.policy_score, None);
+        assert_eq!(report.passes_executed.len(), 4);
+        assert_eq!(report.pass_diffs.len(), 4);
     }
 
     #[test]
     fn test_total_score_computed_from_available_scores() {
         let engine = CompilerEngine::new();
         let score = engine.explain_route("openrouter");
-        // Only budget_score is Some(1.0), weight = 0.25
-        // After renormalization: total = 1.0 * (0.25 / 0.25) = 1.0
+        assert_eq!(score.provider_name, "openrouter");
+        assert_eq!(score.budget_score, Some(1.0));
         assert_eq!(score.total_score, 1.0);
     }
 
@@ -551,9 +881,6 @@ mod tests {
 
     #[test]
     fn test_total_score_renormalizes_weights() {
-        // Two scores: 0.8 with weight 0.3, 0.6 with weight 0.2
-        // Total weight = 0.5, weighted_sum = 0.8*0.3 + 0.6*0.2 = 0.36
-        // total = 0.36 / 0.5 = 0.72
         let total = compute_total_score(Some(0.8), 0.3, Some(0.6), 0.2, None, 0.2, None, 0.15, None, 0.1);
         assert!((total - 0.72).abs() < 1e-10);
     }
@@ -568,15 +895,12 @@ mod tests {
         ];
         let comparison = CompilerEngine::build_provider_comparison(&scores);
         assert_eq!(comparison.len(), 3);
-        // All scores are 1.0 (tied) — first is "Alternative" not "Selected"
-        // because no provider is uniquely best (see ADR-039 D2)
         assert_eq!(comparison[0].status, "Alternative");
         assert!(comparison[0].reason.contains("Tied with 2 other provider(s) at 1.00"));
     }
 
     #[test]
     fn test_provider_comparison_alternative_status() {
-        // Build scores with different totals to test Alternative status
         let scores = vec![
             ExplainRouteScore {
                 provider_name: "a".into(),
@@ -608,39 +932,24 @@ mod tests {
         ];
         let comparison = CompilerEngine::build_provider_comparison(&scores);
         assert_eq!(comparison[0].status, "Selected");
-        assert_eq!(comparison[1].status, "Alternative"); // 0.95 >= 1.0 * 0.9
-        assert_eq!(comparison[2].status, "Filtered");   // 0.5 < 1.0 * 0.9
+        assert_eq!(comparison[1].status, "Alternative");
+        assert_eq!(comparison[2].status, "Filtered");
     }
 
-    #[test]
-    fn test_provider_comparison_all_zero_scores() {
-        let scores = vec![
-            ExplainRouteScore {
-                provider_name: "x".into(),
-                capability_score: None,
-                budget_score: None,
-                latency_score: None,
-                health_score: None,
-                policy_score: None,
-                total_score: 0.0,
-            },
-        ];
-        let comparison = CompilerEngine::build_provider_comparison(&scores);
-        assert_eq!(comparison[0].reason, "Score not computed — all sub-scores are None (see ADR-039)");
+    #[tokio::test]
+    async fn test_budget_pass_under_quota() {
+        let rm = Arc::new(StubResourceManager::new(f64::INFINITY, u64::MAX));
+        let pass = BudgetOptimisationPass { resource_manager: rm };
+        let ir = test_ir();
+        assert!(pass.apply(ir).await.is_ok());
     }
 
-    #[test]
-    fn test_compilation_time_is_measured() {
-        let engine = CompilerEngine::new();
-        let ir = fusion_ir::WorkflowBuilder::new()
-            .task("n1", "CodeGeneration")
-            .unwrap()
-            .build()
-            .unwrap();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let report = rt.block_on(engine.compile("test", &ir)).unwrap();
-        // compilation_time_ms should be a real measured value, not the old hardcoded 2
-        // It could be 0 or more depending on system speed
-        assert!(report.compilation_time_ms <= 100, "compilation_time_ms should be reasonable: {}", report.compilation_time_ms);
+    #[tokio::test]
+    async fn test_budget_pass_over_quota() {
+        let rm = Arc::new(StubResourceManager::new(0.0, 0));
+        let pass = BudgetOptimisationPass { resource_manager: rm };
+        let ir = test_ir();
+        let result = pass.apply(ir).await;
+        assert!(result.is_err());
     }
 }

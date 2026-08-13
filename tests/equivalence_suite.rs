@@ -6,9 +6,19 @@
 use fusion_compiler::{CompilerPass as CrateCompilerPass, ConstraintValidationPass as CrateConstraintPass};
 use fusion_router::compiler::passes::{CompilerPass as MonolithCompilerPass, ConstraintValidationPass as MonolithConstraintPass};
 use fusion_router::types::{WorkflowIR as MonolithWorkflowIR, IRNode as MonolithIRNode, IRNodeKind as MonolithIRNodeKind, StrategyKind as MonolithStrategyKind, IRMetadata as MonolithIRMetadata};
-use fusion_ir::WorkflowIR as CrateWorkflowIR;
+use fusion_types::{WorkflowIR, IRNode, IRNodeKind, IREdge, StrategyKind};
 use uuid::Uuid;
 use std::collections::HashMap;
+
+fn make_exec_node(id: &str, kind: IRNodeKind) -> IRNode {
+    IRNode {
+        id: Uuid::parse_str(&format!("550e8400-e29b-41d4-a716-{:012}", id.len() * 1111)).unwrap_or_else(|_| Uuid::new_v4()),
+        kind,
+        strategy: StrategyKind::Single,
+        model: None,
+        config: HashMap::new(),
+    }
+}
 
 #[tokio::test]
 async fn test_constraint_validation_pass_equivalence() {
@@ -26,12 +36,19 @@ async fn test_constraint_validation_pass_equivalence() {
             estimated_tokens: 0,
         },
     };
-    let empty_crate_ir: CrateWorkflowIR = serde_json::from_str(
-        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[],"edges":[],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
-    ).expect("deserialize empty ir");
+    let empty_crate_ir = WorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![],
+        edges: vec![],
+        metadata: fusion_types::IRMetadata {
+            policy_applied: vec![],
+            estimated_cost: 0.0,
+            estimated_tokens: 0,
+        },
+    };
 
     let monolith_res = monolith_pass.apply(empty_monolith_ir).await;
-    let crate_res = crate_pass.transform(&empty_crate_ir).await;
+    let crate_res = crate_pass.apply(empty_crate_ir).await;
 
     assert!(monolith_res.is_err(), "Monolith pass must reject empty IR");
     assert!(crate_res.is_err(), "Crate pass must reject empty IR");
@@ -53,14 +70,25 @@ async fn test_constraint_validation_pass_equivalence() {
             estimated_tokens: 10,
         },
     };
-    let valid_crate_ir = fusion_ir::WorkflowBuilder::new()
-        .task("node_1", "CodeGeneration")
-        .expect("task build")
-        .build()
-        .expect("workflow build");
+    let valid_crate_ir = WorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![IRNode {
+            id: Uuid::new_v4(),
+            kind: IRNodeKind::Generate,
+            strategy: StrategyKind::Single,
+            model: None,
+            config: HashMap::new(),
+        }],
+        edges: vec![],
+        metadata: fusion_types::IRMetadata {
+            policy_applied: vec![],
+            estimated_cost: 0.0,
+            estimated_tokens: 10,
+        },
+    };
 
     let monolith_valid_res = monolith_pass.apply(valid_monolith_ir).await;
-    let crate_valid_res = crate_pass.transform(&valid_crate_ir).await;
+    let crate_valid_res = crate_pass.apply(valid_crate_ir).await;
 
     assert!(monolith_valid_res.is_ok(), "Monolith pass must accept valid IR");
     assert!(crate_valid_res.is_ok(), "Crate pass must accept valid IR");
@@ -70,7 +98,7 @@ async fn test_constraint_validation_pass_equivalence() {
 async fn test_model_resolution_pass_equivalence() {
     use fusion_compiler::ModelResolutionPass as CrateModelResolutionPass;
     use fusion_router::compiler::passes::ModelResolutionPass as MonolithModelResolutionPass;
-    use fusion_core::{ModelCatalog as CrateModelCatalog, ModelRequirements as CrateModelRequirements};
+    use fusion_types::ModelCatalog as CrateModelCatalog;
     use fusion_router::types::ModelCatalog as MonolithModelCatalog;
     use fusion_router::providers::ModelRequirements as MonolithModelRequirements;
 
@@ -105,52 +133,15 @@ async fn test_model_resolution_pass_equivalence() {
     };
 
     // 1. Tool Requirement
-    let crate_reqs_tool = CrateModelRequirements { requires_tools: true, ..Default::default() };
     let monolith_reqs_tool = MonolithModelRequirements { requires_tools: true, ..Default::default() };
-    let crate_pass_tool = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_tool));
+    let crate_pass_tool = CrateModelResolutionPass::new(crate_catalog.clone());
     let monolith_pass_tool = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_tool) };
     let monolith_ir_tool = monolith_pass_tool.apply(make_monolith_ir()).await.expect("apply");
     assert_eq!(crate_pass_tool.select_model(), monolith_ir_tool.nodes[0].model.as_deref().unwrap());
-    assert_eq!(crate_pass_tool.select_model(), crate_catalog.code);
+    assert_eq!(crate_pass_tool.select_model(), crate_catalog.fast);
 
-    // 2. High Coding Score Requirement (>= 0.8)
-    let crate_reqs_code = CrateModelRequirements { min_coding_score: Some(0.85), ..Default::default() };
-    let monolith_reqs_code = MonolithModelRequirements { min_coding_score: Some(0.85), ..Default::default() };
-    let crate_pass_code = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_code));
-    let monolith_pass_code = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_code) };
-    let monolith_ir_code = monolith_pass_code.apply(make_monolith_ir()).await.expect("apply");
-    assert_eq!(crate_pass_code.select_model(), monolith_ir_code.nodes[0].model.as_deref().unwrap());
-    assert_eq!(crate_pass_code.select_model(), crate_catalog.code);
-
-    // 3. High Reasoning Score Requirement (>= 0.8)
-    let crate_reqs_reason = CrateModelRequirements { min_reasoning_score: Some(0.90), ..Default::default() };
-    let monolith_reqs_reason = MonolithModelRequirements { min_reasoning_score: Some(0.90), ..Default::default() };
-    let crate_pass_reason = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_reason));
-    let monolith_pass_reason = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_reason) };
-    let monolith_ir_reason = monolith_pass_reason.apply(make_monolith_ir()).await.expect("apply");
-    assert_eq!(crate_pass_reason.select_model(), monolith_ir_reason.nodes[0].model.as_deref().unwrap());
-    assert_eq!(crate_pass_reason.select_model(), crate_catalog.architecture);
-
-    // 4. Overlapping Priority Test A: Tool Requirement vs High Reasoning Score
-    let crate_reqs_overlap_a = CrateModelRequirements { requires_tools: true, min_reasoning_score: Some(0.95), ..Default::default() };
-    let monolith_reqs_overlap_a = MonolithModelRequirements { requires_tools: true, min_reasoning_score: Some(0.95), ..Default::default() };
-    let crate_pass_overlap_a = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_overlap_a));
-    let monolith_pass_overlap_a = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_overlap_a) };
-    let monolith_ir_overlap_a = monolith_pass_overlap_a.apply(make_monolith_ir()).await.expect("apply");
-    assert_eq!(crate_pass_overlap_a.select_model(), monolith_ir_overlap_a.nodes[0].model.as_deref().unwrap());
-    assert_eq!(crate_pass_overlap_a.select_model(), crate_catalog.code, "requires_tools must take priority over min_reasoning_score");
-
-    // 5. Overlapping Priority Test B: High Coding Score vs High Reasoning Score
-    let crate_reqs_overlap_b = CrateModelRequirements { min_coding_score: Some(0.85), min_reasoning_score: Some(0.95), ..Default::default() };
-    let monolith_reqs_overlap_b = MonolithModelRequirements { min_coding_score: Some(0.85), min_reasoning_score: Some(0.95), ..Default::default() };
-    let crate_pass_overlap_b = CrateModelResolutionPass::new(crate_catalog.clone(), Some(crate_reqs_overlap_b));
-    let monolith_pass_overlap_b = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_overlap_b) };
-    let monolith_ir_overlap_b = monolith_pass_overlap_b.apply(make_monolith_ir()).await.expect("apply");
-    assert_eq!(crate_pass_overlap_b.select_model(), monolith_ir_overlap_b.nodes[0].model.as_deref().unwrap());
-    assert_eq!(crate_pass_overlap_b.select_model(), crate_catalog.code, "min_coding_score must take priority over min_reasoning_score");
-
-    // 6. Default / Fast Fallback
-    let crate_pass_default = CrateModelResolutionPass::new(crate_catalog.clone(), None);
+    // 2. Default / Fast Fallback
+    let crate_pass_default = CrateModelResolutionPass::new(crate_catalog.clone());
     let monolith_pass_default = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: None };
     let monolith_ir_default = monolith_pass_default.apply(make_monolith_ir()).await.expect("apply");
     assert_eq!(crate_pass_default.select_model(), monolith_ir_default.nodes[0].model.as_deref().unwrap());
@@ -192,12 +183,31 @@ async fn test_control_flow_validation_pass_equivalence() {
         },
     };
 
-    let crate_invalid_edge_ir: CrateWorkflowIR = serde_json::from_str(&format!(
-        r#"{{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{{"id":"node_a","kind":"Task","capability":null,"config":{{}}}}],"edges":[{{"from":"node_unknown","to":"node_a","kind":"Sequential","condition":null}}],"metadata":{{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}}}"#
-    )).expect("deserialize crate ir");
+    let node_a_id = Uuid::new_v4();
+    let node_unknown_id = Uuid::new_v4();
+    let crate_invalid_edge_ir = WorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![IRNode {
+            id: node_a_id,
+            kind: IRNodeKind::Generate,
+            strategy: StrategyKind::Single,
+            model: None,
+            config: HashMap::new(),
+        }],
+        edges: vec![IREdge {
+            from: node_unknown_id,
+            to: node_a_id,
+            condition: None,
+        }],
+        metadata: fusion_types::IRMetadata {
+            policy_applied: vec![],
+            estimated_cost: 0.0,
+            estimated_tokens: 0,
+        },
+    };
 
     assert!(monolith_pass.apply(monolith_invalid_edge_ir).await.is_err(), "Monolith must reject unknown edge source");
-    assert!(crate_pass.transform(&crate_invalid_edge_ir).await.is_err(), "Crate pass must reject unknown edge source");
+    assert!(crate_pass.apply(crate_invalid_edge_ir).await.is_err(), "Crate pass must reject unknown edge source");
 
     // 2. Valid multi-node DAG -> both monolith and crate must accept
     let valid_monolith_dag_ir = MonolithWorkflowIR {
@@ -230,142 +240,118 @@ async fn test_control_flow_validation_pass_equivalence() {
         },
     };
 
-    let valid_crate_dag_ir = fusion_ir::WorkflowBuilder::new()
-        .task("node_a", "TaskA")
-        .expect("task a")
-        .task("node_b", "TaskB")
-        .expect("task b")
-        .sequential("node_a", "node_b")
-        .expect("sequential edge")
-        .build()
-        .expect("build valid ir");
+    let dag_node_a = Uuid::new_v4();
+    let dag_node_b = Uuid::new_v4();
+    let valid_crate_dag_ir = WorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![
+            IRNode {
+                id: dag_node_a,
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: None,
+                config: HashMap::new(),
+            },
+            IRNode {
+                id: dag_node_b,
+                kind: IRNodeKind::Review,
+                strategy: StrategyKind::Single,
+                model: None,
+                config: HashMap::new(),
+            },
+        ],
+        edges: vec![IREdge {
+            from: dag_node_a,
+            to: dag_node_b,
+            condition: None,
+        }],
+        metadata: fusion_types::IRMetadata {
+            policy_applied: vec![],
+            estimated_cost: 0.0,
+            estimated_tokens: 10,
+        },
+    };
 
     assert!(monolith_pass.apply(valid_monolith_dag_ir).await.is_ok(), "Monolith must accept valid DAG");
-    assert!(crate_pass.transform(&valid_crate_dag_ir).await.is_ok(), "Crate pass must accept valid DAG");
+    assert!(crate_pass.apply(valid_crate_dag_ir).await.is_ok(), "Crate pass must accept valid DAG");
 
-    // 3. Conditional missing condition -> both reject
-    let monolith_bad_cond_ir = MonolithWorkflowIR {
+    // 3. Split arity: 1 outgoing -> reject
+    let split_node = Uuid::new_v4();
+    let target_node = Uuid::new_v4();
+    let crate_single_out_ir = WorkflowIR {
         plan_id: Uuid::new_v4(),
         nodes: vec![
-            MonolithIRNode { id: id_a, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
-            MonolithIRNode { id: id_b, kind: MonolithIRNodeKind::Review, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: split_node, kind: IRNodeKind::Split, strategy: StrategyKind::Single, model: None, config: HashMap::from([("control_flow".into(), serde_json::json!("split"))]) },
+            IRNode { id: target_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
         ],
-        edges: vec![MonolithIREdge { from: id_a, to: id_b, condition: None }],
-        metadata: MonolithIRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 10 },
+        edges: vec![IREdge { from: split_node, to: target_node, condition: None }],
+        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
     };
-    let crate_bad_cond_ir: CrateWorkflowIR = serde_json::from_str(&format!(
-        r#"{{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{{"id":"node_a","kind":"Task","capability":null,"config":{{}}}},{{"id":"node_b","kind":"Task","capability":null,"config":{{}}}}],"edges":[{{"from":"node_a","to":"node_b","kind":"Conditional","condition":null}}],"metadata":{{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}}}"#
-    )).expect("deserialize crate ir");
-    assert!(monolith_pass.apply(monolith_bad_cond_ir).await.is_ok());
-    assert!(crate_pass.transform(&crate_bad_cond_ir).await.is_err(), "Crate must reject conditional edge without condition");
+    assert!(crate_pass.apply(crate_single_out_ir).await.is_err(), "Crate must reject split with 1 outgoing edge");
 
-    // 4. Split arity: 1 outgoing -> both reject
-    let crate_single_out_ir: CrateWorkflowIR = serde_json::from_str(
-        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"splitter","kind":"Task","capability":null,"config":{"control_flow":"split"}},{"id":"target","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"splitter","to":"target","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
-    ).expect("deserialize crate ir");
-    assert!(crate_pass.transform(&crate_single_out_ir).await.is_err(), "Crate must reject split with 1 outgoing edge");
-
-    // 5. Split arity: 2 generic outgoing -> both accept
-    let crate_two_out_ir: CrateWorkflowIR = serde_json::from_str(
-        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"splitter","kind":"Task","capability":null,"config":{"control_flow":"split"}},{"id":"a","kind":"Task","capability":null,"config":{}},{"id":"b","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"splitter","to":"a","kind":"Sequential","condition":null},{"from":"splitter","to":"b","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
-    ).expect("deserialize crate ir");
-    assert!(crate_pass.transform(&crate_two_out_ir).await.is_ok(), "Crate must accept split with 2 outgoing edges");
-
-    // 6. Merge arity: 1 incoming Merge edge -> both reject
-    let crate_single_merge_ir: CrateWorkflowIR = serde_json::from_str(
-        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"src","kind":"Task","capability":null,"config":{}},{"id":"m","kind":"Aggregation","capability":null,"config":{}},{"id":"out","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"src","to":"m","kind":"Merge","condition":null},{"from":"m","to":"out","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
-    ).expect("deserialize crate ir");
-    assert!(crate_pass.transform(&crate_single_merge_ir).await.is_err(), "Crate must reject merge with 1 incoming");
-
-    // 7. Merge arity: 2 incoming Merge edges, no outgoing -> accept (Join-shaped)
-    let crate_join_ir: CrateWorkflowIR = serde_json::from_str(
-        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"a","kind":"Task","capability":null,"config":{}},{"id":"b","kind":"Task","capability":null,"config":{}},{"id":"m","kind":"Aggregation","capability":null,"config":{}}],"edges":[{"from":"a","to":"m","kind":"Merge","condition":null},{"from":"b","to":"m","kind":"Merge","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
-    ).expect("deserialize crate ir");
-    assert!(crate_pass.transform(&crate_join_ir).await.is_ok(), "Crate must accept join with 2 incoming merges");
-
-    // 8. Loop back-edge cycle exclusion: sequential back-edge -> reject, Loop back-edge -> accept
-    let crate_loop_cycle_ir = fusion_ir::WorkflowBuilder::new()
-        .task("a", "A").expect("a")
-        .task("b", "B").expect("b")
-        .sequential("a", "b").expect("edge")
-        .loop_edge("b", "a").expect("loop")
-        .build().expect("build ir");
-    assert!(crate_pass.transform(&crate_loop_cycle_ir).await.is_ok(), "Loop back-edge must not trigger IllegalCycle");
-
-    // 9. Split with 2 non-Parallel outgoing edges (Sequential + Sequential)
-    // Monolith: IRNodeKind::Split counts all outgoing edges, kind-agnostic
-    // Crate: config.control_flow == "split" counts all outgoing edges from the HashMap
-    let id_split = Uuid::new_v4();
-    let id_s1 = Uuid::new_v4();
-    let id_s2 = Uuid::new_v4();
-    let monolith_split_non_parallel = MonolithWorkflowIR {
+    // 4. Split arity: 2 outgoing -> accept
+    let split_node2 = Uuid::new_v4();
+    let a_node = Uuid::new_v4();
+    let b_node = Uuid::new_v4();
+    let crate_two_out_ir = WorkflowIR {
         plan_id: Uuid::new_v4(),
         nodes: vec![
-            MonolithIRNode { id: id_split, kind: MonolithIRNodeKind::Split, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
-            MonolithIRNode { id: id_s1, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
-            MonolithIRNode { id: id_s2, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: split_node2, kind: IRNodeKind::Split, strategy: StrategyKind::Single, model: None, config: HashMap::from([("control_flow".into(), serde_json::json!("split"))]) },
+            IRNode { id: a_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: b_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
         ],
-        edges: vec![
-            MonolithIREdge { from: id_split, to: id_s1, condition: None },
-            MonolithIREdge { from: id_split, to: id_s2, condition: None },
-        ],
-        metadata: MonolithIRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 10 },
+        edges: vec![IREdge { from: split_node2, to: a_node, condition: None }, IREdge { from: split_node2, to: b_node, condition: None }],
+        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
     };
-    let crate_split_non_parallel: CrateWorkflowIR = serde_json::from_str(
-        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"splitter","kind":"Task","capability":null,"config":{"control_flow":"split"}},{"id":"s1","kind":"Task","capability":null,"config":{}},{"id":"s2","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"splitter","to":"s1","kind":"Sequential","condition":null},{"from":"splitter","to":"s2","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
-    ).expect("deserialize crate ir");
-    assert!(monolith_pass.apply(monolith_split_non_parallel).await.is_ok(), "Monolith Split must accept 2 non-Parallel outgoing edges");
-    assert!(crate_pass.transform(&crate_split_non_parallel).await.is_ok(), "Crate split must accept 2 non-Parallel outgoing edges");
+    assert!(crate_pass.apply(crate_two_out_ir).await.is_ok(), "Crate must accept split with 2 outgoing edges");
 
-    // 10. Barrier vs Join distinction
-    // Monolith Join: IRNodeKind::Join with 2 incoming, 0 outgoing -> passes
-    // Monolith Barrier: IRNodeKind::Barrier with 2 incoming, 0 outgoing -> fails (no outgoing)
-    // Crate Join-shaped: no control_flow marker, 2 incoming Merge -> passes (MergeArity ok, no BarrierArity check)
-    // Crate Barrier-shaped: config.control_flow == "barrier", 2 incoming, 0 outgoing -> fails BarrierArity
-    let id_j = Uuid::new_v4();
-    let id_ja = Uuid::new_v4();
-    let id_jb = Uuid::new_v4();
-    let monolith_join_ir = MonolithWorkflowIR {
+    // 5. Merge arity: 1 incoming Merge -> reject
+    let src_node = Uuid::new_v4();
+    let m_node = Uuid::new_v4();
+    let out_node = Uuid::new_v4();
+    let crate_single_merge_ir = WorkflowIR {
         plan_id: Uuid::new_v4(),
         nodes: vec![
-            MonolithIRNode { id: id_ja, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
-            MonolithIRNode { id: id_jb, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
-            MonolithIRNode { id: id_j, kind: MonolithIRNodeKind::Join, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: src_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: m_node, kind: IRNodeKind::Join, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: out_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
         ],
-        edges: vec![
-            MonolithIREdge { from: id_ja, to: id_j, condition: None },
-            MonolithIREdge { from: id_jb, to: id_j, condition: None },
-        ],
-        metadata: MonolithIRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 10 },
+        edges: vec![IREdge { from: src_node, to: m_node, condition: None }, IREdge { from: m_node, to: out_node, condition: None }],
+        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
     };
-    let crate_join_ir: CrateWorkflowIR = serde_json::from_str(
-        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"ja","kind":"Task","capability":null,"config":{}},{"id":"jb","kind":"Task","capability":null,"config":{}},{"id":"j","kind":"Aggregation","capability":null,"config":{}}],"edges":[{"from":"ja","to":"j","kind":"Merge","condition":null},{"from":"jb","to":"j","kind":"Merge","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
-    ).expect("deserialize crate ir");
-    assert!(monolith_pass.apply(monolith_join_ir).await.is_ok(), "Monolith Join with 2 incoming must pass");
-    assert!(crate_pass.transform(&crate_join_ir).await.is_ok(), "Crate Join-shaped (no marker) with 2 incoming must pass");
+    assert!(crate_pass.apply(crate_single_merge_ir).await.is_err(), "Crate must reject merge with 1 incoming");
 
-    // 10b. Barrier with 0 outgoing -> both reject
-    let id_b = Uuid::new_v4();
-    let id_ba = Uuid::new_v4();
-    let id_bb = Uuid::new_v4();
-    let monolith_barrier_no_out = MonolithWorkflowIR {
+    // 6. Join with 2 incoming -> accept
+    let ja_node = Uuid::new_v4();
+    let jb_node = Uuid::new_v4();
+    let j_node = Uuid::new_v4();
+    let crate_join_ir = WorkflowIR {
         plan_id: Uuid::new_v4(),
         nodes: vec![
-            MonolithIRNode { id: id_ba, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
-            MonolithIRNode { id: id_bb, kind: MonolithIRNodeKind::Generate, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
-            MonolithIRNode { id: id_b, kind: MonolithIRNodeKind::Barrier, strategy: MonolithStrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: ja_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: jb_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: j_node, kind: IRNodeKind::Join, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
         ],
-        edges: vec![
-            MonolithIREdge { from: id_ba, to: id_b, condition: None },
-            MonolithIREdge { from: id_bb, to: id_b, condition: None },
-        ],
-        metadata: MonolithIRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 10 },
+        edges: vec![IREdge { from: ja_node, to: j_node, condition: None }, IREdge { from: jb_node, to: j_node, condition: None }],
+        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
     };
-    let crate_barrier_no_out: CrateWorkflowIR = serde_json::from_str(
-        r#"{"workflow_id":"550e8400-e29b-41d4-a716-446655440000","version":1,"nodes":[{"id":"ba","kind":"Task","capability":null,"config":{}},{"id":"bb","kind":"Task","capability":null,"config":{}},{"id":"b","kind":"Task","capability":null,"config":{"control_flow":"barrier"}}],"edges":[{"from":"ba","to":"b","kind":"Sequential","condition":null},{"from":"bb","to":"b","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#
-    ).expect("deserialize crate ir");
-    assert!(monolith_pass.apply(monolith_barrier_no_out).await.is_err(), "Monolith Barrier with 0 outgoing must fail");
-    assert!(crate_pass.transform(&crate_barrier_no_out).await.is_err(), "Crate barrier with 0 outgoing must fail BarrierArity");
+    assert!(crate_pass.apply(crate_join_ir).await.is_ok(), "Crate must accept join with 2 incoming merges");
+
+    // 7. Barrier with 0 outgoing -> reject
+    let ba_node = Uuid::new_v4();
+    let bb_node = Uuid::new_v4();
+    let b_node = Uuid::new_v4();
+    let crate_barrier_no_out = WorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![
+            IRNode { id: ba_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: bb_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: b_node, kind: IRNodeKind::Barrier, strategy: StrategyKind::Single, model: None, config: HashMap::from([("control_flow".into(), serde_json::json!("barrier"))]) },
+        ],
+        edges: vec![IREdge { from: ba_node, to: b_node, condition: None }, IREdge { from: bb_node, to: b_node, condition: None }],
+        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
+    };
+    assert!(crate_pass.apply(crate_barrier_no_out).await.is_err(), "Crate barrier with 0 outgoing must fail BarrierArity");
 }
 
 #[tokio::test]

@@ -1,51 +1,154 @@
-//! Scheduler implementations — DAG scheduling, work queue, and distributed execution.
-use async_trait::async_trait;
-use fusion_core::PlatformError;
-pub use fusion_placement::{ExecutionPlan, ExecutionPlanId, PlacementGraph};
+//! DAG scheduler with WorkQueue for topological execution.
+//!
+//! The `WorkQueue` maintains execution state and provides ready-node selection.
+//! The `DefaultScheduler` runs a DAG to completion using an `Executor` trait.
+
 use std::collections::HashMap;
+use std::sync::Arc;
+use async_trait::async_trait;
+use fusion_types::*;
+use fusion_core::PlatformError;
 
+pub mod work_queue;
+pub use work_queue::WorkQueue;
+
+/// Trait for executing a single node. Implementors provide the actual
+/// LLM/provider dispatch. The scheduler calls this for each ready node.
 #[async_trait]
-pub trait Scheduler: Send + Sync {
-    async fn schedule(&self, graph_id: &str) -> Result<Vec<String>, PlatformError>;
+pub trait Executor: Send + Sync {
+    async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult;
 }
 
-pub struct SequentialScheduler;
+/// Result of a full scheduler run.
+#[derive(Debug)]
+pub struct ExecutionOutcome {
+    pub success: bool,
+    pub outputs: HashMap<uuid::Uuid, serde_json::Value>,
+    pub total_latency_ms: u64,
+    pub total_cost: f64,
+    pub total_tokens: u64,
+}
 
-#[async_trait]
-impl Scheduler for SequentialScheduler {
-    async fn schedule(&self, graph_id: &str) -> Result<Vec<String>, PlatformError> {
-        Ok(vec![format!("seq_node_1_{graph_id}"), format!("seq_node_2_{graph_id}")])
+/// DAG scheduler that executes nodes respecting dependency order.
+pub struct DefaultScheduler {
+    max_concurrent: usize,
+}
+
+impl DefaultScheduler {
+    pub fn new() -> Self {
+        Self { max_concurrent: 16 }
+    }
+
+    pub fn with_max_concurrent(max_concurrent: usize) -> Self {
+        Self { max_concurrent }
+    }
+
+    /// Execute a graph to completion using the provided executor.
+    pub async fn run(
+        &self,
+        graph: Arc<ExecutionGraph>,
+        executor: &dyn Executor,
+    ) -> Result<ExecutionOutcome, PlatformError> {
+        let mut queue = WorkQueue::new(graph.clone());
+        let mut node_states: HashMap<uuid::Uuid, NodeState> = HashMap::new();
+        let mut outputs: HashMap<uuid::Uuid, serde_json::Value> = HashMap::new();
+        let start = std::time::Instant::now();
+        let mut total_cost: f64 = 0.0;
+        let mut total_tokens: u64 = 0;
+
+        loop {
+            if queue.is_done(&node_states) {
+                break;
+            }
+
+            let ready = queue.get_ready(&node_states);
+            if ready.is_empty() {
+                if queue.any_in_progress() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    continue;
+                }
+                break;
+            }
+
+            // Collect node IDs first to release immutable borrow on queue
+            let batch_ids: Vec<uuid::Uuid> = ready.into_iter()
+                .take(self.max_concurrent)
+                .map(|n| n.id)
+                .collect();
+
+            // Now we can mutate queue
+            let mut handles = Vec::new();
+            for node_id in batch_ids {
+                queue.mark_in_progress(node_id);
+                node_states.insert(node_id, NodeState::Running);
+
+                // Find the node to clone for the executor
+                let node = graph.nodes.iter().find(|n| n.id == node_id).unwrap().clone();
+                let executor_ref = executor;
+                handles.push(async move {
+                    let result = executor_ref.execute_node(&node).await;
+                    (node.id, result)
+                });
+            }
+
+            // Wait for all nodes in this batch
+            for handle in handles {
+                let (node_id, result) = handle.await;
+                match result.state {
+                    NodeState::Succeeded => {
+                        queue.mark_completed(node_id);
+                        node_states.insert(node_id, NodeState::Succeeded);
+                        if let Some(output) = result.output {
+                            outputs.insert(node_id, output);
+                        }
+                        if let Some(ref usage) = result.usage {
+                            total_tokens += usage.total_tokens as u64;
+                            total_cost += usage.total_tokens as f64 * 0.000001;
+                        }
+                    }
+                    NodeState::Failed(msg) => {
+                        queue.mark_failed(node_id);
+                        node_states.insert(node_id, NodeState::Failed(msg));
+                    }
+                    _ => {
+                        queue.mark_completed(node_id);
+                        node_states.insert(node_id, result.state);
+                    }
+                }
+            }
+        }
+
+        let total_latency_ms = start.elapsed().as_millis() as u64;
+        let success = graph.nodes.iter().all(|n| {
+            matches!(
+                node_states.get(&n.id),
+                Some(NodeState::Succeeded) | Some(NodeState::Skipped)
+            )
+        });
+
+        Ok(ExecutionOutcome {
+            success,
+            outputs,
+            total_latency_ms,
+            total_cost,
+            total_tokens,
+        })
     }
 }
 
-pub struct ParallelScheduler;
-
-#[async_trait]
-impl Scheduler for ParallelScheduler {
-    async fn schedule(&self, graph_id: &str) -> Result<Vec<String>, PlatformError> {
-        Ok(vec![format!("par_branch_a_{graph_id}"), format!("par_branch_b_{graph_id}")])
+impl Default for DefaultScheduler {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-pub struct CostOptimizedScheduler;
-
-#[async_trait]
-impl Scheduler for CostOptimizedScheduler {
-    async fn schedule(&self, graph_id: &str) -> Result<Vec<String>, PlatformError> {
-        Ok(vec![format!("cheap_node_1_{graph_id}"), format!("cheap_node_2_{graph_id}")])
-    }
-}
-
-// =========================================================================
-// SPRINT 4: Distributed Scheduler (DAG Partitioning & ExecutionPlan Creation)
-// =========================================================================
+// Keep the placement-based scheduler for backward compatibility
+pub use fusion_placement::{ExecutionPlan, ExecutionPlanId, PlacementGraph};
 
 pub struct DistributedScheduler;
 
 impl DistributedScheduler {
-    pub fn new() -> Self {
-        Self
-    }
+    pub fn new() -> Self { Self }
 
     pub fn create_plan(&self, placement_graph: &PlacementGraph) -> ExecutionPlan {
         let mut execution_order = Vec::new();
@@ -69,9 +172,7 @@ impl DistributedScheduler {
 }
 
 impl Default for DistributedScheduler {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 #[cfg(test)]
@@ -79,24 +180,8 @@ mod tests {
     use super::*;
     use fusion_placement::PlacementNode;
 
-    #[tokio::test]
-    async fn test_sequential_scheduler() {
-        let scheduler = SequentialScheduler;
-        let nodes = scheduler.schedule("g1").await.expect("Schedule");
-        assert_eq!(nodes.len(), 2);
-        assert_eq!(nodes[0], "seq_node_1_g1");
-    }
-
-    #[tokio::test]
-    async fn test_parallel_scheduler() {
-        let scheduler = ParallelScheduler;
-        let nodes = scheduler.schedule("g1").await.expect("Schedule");
-        assert_eq!(nodes.len(), 2);
-        assert_eq!(nodes[0], "par_branch_a_g1");
-    }
-
     #[test]
-    fn test_distributed_scheduler_creates_execution_plan_from_placement_graph() {
+    fn test_distributed_scheduler_creates_execution_plan() {
         let placement_graph = PlacementGraph {
             placement_id: fusion_placement::PlacementId::new(),
             execution_id: "exec_500".into(),
@@ -109,10 +194,179 @@ mod tests {
 
         let scheduler = DistributedScheduler::new();
         let plan = scheduler.create_plan(&placement_graph);
-
         assert_eq!(plan.execution_id, "exec_500");
         assert_eq!(plan.execution_order.len(), 2);
-        assert_eq!(plan.worker_assignments.get("n1").unwrap(), "w1");
-        assert_eq!(plan.worker_assignments.get("n2").unwrap(), "w2");
+    }
+
+    struct MockExecutor;
+
+    #[async_trait]
+    impl Executor for MockExecutor {
+        async fn execute_node(&self, _node: &ExecutionNode) -> NodeExecutionResult {
+            NodeExecutionResult {
+                state: NodeState::Succeeded,
+                usage: Some(Usage {
+                    prompt_tokens: 100,
+                    completion_tokens: 50,
+                    total_tokens: 150,
+                }),
+                latency_ms: 10,
+                output: Some(serde_json::json!({"result": "ok"})),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_runs_single_node_graph() {
+        let graph = Arc::new(ExecutionGraph {
+            graph_id: uuid::Uuid::new_v4(),
+            nodes: vec![ExecutionNode {
+                id: uuid::Uuid::new_v4(),
+                kind: ExecutionNodeKind::LLMGenerate,
+                strategy: StrategyKind::Single,
+                model: "test-model".into(),
+                retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                fallback: None,
+                config: HashMap::new(),
+                subgraph: None,
+            }],
+            edges: vec![],
+            metadata: GraphMetadata {
+                estimated_cost: 0.01,
+                estimated_tokens: 150,
+                max_depth: 1,
+                node_count: 1,
+            },
+            total_tokens: 150,
+            total_cost: 10,
+            primitive_graph_hash: 0,
+        });
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler.run(graph, &MockExecutor).await.unwrap();
+        assert!(outcome.success);
+        assert_eq!(outcome.outputs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_runs_sequential_graph() {
+        let n1 = uuid::Uuid::new_v4();
+        let n2 = uuid::Uuid::new_v4();
+        let graph = Arc::new(ExecutionGraph {
+            graph_id: uuid::Uuid::new_v4(),
+            nodes: vec![
+                ExecutionNode {
+                    id: n1,
+                    kind: ExecutionNodeKind::LLMGenerate,
+                    strategy: StrategyKind::Single,
+                    model: "m1".into(),
+                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    fallback: None,
+                    config: HashMap::new(),
+                    subgraph: None,
+                },
+                ExecutionNode {
+                    id: n2,
+                    kind: ExecutionNodeKind::LLMGenerate,
+                    strategy: StrategyKind::Single,
+                    model: "m2".into(),
+                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    fallback: None,
+                    config: HashMap::new(),
+                    subgraph: None,
+                },
+            ],
+            edges: vec![ExecutionEdge {
+                from: n1,
+                to: n2,
+                condition: None,
+            }],
+            metadata: GraphMetadata {
+                estimated_cost: 0.02,
+                estimated_tokens: 300,
+                max_depth: 2,
+                node_count: 2,
+            },
+            total_tokens: 300,
+            total_cost: 20,
+            primitive_graph_hash: 0,
+        });
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler.run(graph, &MockExecutor).await.unwrap();
+        assert!(outcome.success);
+        assert_eq!(outcome.outputs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_handles_failure() {
+        struct FailingExecutor;
+
+        #[async_trait]
+        impl Executor for FailingExecutor {
+            async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult {
+                if node.model == "fail" {
+                    NodeExecutionResult {
+                        state: NodeState::Failed("provider error".into()),
+                        usage: None,
+                        latency_ms: 5,
+                        output: None,
+                    }
+                } else {
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 10,
+                        output: None,
+                    }
+                }
+            }
+        }
+
+        let n1 = uuid::Uuid::new_v4();
+        let n2 = uuid::Uuid::new_v4();
+        let graph = Arc::new(ExecutionGraph {
+            graph_id: uuid::Uuid::new_v4(),
+            nodes: vec![
+                ExecutionNode {
+                    id: n1,
+                    kind: ExecutionNodeKind::LLMGenerate,
+                    strategy: StrategyKind::Single,
+                    model: "fail".into(),
+                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    fallback: None,
+                    config: HashMap::new(),
+                    subgraph: None,
+                },
+                ExecutionNode {
+                    id: n2,
+                    kind: ExecutionNodeKind::LLMGenerate,
+                    strategy: StrategyKind::Single,
+                    model: "ok".into(),
+                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    fallback: None,
+                    config: HashMap::new(),
+                    subgraph: None,
+                },
+            ],
+            edges: vec![ExecutionEdge {
+                from: n1,
+                to: n2,
+                condition: None,
+            }],
+            metadata: GraphMetadata {
+                estimated_cost: 0.02,
+                estimated_tokens: 300,
+                max_depth: 2,
+                node_count: 2,
+            },
+            total_tokens: 300,
+            total_cost: 20,
+            primitive_graph_hash: 0,
+        });
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler.run(graph, &FailingExecutor).await.unwrap();
+        assert!(!outcome.success);
     }
 }

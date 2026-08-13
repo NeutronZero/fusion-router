@@ -1091,10 +1091,12 @@ dependencies = [
  "fusion-core",
  "fusion-ir",
  "fusion-kernel",
+ "fusion-types",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1235,6 +1237,7 @@ dependencies = [
  "fusion-runtime",
  "fusion-scheduler",
  "fusion-security",
+ "fusion-types",
  "fusion-worker-protocol",
  "futures",
  "http 0.2.12",
@@ -1279,11 +1282,15 @@ dependencies = [
 name = "fusion-runtime"
 version = "0.14.5"
 dependencies = [
- "fusion-api-internal",
+ "async-trait",
  "fusion-core",
  "fusion-kernel",
+ "fusion-scheduler",
+ "fusion-types",
  "serde",
+ "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1296,7 +1303,11 @@ dependencies = [
  "fusion-core",
  "fusion-kernel",
  "fusion-placement",
+ "fusion-types",
+ "serde_json",
  "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1309,6 +1320,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "fusion-types"
+version = "0.14.5"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]

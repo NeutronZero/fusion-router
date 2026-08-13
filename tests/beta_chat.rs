@@ -3,6 +3,7 @@ use fusion_core::{ExecutionId, ProviderId};
 use fusion_ir::WorkflowBuilder;
 use fusion_kernel::CapabilitySystem;
 use fusion_planner::PlannerService;
+use fusion_router::ir::adapter::workflow_to_types;
 
 #[tokio::test]
 async fn test_beta_chat_end_to_end_orchestration_journey() {
@@ -13,7 +14,7 @@ async fn test_beta_chat_end_to_end_orchestration_journey() {
     // 1. Planner Phase
     let capability_system = CapabilitySystem::new();
     let planner = PlannerService::new(capability_system);
-    let ir = planner.plan(prompt).unwrap_or_else(|_| {
+    let planning_ir = planner.plan(prompt).unwrap_or_else(|_| {
         WorkflowBuilder::new()
             .task("n1", "CodeGeneration")
             .unwrap()
@@ -27,10 +28,11 @@ async fn test_beta_chat_end_to_end_orchestration_journey() {
 
     // 2. Compiler Phase (Must be invoked for every request - Law 1)
     let compiler = CompilerEngine::new();
-    let report = compiler.compile(prompt, &ir).await.expect("Compile workflow");
+    let exec_ir = workflow_to_types(&planning_ir).expect("Adapter conversion");
+    let report = compiler.compile(prompt, &exec_ir).await.expect("Compile workflow");
 
     assert_eq!(report.intent, prompt);
-    assert_eq!(report.passes_executed.len(), 11);
+    assert_eq!(report.passes_executed.len(), 4);
 
     // 3. Explain Route Verification
     let explain_scores = report.route_scores;

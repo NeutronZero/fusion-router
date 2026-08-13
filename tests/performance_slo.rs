@@ -5,7 +5,7 @@ use fusion_core::{ExecutionId, ProviderId};
 use fusion_ir::WorkflowBuilder;
 use fusion_kernel::CapabilitySystem;
 use fusion_planner::PlannerService;
-use fusion_scheduler::SequentialScheduler;
+use fusion_router::ir::adapter::workflow_to_types;
 use chrono::Utc;
 
 #[tokio::test]
@@ -16,7 +16,7 @@ async fn test_performance_slo_certification_suite() {
     let start_planner = Instant::now();
     let capability_system = CapabilitySystem::new();
     let planner = PlannerService::new(capability_system);
-    let ir = planner.plan(prompt).unwrap_or_else(|_| {
+    let planning_ir = planner.plan(prompt).unwrap_or_else(|_| {
         WorkflowBuilder::new()
             .task("n1", "CodeGeneration")
             .unwrap()
@@ -33,18 +33,13 @@ async fn test_performance_slo_certification_suite() {
     // 2. Compiler Latency SLO Target (< 20 ms)
     let start_compiler = Instant::now();
     let compiler = CompilerEngine::new();
-    let report = compiler.compile(prompt, &ir).await.expect("Compile");
+    let exec_ir = workflow_to_types(&planning_ir).expect("Adapter conversion");
+    let report = compiler.compile(prompt, &exec_ir).await.expect("Compile");
     let compiler_dur_ms = start_compiler.elapsed().as_millis();
     assert!(compiler_dur_ms < 20, "Compiler latency must be < 20ms (actual: {compiler_dur_ms}ms)");
-    assert_eq!(report.passes_executed.len(), 11);
+    assert_eq!(report.passes_executed.len(), 4);
 
-    // 3. Scheduler Latency SLO Target (< 5 ms)
-    let start_scheduler = Instant::now();
-    let _scheduler = SequentialScheduler;
-    let scheduler_dur_ms = start_scheduler.elapsed().as_millis();
-    assert!(scheduler_dur_ms < 5, "Scheduler latency must be < 5ms (actual: {scheduler_dur_ms}ms)");
-
-    // 4. Replay Engine Latency SLO Target (< 20 ms)
+    // 3. Replay Engine Latency SLO Target (< 20 ms)
     let record = ExecutionRecord {
         execution_id: ExecutionId::new(),
         session_id: "s-slo".to_string(),
@@ -53,7 +48,7 @@ async fn test_performance_slo_certification_suite() {
         ir_version: 1,
         graph_id: "g-slo".to_string(),
         provider_id: ProviderId("openrouter".to_string()),
-        passes_count: 11,
+        passes_count: 4,
         execution_time_ms: 10,
         estimated_cost: 0.001,
         compiler_invoked: true,

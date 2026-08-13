@@ -12,6 +12,7 @@ use fusion_core::ExecutionId;
 use fusion_ir::WorkflowBuilder;
 use fusion_planner::PlannerService;
 use fusion_kernel::CapabilitySystem;
+use fusion_router::ir::adapter::workflow_to_types;
 
 #[test]
 fn test_domain_invariant_execution_has_one_workflow_ir() {
@@ -27,7 +28,7 @@ fn test_domain_invariant_execution_has_one_workflow_ir() {
 
 #[tokio::test]
 async fn test_domain_invariant_workflow_ir_produces_one_execution_graph() {
-    let ir = WorkflowBuilder::new()
+    let planning_ir = WorkflowBuilder::new()
         .task("n1", "CodeGeneration")
         .unwrap()
         .output("n2")
@@ -38,10 +39,11 @@ async fn test_domain_invariant_workflow_ir_produces_one_execution_graph() {
         .unwrap();
 
     let compiler = CompilerEngine::new();
-    let report = compiler.compile("Test Domain Compilation", &ir).await.expect("Compile");
+    let exec_ir = workflow_to_types(&planning_ir).expect("Adapter conversion");
+    let report = compiler.compile("Test Domain Compilation", &exec_ir).await.expect("Compile");
 
     assert!(!report.graph_id.is_empty(), "ExecutionGraph ID must be present");
-    assert_eq!(report.pass_diffs.len(), 11, "Must execute exactly 11 compiler passes");
+    assert_eq!(report.pass_diffs.len(), 4, "Must execute exactly 4 compiler passes");
 }
 
 #[test]

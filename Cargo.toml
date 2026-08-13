@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 [workspace]
 members = [
     "crates/fusion-core",
+    "crates/fusion-types",
     "crates/fusion-kernel",
     "crates/fusion-api-internal",
     "crates/fusion-planner",
@@ -85,6 +86,7 @@ tar = "0.4"
 ctrlc = "3"
 http = "0.2"
 fusion-core = { path = "crates/fusion-core" }
+fusion-types = { path = "crates/fusion-types" }
 fusion-kernel = { path = "crates/fusion-kernel" }
 fusion-api-internal = { path = "crates/fusion-api-internal" }
 fusion-compiler = { path = "crates/fusion-compiler" }

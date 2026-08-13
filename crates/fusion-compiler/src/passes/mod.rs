@@ -1,5 +1,1 @@
-//! Compiler passes — budget optimisation and future passes.
-
-pub mod budget;
-
-pub use budget::{BudgetError, BudgetOptimisationPass};
+// Passes are defined inline in lib.rs
