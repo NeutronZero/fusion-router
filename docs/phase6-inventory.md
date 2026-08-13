@@ -36,7 +36,7 @@ src/ (binary + providers + API)
 | 2 | Resource bridge | `src/resource::ResourceManager` (graph-shaped) | `fusion_kernel::resource::ResourceManager` (scalar) via `src/resource/kernel_adapter.rs` | ✅ DONE (PR1) |
 | 3 | Policy bridge | `src/policy::ir::PolicyIR` | `fusion_compiler::policy::PolicyIR` via `src/policy/bridge.rs` `From` | ✅ DONE (PR1) |
 | 4 | Strategy expansion (compile-time) | `src/compiler/strategy_expansion` (7 kinds; dead in lib, kept for runtime `strategy_ir_from_node`) | `fusion_compiler::strategy_expansion` (Consensus) | ✅ DONE (PR2); 6.6 cleanup pending |
-| 5 | Scheduler | `src/scheduler/default.rs` (`schedule`, `run_with_cancellation`) | `fusion_scheduler::DefaultScheduler` (WorkQueue + Executor + context run) | ⏳ PR3 |
+| 5 | Scheduler | `src/scheduler/default.rs` (`schedule`, `run_with_cancellation`) | `fusion_scheduler::DefaultScheduler` — semantic parity ported (cancellation, Conditional, Loop, loop-back caps, per-token cost) in commit `8f00021` | ⏳ PR3b: flip call sites — blocked on budget-envelope-in-crates + retry/fallback wrapper parity |
 | 6 | Executor / runtime | `src/executor/node_exec.rs` `DefaultExecutor` | `fusion_runtime::RuntimeEngine` + `ProviderExecutor`; `ChatProvider` wrappers for real providers | ⏳ PR3/PR4 |
 | 7 | Planner | `src/planner/intent_planner.rs` `IntentPlanner::plan` | `fusion_planner::PlannerService` | ⏳ PR5 |
 | 8 | `/v1/executions` scheduler gap | hand-rolled topo loop (`execution.rs`) | insert crates scheduler hop | ⏳ PR3 |
@@ -59,6 +59,14 @@ src/ (binary + providers + API)
 - `cargo test --workspace`: green except pre-existing `config_reload_tests::test_provider_registry_rejects_bad_prepare` (fails at HEAD too)
 - `cargo build --examples`: green
 - Parity coverage: `phase6_consensus_expands_through_crates_lower`, `phase6_dead_node_elimination_is_live` (src/compiler/mod.rs), bridge unit tests (src/policy/bridge.rs, src/resource/kernel_adapter.rs), Law 1/2/4 tests unchanged and passing
+- `fusion-scheduler` parity (commit `8f00021`): 17 tests green — conditional edge activation, loop continue/exit, loop-back iteration caps, pre-run + mid-run cancellation, per-token cost
+
+## PR3b gate (scheduler delegation) — not yet flipped
+
+The crates scheduler now matches the monolith loop semantics, but the production flip is still blocked on two parity items, per the risk-mitigation rule (parity tests before delegation):
+
+1. **Budget envelope**: `src/resource::BudgetEnvelope` (iteration limit + `record_and_check`) is enforced inside the monolith `run_inner` loop. The crates `run` has no such hook; envelope type must be lifted to `fusion_types` + consumed by `fusion_scheduler` (or enforced per-node in the executor boundary).
+2. **Retry/fallback**: monolith scheduler retries nodes with exponential backoff and attempts `node.fallback` at scheduler level (`default.rs:313-390`). The crates path relies on `fusion_runtime::ProviderExecutor` for retry/fallback — the src `DefaultExecutor` does not. A flip needs a retry/fallback wrapper executor at the src boundary (or porting retry/fallback into `DefaultExecutor`).
 
 ## Known debt (deliberate, this phase)
 
