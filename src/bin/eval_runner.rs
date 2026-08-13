@@ -629,7 +629,10 @@ fn score_rubric(task: &TaskDef, output: &str, provider: &dyn ChatProvider) -> f6
         strategy: None,
     };
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(_) => return 0.0,
+    };
     let response = rt.block_on(async {
         tokio::time::timeout(
             Duration::from_secs(60),
