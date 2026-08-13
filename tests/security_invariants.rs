@@ -472,9 +472,10 @@ use fusion_router::executor::{DefaultExecutor, Executor};
         .with_allow_auto_exec(true),
     );
     let result = executor
-        .execute_node(&node(serde_json::json!({
-            "tool_allowlist": ["calculator"]
-        })))
+        .execute_node(
+            &node(serde_json::json!({ "tool_allowlist": ["calculator"] })),
+            &fusion_router::types::NodeExecContext::default(),
+        )
         .await;
     assert_eq!(result.state, fusion_router::types::NodeState::Succeeded);
     let output = result.output.expect("output must be present");
@@ -508,9 +509,10 @@ use fusion_router::executor::{DefaultExecutor, Executor};
         .with_allow_auto_exec(true),
     );
     let result = executor
-        .execute_node(&node(serde_json::json!({
-            "tool_allowlist": ["calculator"]
-        })))
+        .execute_node(
+            &node(serde_json::json!({ "tool_allowlist": ["calculator"] })),
+            &fusion_router::types::NodeExecContext::default(),
+        )
         .await;
     assert_eq!(result.state, fusion_router::types::NodeState::Succeeded);
     let output = result.output.expect("tool call results must be produced");
@@ -534,9 +536,10 @@ use fusion_router::executor::{DefaultExecutor, Executor};
         .with_allow_auto_exec(true),
     );
     let result = executor
-        .execute_node(&node(serde_json::json!({
-            "tool_allowlist": ["calculator"]
-        })))
+        .execute_node(
+            &node(serde_json::json!({ "tool_allowlist": ["calculator"] })),
+            &fusion_router::types::NodeExecContext::default(),
+        )
         .await;
     assert_eq!(result.state, fusion_router::types::NodeState::Succeeded);
     let output = result.output.expect("tool call results must be produced");

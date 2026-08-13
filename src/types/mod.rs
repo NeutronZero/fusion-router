@@ -22,7 +22,7 @@ pub use fusion_types::{
     ExecutionGraph, ExecutionNode, ExecutionNodeKind, ExecutionEdge, GraphMetadata,
     RetryPolicy, FallbackConfig, ExecutionSubgraph,
     // Runtime state
-    NodeState, ExecutionResult, ReservationId, NodeExecutionResult, ExecutionRecord,
+    NodeState, ExecutionResult, ReservationId, NodeExecutionResult, ExecutionRecord, NodeExecContext,
     // Shared value objects
     Usage, ChatMessage, ToolCall, ModelCatalog, Intent, ComplexityLevel,
     EvidenceSnapshot, Quota, ProviderLimit,

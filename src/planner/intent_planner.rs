@@ -18,11 +18,20 @@ pub struct IntentPlanner {
 
 impl IntentPlanner {
     pub fn new(model_catalog: ModelCatalog) -> Self {
-        Self { model_catalog, capability_catalog: None }
+        Self {
+            model_catalog,
+            capability_catalog: None,
+        }
     }
 
-    pub fn with_capability_catalog(model_catalog: ModelCatalog, catalog: CapabilityCatalog) -> Self {
-        Self { model_catalog, capability_catalog: Some(catalog) }
+    pub fn with_capability_catalog(
+        model_catalog: ModelCatalog,
+        catalog: CapabilityCatalog,
+    ) -> Self {
+        Self {
+            model_catalog,
+            capability_catalog: Some(catalog),
+        }
     }
 
     fn build_quality(&self, model: &str) -> WorkflowIR {
@@ -79,10 +88,26 @@ impl IntentPlanner {
 
         // Chain: gen1 -> gen2 -> gen3 -> judge -> reflect
         let edges = vec![
-            IREdge { from: gen1_id, to: gen2_id, condition: None },
-            IREdge { from: gen2_id, to: gen3_id, condition: None },
-            IREdge { from: gen3_id, to: judge_id, condition: None },
-            IREdge { from: judge_id, to: reflect_id, condition: None },
+            IREdge {
+                from: gen1_id,
+                to: gen2_id,
+                condition: None,
+            },
+            IREdge {
+                from: gen2_id,
+                to: gen3_id,
+                condition: None,
+            },
+            IREdge {
+                from: gen3_id,
+                to: judge_id,
+                condition: None,
+            },
+            IREdge {
+                from: judge_id,
+                to: reflect_id,
+                condition: None,
+            },
         ];
 
         let plan = WorkflowIR {
@@ -175,8 +200,16 @@ impl IntentPlanner {
 
         // Chain: gen1 -> gen2 -> judge
         let edges = vec![
-            IREdge { from: gen1_id, to: gen2_id, condition: None },
-            IREdge { from: gen2_id, to: judge_id, condition: None },
+            IREdge {
+                from: gen1_id,
+                to: gen2_id,
+                condition: None,
+            },
+            IREdge {
+                from: gen2_id,
+                to: judge_id,
+                condition: None,
+            },
         ];
 
         let plan = WorkflowIR {
@@ -259,11 +292,31 @@ impl IntentPlanner {
 
         // Chain: gen1 -> gen2 -> gen3 -> judge1 -> reflect -> judge2
         let edges = vec![
-            IREdge { from: gen1_id, to: gen2_id, condition: None },
-            IREdge { from: gen2_id, to: gen3_id, condition: None },
-            IREdge { from: gen3_id, to: judge1_id, condition: None },
-            IREdge { from: judge1_id, to: reflect_id, condition: None },
-            IREdge { from: reflect_id, to: judge2_id, condition: None },
+            IREdge {
+                from: gen1_id,
+                to: gen2_id,
+                condition: None,
+            },
+            IREdge {
+                from: gen2_id,
+                to: gen3_id,
+                condition: None,
+            },
+            IREdge {
+                from: gen3_id,
+                to: judge1_id,
+                condition: None,
+            },
+            IREdge {
+                from: judge1_id,
+                to: reflect_id,
+                condition: None,
+            },
+            IREdge {
+                from: reflect_id,
+                to: judge2_id,
+                condition: None,
+            },
         ];
 
         let plan = WorkflowIR {
@@ -305,7 +358,12 @@ impl IntentPlanner {
 
     /// Resolve the best model for a specific step type, given the intent.
     /// Falls back to `fallback` if catalog is empty or has no matches for this step.
-    fn resolve_model_for_step(&self, step: &str, intent: &ExecutionIntent, fallback: &str) -> String {
+    fn resolve_model_for_step(
+        &self,
+        step: &str,
+        intent: &ExecutionIntent,
+        fallback: &str,
+    ) -> String {
         let catalog = match &self.capability_catalog {
             Some(cat) => cat,
             None => return fallback.to_string(),
@@ -334,7 +392,8 @@ impl IntentPlanner {
             ExecutionIntent::Quality | ExecutionIntent::Exhaustive => {
                 // Prioritize reasoning ability
                 valid_candidates.iter().copied().max_by(|a, b| {
-                    a.capabilities.reasoning_score
+                    a.capabilities
+                        .reasoning_score
                         .partial_cmp(&b.capabilities.reasoning_score)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
@@ -343,7 +402,8 @@ impl IntentPlanner {
                 // TODO: Replace cost proxy with actual latency metrics from ProviderRegistry when available
                 // Prioritize low cost (proxy for speed)
                 valid_candidates.iter().copied().min_by(|a, b| {
-                    a.pricing.input_cost_per_1k
+                    a.pricing
+                        .input_cost_per_1k
                         .partial_cmp(&b.pricing.input_cost_per_1k)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
@@ -351,10 +411,10 @@ impl IntentPlanner {
             ExecutionIntent::Balanced => {
                 // Weighted combination of reasoning and coding scores
                 valid_candidates.iter().copied().max_by(|a, b| {
-                    let score_a = a.capabilities.reasoning_score * 0.5
-                        + a.capabilities.coding_score * 0.5;
-                    let score_b = b.capabilities.reasoning_score * 0.5
-                        + b.capabilities.coding_score * 0.5;
+                    let score_a =
+                        a.capabilities.reasoning_score * 0.5 + a.capabilities.coding_score * 0.5;
+                    let score_b =
+                        b.capabilities.reasoning_score * 0.5 + b.capabilities.coding_score * 0.5;
                     score_a
                         .partial_cmp(&score_b)
                         .unwrap_or(std::cmp::Ordering::Equal)
@@ -363,10 +423,10 @@ impl IntentPlanner {
             ExecutionIntent::Constrained { .. } => {
                 // For constrained, use balanced scoring
                 valid_candidates.iter().copied().max_by(|a, b| {
-                    let score_a = a.capabilities.reasoning_score * 0.5
-                        + a.capabilities.coding_score * 0.5;
-                    let score_b = b.capabilities.reasoning_score * 0.5
-                        + b.capabilities.coding_score * 0.5;
+                    let score_a =
+                        a.capabilities.reasoning_score * 0.5 + a.capabilities.coding_score * 0.5;
+                    let score_b =
+                        b.capabilities.reasoning_score * 0.5 + b.capabilities.coding_score * 0.5;
                     score_a
                         .partial_cmp(&score_b)
                         .unwrap_or(std::cmp::Ordering::Equal)
@@ -408,9 +468,92 @@ impl IntentPlanner {
         &self,
         resolver: &super::resolver::capability::CapabilityResolver,
         required: Vec<fusion_plugin_api::CapabilityId>,
-    ) -> Result<super::resolver::capability::ResolvedCapabilitySet, super::resolver::capability::ResolverError> {
+    ) -> Result<
+        super::resolver::capability::ResolvedCapabilitySet,
+        super::resolver::capability::ResolverError,
+    > {
         let reqs = super::resolver::capability::RequirementSet::new(required);
         resolver.resolve(&reqs)
+    }
+
+    fn plan_from_crates(&self, intent: &ExecutionIntent, model: &str) -> Option<WorkflowIR> {
+        let crates_intent = match intent {
+            ExecutionIntent::Quality => fusion_planner::ExecutionIntent::Quality,
+            ExecutionIntent::Speed => fusion_planner::ExecutionIntent::Speed,
+            ExecutionIntent::Balanced => fusion_planner::ExecutionIntent::Balanced,
+            ExecutionIntent::Exhaustive => fusion_planner::ExecutionIntent::Exhaustive,
+            ExecutionIntent::Constrained { max_cost_usd, .. } => {
+                fusion_planner::ExecutionIntent::Constrained {
+                    max_cost_usd: *max_cost_usd,
+                }
+            }
+        };
+        let planner = fusion_planner::IntentPlanner::new(fusion_core::ModelCatalog::default());
+        let contract = planner.plan_intent(&crates_intent).ok()?;
+        let mut plan = crate::ir::adapter::workflow_to_types(&contract).ok()?;
+
+        // The contract speed template has an explicit Output node; the live
+        // planner's pinned speed shape is one executable Generate node.
+        let is_speed = matches!(intent, ExecutionIntent::Speed)
+            || matches!(intent, ExecutionIntent::Constrained { max_cost_usd: Some(v), .. } if *v < 0.02);
+        if is_speed {
+            let keep = plan.nodes.first().map(|node| node.id);
+            plan.nodes.retain(|node| Some(node.id) == keep);
+            plan.edges.clear();
+        }
+
+        let intent_for_model = match intent {
+            ExecutionIntent::Quality => ExecutionIntent::Quality,
+            ExecutionIntent::Speed => ExecutionIntent::Speed,
+            ExecutionIntent::Balanced => ExecutionIntent::Balanced,
+            ExecutionIntent::Exhaustive => ExecutionIntent::Exhaustive,
+            ExecutionIntent::Constrained { max_cost_usd, .. } => ExecutionIntent::Constrained {
+                max_latency_ms: None,
+                max_cost_usd: *max_cost_usd,
+                max_tokens: None,
+                min_confidence: None,
+            },
+        };
+        for (index, node) in plan.nodes.iter_mut().enumerate() {
+            let step = match node.kind {
+                IRNodeKind::Judge => "judge",
+                IRNodeKind::Review => "review",
+                _ => "generate",
+            };
+            node.model = Some(self.resolve_model_for_step(step, &intent_for_model, model));
+            node.strategy = if index == 3 {
+                StrategyKind::Single
+            } else if index == 4 {
+                StrategyKind::Reflection
+            } else if matches!(intent, ExecutionIntent::Exhaustive) && index == 5 {
+                StrategyKind::Consensus
+            } else {
+                StrategyKind::Single
+            };
+            if matches!(node.kind, IRNodeKind::Review) && index != 4 && !(is_speed) {
+                node.kind = IRNodeKind::Judge;
+            }
+            if matches!(intent, ExecutionIntent::Exhaustive) && index == 5 {
+                node.kind = IRNodeKind::Judge;
+            }
+        }
+
+        let (policy, cost, tokens) = match intent {
+            ExecutionIntent::Quality => ("intent:quality", 0.05, 5000),
+            ExecutionIntent::Speed => ("intent:speed", 0.01, 1000),
+            ExecutionIntent::Balanced => ("intent:balanced", 0.03, 3000),
+            ExecutionIntent::Exhaustive => ("intent:exhaustive", 0.08, 8000),
+            ExecutionIntent::Constrained { max_cost_usd, .. }
+                if max_cost_usd.is_some_and(|v| v < 0.02) =>
+            {
+                ("intent:speed", 0.01, 1000)
+            }
+            ExecutionIntent::Constrained { .. } => ("intent:balanced", 0.03, 3000),
+        };
+        plan.metadata.policy_applied = vec![policy.to_string()];
+        plan.metadata.estimated_cost = cost;
+        plan.metadata.estimated_tokens = tokens;
+        Some(plan)
     }
 }
 
@@ -424,27 +567,26 @@ impl Planner for IntentPlanner {
     ) -> WorkflowIR {
         let model = self.select_model(requirements);
 
-        match &requirements.execution_intent {
-            Some(ExecutionIntent::Quality) => self.build_quality(&model),
-            Some(ExecutionIntent::Speed) => self.build_speed(&model),
-            Some(ExecutionIntent::Balanced) => self.build_balanced(&model),
-            Some(ExecutionIntent::Exhaustive) => self.build_exhaustive(&model),
-            Some(ExecutionIntent::Constrained { max_cost_usd, .. }) => {
-                if let Some(cost) = max_cost_usd {
-                    if *cost < 0.02 {
-                        return self.build_speed(&model);
-                    }
-                }
-                self.build_balanced(&model)
+        let intent = requirements.execution_intent.clone().unwrap_or_else(|| {
+            match requirements.complexity {
+                ComplexityLevel::Critical => ExecutionIntent::Quality,
+                ComplexityLevel::High => ExecutionIntent::Balanced,
+                ComplexityLevel::Medium | ComplexityLevel::Low => ExecutionIntent::Speed,
             }
-            None => {
-                match requirements.complexity {
-                    ComplexityLevel::Critical => self.build_quality(&model),
-                    ComplexityLevel::High => self.build_balanced(&model),
-                    ComplexityLevel::Medium | ComplexityLevel::Low => self.build_speed(&model),
+        });
+        self.plan_from_crates(&intent, &model)
+            .unwrap_or_else(|| match intent {
+                ExecutionIntent::Quality => self.build_quality(&model),
+                ExecutionIntent::Speed => self.build_speed(&model),
+                ExecutionIntent::Balanced => self.build_balanced(&model),
+                ExecutionIntent::Exhaustive => self.build_exhaustive(&model),
+                ExecutionIntent::Constrained { max_cost_usd, .. }
+                    if max_cost_usd.is_some_and(|v| v < 0.02) =>
+                {
+                    self.build_speed(&model)
                 }
-            }
-        }
+                ExecutionIntent::Constrained { .. } => self.build_balanced(&model),
+            })
     }
 }
 
@@ -487,7 +629,10 @@ mod tests {
         assert_eq!(ir.nodes.len(), 5);
         assert_eq!(ir.metadata.estimated_cost, 0.05);
         assert_eq!(ir.metadata.estimated_tokens, 5000);
-        assert!(ir.metadata.policy_applied.contains(&"intent:quality".to_string()));
+        assert!(ir
+            .metadata
+            .policy_applied
+            .contains(&"intent:quality".to_string()));
     }
 
     #[tokio::test]
@@ -509,7 +654,10 @@ mod tests {
         assert_eq!(ir.nodes.len(), 1);
         assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
         assert_eq!(ir.nodes[0].strategy, StrategyKind::Single);
-        assert!(ir.metadata.policy_applied.contains(&"intent:speed".to_string()));
+        assert!(ir
+            .metadata
+            .policy_applied
+            .contains(&"intent:speed".to_string()));
         assert_eq!(ir.metadata.estimated_cost, 0.01);
         assert_eq!(ir.metadata.estimated_tokens, 1000);
     }
@@ -523,7 +671,10 @@ mod tests {
         assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
         assert_eq!(ir.nodes[1].kind, IRNodeKind::Generate);
         assert_eq!(ir.nodes[2].kind, IRNodeKind::Judge);
-        assert!(ir.metadata.policy_applied.contains(&"intent:balanced".to_string()));
+        assert!(ir
+            .metadata
+            .policy_applied
+            .contains(&"intent:balanced".to_string()));
         assert_eq!(ir.metadata.estimated_cost, 0.03);
     }
 
@@ -533,7 +684,10 @@ mod tests {
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
         let ir = planner.plan(&reqs, &[], None).await;
         assert_eq!(ir.nodes.len(), 6);
-        assert!(ir.metadata.policy_applied.contains(&"intent:exhaustive".to_string()));
+        assert!(ir
+            .metadata
+            .policy_applied
+            .contains(&"intent:exhaustive".to_string()));
         assert_eq!(ir.metadata.estimated_cost, 0.08);
         assert_eq!(ir.metadata.estimated_tokens, 8000);
     }
@@ -669,7 +823,10 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Speed));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert!(ir.edges.is_empty(), "Speed plan should have no edges (single node)");
+        assert!(
+            ir.edges.is_empty(),
+            "Speed plan should have no edges (single node)"
+        );
     }
 
     #[tokio::test]
@@ -706,8 +863,16 @@ mod tests {
         let ir = planner.plan(&reqs, &[], None).await;
         let node_ids: std::collections::HashSet<_> = ir.nodes.iter().map(|n| n.id).collect();
         for edge in &ir.edges {
-            assert!(node_ids.contains(&edge.from), "Edge from {:?} references invalid node", edge.from);
-            assert!(node_ids.contains(&edge.to), "Edge to {:?} references invalid node", edge.to);
+            assert!(
+                node_ids.contains(&edge.from),
+                "Edge from {:?} references invalid node",
+                edge.from
+            );
+            assert!(
+                node_ids.contains(&edge.to),
+                "Edge to {:?} references invalid node",
+                edge.to
+            );
         }
     }
 }

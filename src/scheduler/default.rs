@@ -1,9 +1,11 @@
-//! Production scheduler entry point (Phase 6.3b flip).
+//! Production scheduler entry point (Phase 6.3b flip, 6.4 slim).
 //!
-//! `DefaultScheduler` now delegates run execution to
+//! `DefaultScheduler` delegates run execution to
 //! `fusion_scheduler::DefaultScheduler`. The src-side executor is adapted
-//! through `CratesExecutorAdapter`, which carries the two behaviors the
-//! monolith loop used to own (retry/fallback, terminal-output tracking).
+//! through `CratesExecutorAdapter`, which is a pure forwarder: retry/fallback
+//! lives inside the src executor boundary (`DefaultExecutor`'s crates
+//! `ProviderExecutor` path and its legacy strategy path), and the adapter
+//! only tracks terminal outputs for the `ExecutionInstance` contract.
 //! The budget envelope is enforced inside the crates loop
 //! (`run_with_budget` / `run_with_cancellation_and_budget`).
 //!
@@ -82,7 +84,8 @@ impl crate::scheduler::Scheduler for DefaultScheduler {
         executor: &dyn Executor,
         cancellation_token: &CancellationToken,
     ) -> Result<ExecutionResult, SchedulerError> {
-        self.run_crates(instance, executor, Some(cancellation_token)).await
+        self.run_crates(instance, executor, Some(cancellation_token))
+            .await
     }
 }
 
@@ -96,7 +99,8 @@ impl DefaultScheduler {
         cancel: Option<&CancellationToken>,
     ) -> Result<ExecutionResult, SchedulerError> {
         let (adapter, tracker) = CratesExecutorAdapter::new(executor);
-        let crates_scheduler = fusion_scheduler::DefaultScheduler::with_max_concurrent(self.max_concurrent);
+        let crates_scheduler =
+            fusion_scheduler::DefaultScheduler::with_max_concurrent(self.max_concurrent);
         let graph = Arc::clone(&instance.graph);
 
         let outcome = match (cancel, instance.budget_envelope.as_ref()) {
@@ -105,8 +109,16 @@ impl DefaultScheduler {
                     .run_with_cancellation_and_budget(graph, &adapter, token, envelope)
                     .await
             }
-            (Some(token), None) => crates_scheduler.run_with_cancellation(graph, &adapter, token).await,
-            (None, Some(envelope)) => crates_scheduler.run_with_budget(graph, &adapter, envelope).await,
+            (Some(token), None) => {
+                crates_scheduler
+                    .run_with_cancellation(graph, &adapter, token)
+                    .await
+            }
+            (None, Some(envelope)) => {
+                crates_scheduler
+                    .run_with_budget(graph, &adapter, envelope)
+                    .await
+            }
             (None, None) => crates_scheduler.run(graph, &adapter).await,
         }
         .map_err(map_crates_error)?;
@@ -141,9 +153,11 @@ impl DefaultScheduler {
 
 fn map_crates_error(err: fusion_core::PlatformError) -> SchedulerError {
     match err {
-        fusion_core::PlatformError::Scheduler { code, message: _message, .. } if code == "CANCELLED" => {
-            SchedulerError::Internal("Request cancelled by client".into())
-        }
+        fusion_core::PlatformError::Scheduler {
+            code,
+            message: _message,
+            ..
+        } if code == "CANCELLED" => SchedulerError::Internal("Request cancelled by client".into()),
         fusion_core::PlatformError::Scheduler { message, .. } => SchedulerError::Internal(message),
         other => SchedulerError::Internal(other.to_string()),
     }

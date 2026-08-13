@@ -15,8 +15,9 @@ use crate::events::payload::ExecutionEvent;
 use crate::events::{BroadcastEventBus, EventBus, ExecutionEventEnvelope};
 use crate::executor::Executor;
 use crate::lifecycle::LifecycleManager;
+use crate::scheduler::{default::DefaultScheduler, Scheduler};
 use crate::session::store::InMemorySessionStore;
-use crate::types::{ExecutionGraph, NodeState, WorkflowIR};
+use crate::types::{ExecutionGraph, NodeState, ReservationId, WorkflowIR};
 
 /// HTTP request body for `POST /v1/executions`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +33,7 @@ pub struct ExecuteWorkflowRequest {
 pub struct ExecutionPlane {
     bus: Arc<BroadcastEventBus>,
     compiler: Arc<dyn Compiler>,
+    scheduler: Arc<dyn Scheduler>,
     executor: Arc<dyn Executor>,
     lifecycle: Arc<LifecycleManager>,
 }
@@ -40,10 +42,17 @@ impl ExecutionPlane {
     pub fn new(
         bus: Arc<BroadcastEventBus>,
         compiler: Arc<dyn Compiler>,
+        scheduler: Arc<dyn Scheduler>,
         executor: Arc<dyn Executor>,
         lifecycle: Arc<LifecycleManager>,
     ) -> Self {
-        Self { bus, compiler, executor, lifecycle }
+        Self {
+            bus,
+            compiler,
+            scheduler,
+            executor,
+            lifecycle,
+        }
     }
 
     async fn emit(
@@ -54,14 +63,8 @@ impl ExecutionPlane {
         event: ExecutionEvent,
     ) {
         *seq += 1;
-        let envelope = ExecutionEventEnvelope::new(
-            workflow_id,
-            execution_id,
-            None,
-            *seq,
-            None,
-            event,
-        );
+        let envelope =
+            ExecutionEventEnvelope::new(workflow_id, execution_id, None, *seq, None, event);
         if let Err(e) = self.bus.publish(envelope).await {
             tracing::warn!(error = %e, "event bus publish failed; event lost");
         }
@@ -83,7 +86,9 @@ impl ExecutionPlane {
             }
         }
 
-        let mut ready: Vec<usize> = (0..graph.nodes.len()).filter(|&i| in_degree[i] == 0).collect();
+        let mut ready: Vec<usize> = (0..graph.nodes.len())
+            .filter(|&i| in_degree[i] == 0)
+            .collect();
         let mut order = Vec::with_capacity(graph.nodes.len());
         while let Some(node) = ready.pop() {
             order.push(node);
@@ -145,8 +150,68 @@ impl ExecutionPlane {
         )
         .await;
 
+        // Phase 6.4 (swap 8): the hand-rolled topological loop is gone. The
+        // graph runs through the src Scheduler (which delegates to
+        // `fusion_scheduler`), so control flow, retry/fallback and parallelism
+        // behave exactly like the chat path. Event emission replays the
+        // outcome in deterministic topological order afterwards; per-node
+        // latency/token telemetry is not recoverable from `ExecutionOutcome`,
+        // so `NodeFinished` carries zeros (6.6 debt note).
+        let mut instance = self
+            .scheduler
+            .schedule(graph.clone(), ReservationId(uuid::Uuid::new_v4()));
+        let result = self
+            .scheduler
+            .run_with_cancellation(
+                &mut instance,
+                self.executor.as_ref(),
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .map_err(|e| format!("scheduling failed: {e}"))?;
+
         let order = Self::topological_order(&graph);
         let mut outputs: HashMap<String, Value> = HashMap::new();
+
+        if !result.success {
+            let failed = order.iter().find_map(|&idx| {
+                let node = &graph.nodes[idx];
+                match instance.node_states.get(&node.id) {
+                    Some(NodeState::Failed(message)) => {
+                        Some((node.id.to_string(), message.clone()))
+                    }
+                    _ => None,
+                }
+            });
+            let (node_id, error) = failed.unwrap_or_else(|| {
+                (
+                    "unknown".to_string(),
+                    "execution failed without a failed node".to_string(),
+                )
+            });
+            self.emit(
+                &mut seq,
+                &workflow_id,
+                &execution_id,
+                ExecutionEvent::NodeFailed {
+                    node_id: node_id.clone(),
+                    error: error.clone(),
+                    attempt: 0,
+                },
+            )
+            .await;
+            self.emit(
+                &mut seq,
+                &workflow_id,
+                &execution_id,
+                ExecutionEvent::WorkflowFailed {
+                    error: error.clone(),
+                    failed_node_id: Some(node_id.clone()),
+                },
+            )
+            .await;
+            return Err(format!("node {} failed: {}", node_id, error));
+        }
 
         for &idx in &order {
             let node = &graph.nodes[idx];
@@ -185,40 +250,25 @@ impl ExecutionPlane {
             )
             .await;
 
-            let result = self.executor.execute_node(node).await;
-            match &result.state {
-                NodeState::Succeeded => {
-                    let usage = result.usage.clone().unwrap_or(crate::types::Usage {
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: 0,
-                    });
+            match instance.node_states.get(&node.id) {
+                Some(NodeState::Succeeded { .. }) => {
+                    let output = instance.outputs.get(&node.id).cloned().unwrap_or(json!({}));
                     self.emit(
                         &mut seq,
                         &workflow_id,
                         &execution_id,
                         ExecutionEvent::NodeFinished {
                             node_id: node_id.clone(),
-                            duration_ms: result.latency_ms,
-                            prompt_tokens: usage.prompt_tokens,
-                            completion_tokens: usage.completion_tokens,
+                            duration_ms: 0,
+                            prompt_tokens: 0,
+                            completion_tokens: 0,
                         },
                     )
                     .await;
-                    outputs.insert(node_id, result.output.clone().unwrap_or_else(|| json!({})));
+                    outputs.insert(node_id, output);
                 }
-                NodeState::Failed(error) => {
-                    self.emit(
-                        &mut seq,
-                        &workflow_id,
-                        &execution_id,
-                        ExecutionEvent::NodeFailed {
-                            node_id: node_id.clone(),
-                            error: error.clone(),
-                            attempt: 0,
-                        },
-                    )
-                    .await;
+                other => {
+                    let error = format!("node {} ended in unexpected state {other:?}", node_id);
                     self.emit(
                         &mut seq,
                         &workflow_id,
@@ -229,26 +279,7 @@ impl ExecutionPlane {
                         },
                     )
                     .await;
-                    return Err(format!("node {} failed: {}", node_id, error));
-                }
-                _ => {
-                    self.emit(
-                        &mut seq,
-                        &workflow_id,
-                        &execution_id,
-                        ExecutionEvent::WorkflowFailed {
-                            error: format!(
-                                "node {} ended in unexpected state {:?}",
-                                node_id, result.state
-                            ),
-                            failed_node_id: Some(node_id.clone()),
-                        },
-                    )
-                    .await;
-                    return Err(format!(
-                        "node {} ended in unexpected state {:?}",
-                        node_id, result.state
-                    ));
+                    return Err(error);
                 }
             }
         }
@@ -259,7 +290,7 @@ impl ExecutionPlane {
             &execution_id,
             ExecutionEvent::WorkflowCompleted {
                 total_duration_ms: started_at.elapsed().as_millis() as u64,
-                total_cost_usd: 0.0,
+                total_cost_usd: result.total_cost,
             },
         )
         .await;
@@ -286,7 +317,13 @@ pub fn build_execution_plane(
     compiler: Arc<dyn Compiler>,
 ) -> Arc<ExecutionPlane> {
     let lifecycle = Arc::new(LifecycleManager::new(Arc::new(InMemorySessionStore::new())));
-    Arc::new(ExecutionPlane::new(bus, compiler, executor, lifecycle))
+    Arc::new(ExecutionPlane::new(
+        bus,
+        compiler,
+        Arc::new(DefaultScheduler::new(4)),
+        executor,
+        lifecycle,
+    ))
 }
 
 /// HTTP handler for `POST /v1/executions`.
@@ -306,11 +343,11 @@ pub async fn execute_workflow_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::types::{
         ChatCompletionResponse, ChatMessage, ExecutionEdge, ExecutionNode, ExecutionNodeKind,
         IRMetadata, IRNode, IRNodeKind, StrategyKind,
     };
+    use async_trait::async_trait;
 
     struct EchoProvider;
 
@@ -386,12 +423,14 @@ mod tests {
     fn test_plane_compiler() -> Arc<dyn Compiler> {
         Arc::new(crate::compiler::build_compiler(
             crate::types::ModelCatalog::default(),
-            Arc::new(crate::resource::DefaultResourceManager::new(crate::types::Quota {
-                max_daily_cost: 1_000_000.0,
-                max_daily_tokens: 1_000_000_000,
-                max_concurrent: 100,
-                provider_limits: std::collections::HashMap::new(),
-            })),
+            Arc::new(crate::resource::DefaultResourceManager::new(
+                crate::types::Quota {
+                    max_daily_cost: 1_000_000.0,
+                    max_daily_tokens: 1_000_000_000,
+                    max_concurrent: 100,
+                    provider_limits: std::collections::HashMap::new(),
+                },
+            )),
             None,
         ))
     }
@@ -440,7 +479,10 @@ mod tests {
                 _ => break,
             }
         }
-        assert!(saw_completed, "WorkflowCompleted must be emitted on success");
+        assert!(
+            saw_completed,
+            "WorkflowCompleted must be emitted on success"
+        );
     }
 
     #[tokio::test]
@@ -533,7 +575,10 @@ mod tests {
                     kind: ExecutionNodeKind::LLMGenerate,
                     strategy: StrategyKind::Single,
                     model: "m".into(),
-                    retry_policy: crate::types::RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: crate::types::RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config: HashMap::new(),
                     subgraph: None,
@@ -543,7 +588,10 @@ mod tests {
                     kind: ExecutionNodeKind::LLMJudge,
                     strategy: StrategyKind::Single,
                     model: "m".into(),
-                    retry_policy: crate::types::RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: crate::types::RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config: HashMap::new(),
                     subgraph: None,
@@ -566,6 +614,10 @@ mod tests {
         };
 
         let order = ExecutionPlane::topological_order(&graph);
-        assert_eq!(order, vec![0, 1], "producer must be scheduled before consumer");
+        assert_eq!(
+            order,
+            vec![0, 1],
+            "producer must be scheduled before consumer"
+        );
     }
 }

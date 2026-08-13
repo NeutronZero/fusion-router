@@ -1,17 +1,20 @@
+use async_trait::async_trait;
+use fusion_scheduler::Executor as _;
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
 use tracing::info;
 
 #[cfg(feature = "semantic-cache")]
 use crate::cache::SemanticCache;
+use crate::executor::fusion_bridge::{FusionChatProvider, CANCELLED_MARKER};
 use crate::executor::Executor;
 use crate::providers::ChatProvider;
 use crate::strategies::Strategy;
 use crate::tools::ToolRegistry;
+use crate::transport::backoff::Backoff;
 use crate::types::{
     ChatCompletionRequest, ChatMessage, ExecutionNode, ExecutionNodeKind, ExecutionSubgraph,
-    NodeExecutionResult, NodeState, StrategyKind, Usage,
+    NodeExecContext, NodeExecutionResult, NodeState, StrategyKind, Usage,
 };
 
 pub struct DefaultExecutor {
@@ -85,10 +88,13 @@ impl DefaultExecutor {
                 },
             };
             if let Some(prompt) = system_prompt {
-                messages.insert(0, ChatMessage {
-                    role: "system".to_string(),
-                    content: prompt.to_string(),
-                });
+                messages.insert(
+                    0,
+                    ChatMessage {
+                        role: "system".to_string(),
+                        content: prompt.to_string(),
+                    },
+                );
             }
         }
 
@@ -113,10 +119,179 @@ impl DefaultExecutor {
     }
 }
 
-#[async_trait]
-impl Executor for DefaultExecutor {
+impl DefaultExecutor {
+    /// Phase 6.4 delegation boundary. Plain single-model LLM leaves (no
+    /// strategy, no compile-time subgraph, no tool allowlist) execute through
+    /// `fusion_runtime::ProviderExecutor` — which owns retry/fallback,
+    /// budget gating and the Law 7 tool loop for the delegated path.
+    ///
+    /// Everything else (strategy nodes — runtime-lowered or prebuilt — and any
+    /// node with a tool allowlist) stays on the legacy src executor path,
+    /// which owns the Law 7 tool-call machinery and runtime strategy
+    /// expansion until crates parity exists for those (6.6 debt).
+    fn delegate_to_crates(&self, node: &ExecutionNode) -> bool {
+        node.subgraph.is_none()
+            && node.strategy == StrategyKind::Single
+            && !node.config.contains_key("tool_allowlist")
+    }
+
+    /// Law 7 boundary: the crates executor refuses (fails) when the provider
+    /// returns native `tool_calls` and auto-exec is disabled — it owns no
+    /// src-style tool semantics. The src contract surfaces those calls as
+    /// `executed: false` metadata and succeeds, so tool-refusal failures are
+    /// re-routed to the legacy path (which never auto-executes by default).
+    fn is_tool_refusal(reason: &str) -> bool {
+        reason.contains("auto-exec is disabled")
+            || reason.contains("not allowed for node")
+            || reason.contains("not registered (node")
+            || reason.contains("exceeded max_tool_iterations")
+    }
+
+    /// Runs a plain leaf node on `fusion_runtime::ProviderExecutor`.
+    ///
+    /// Retries/fallback happen inside the crates executor
+    /// (`retry_policy` + `node.fallback`); the scheduler never sees them.
+    /// Outputs are mapped back to the src contract: LLM text becomes a
+    /// `String`, control-flow markers become `None` (matching the legacy
+    /// path's observable behavior).
+    async fn execute_crates(
+        &self,
+        node: &ExecutionNode,
+        ctx: &NodeExecContext,
+    ) -> NodeExecutionResult {
+        #[cfg(feature = "semantic-cache")]
+        let provider: Arc<dyn fusion_runtime::ChatProvider> =
+            Arc::new(FusionChatProvider::new(self.provider.clone()).with_cache(self.cache.clone()));
+        #[cfg(not(feature = "semantic-cache"))]
+        let provider: Arc<dyn fusion_runtime::ChatProvider> =
+            Arc::new(FusionChatProvider::new(self.provider.clone()));
+        let crates_executor = fusion_runtime::ProviderExecutor::new(provider);
+        let mut result = crates_executor.execute_node(node, ctx).await;
+        if let NodeState::Failed(reason) = &result.state {
+            if Self::is_tool_refusal(reason) {
+                return self.execute_legacy(node).await;
+            }
+        }
+        match node.kind {
+            ExecutionNodeKind::LLMGenerate
+            | ExecutionNodeKind::LLMReview
+            | ExecutionNodeKind::LLMJudge => {
+                if let Some(out) = result.output.as_ref() {
+                    if let Some(content) = out.get("content").and_then(|v| v.as_str()) {
+                        result.output = Some(serde_json::Value::String(content.to_string()));
+                    }
+                }
+            }
+            _ => {
+                result.output = None;
+            }
+        }
+        result
+    }
+
+    /// Legacy strategy path with the retry/fallback loop the monolith
+    /// scheduler used to own (moved in from `CratesExecutorAdapter` in 6.4,
+    /// so the adapter is a pure forwarder). Never retries a
+    /// `"Cancelled by client"` failure: the crates loop already raced the
+    /// cancellation token per node.
+    async fn execute_legacy_with_retry(&self, node: &ExecutionNode) -> NodeExecutionResult {
+        let max_retries = node.retry_policy.max_retries;
+        let mut attempts: u32 = 0;
+        let mut backoff: Option<Backoff> = None;
+        // Usage from successful stages accumulates across attempts: a retry
+        // that fails on an earlier stage must not lose the tokens spent by
+        // the stage that already succeeded.
+        let mut total_usage: Option<Usage> = None;
+
+        fn merge_usage(acc: &mut Option<Usage>, usage: Option<&Usage>) {
+            if let Some(u) = usage {
+                *acc = Some(match acc.take() {
+                    Some(prev) => Usage {
+                        prompt_tokens: prev.prompt_tokens + u.prompt_tokens,
+                        completion_tokens: prev.completion_tokens + u.completion_tokens,
+                        total_tokens: prev.total_tokens + u.total_tokens,
+                    },
+                    None => u.clone(),
+                });
+            }
+        }
+
+        loop {
+            let result = self.execute_legacy(node).await;
+            merge_usage(&mut total_usage, result.usage.as_ref());
+            match &result.state {
+                NodeState::Succeeded => {
+                    let mut result = result;
+                    result.usage = total_usage;
+                    return result;
+                }
+                NodeState::Failed(reason) if reason.as_str() == CANCELLED_MARKER => return result,
+                NodeState::Failed(_) if attempts < max_retries => {
+                    attempts += 1;
+                    info!(
+                        node_id = ?node.id,
+                        attempt = attempts,
+                        max = max_retries,
+                        "Retrying node after backoff"
+                    );
+                    if node.retry_policy.backoff_ms > 0 {
+                        let max_ms = node.retry_policy.backoff_ms.saturating_mul(10);
+                        let b = backoff.get_or_insert_with(|| {
+                            Backoff::new(node.retry_policy.backoff_ms, max_ms)
+                        });
+                        tokio::time::sleep(b.next()).await;
+                    }
+                    continue;
+                }
+                NodeState::Failed(_) => {
+                    if let Some(ref fallback) = node.fallback {
+                        info!(
+                            node_id = ?node.id,
+                            fallback_model = %fallback.model,
+                            "Attempting fallback execution"
+                        );
+                        let mut fallback_node = node.clone();
+                        fallback_node.model = fallback.model.clone();
+                        let fb_result = self.execute_legacy(&fallback_node).await;
+                        merge_usage(&mut total_usage, fb_result.usage.as_ref());
+                        return match fb_result.state {
+                            NodeState::Succeeded => {
+                                let mut fb_result = fb_result;
+                                fb_result.usage = total_usage;
+                                fb_result
+                            }
+                            NodeState::Failed(fb_reason) => NodeExecutionResult {
+                                state: NodeState::Failed(format!("Fallback failed: {}", fb_reason)),
+                                usage: total_usage,
+                                latency_ms: fb_result.latency_ms,
+                                output: None,
+                            },
+                            other => NodeExecutionResult {
+                                state: other,
+                                usage: total_usage,
+                                latency_ms: fb_result.latency_ms,
+                                output: fb_result.output,
+                            },
+                        };
+                    }
+                    let mut result = result;
+                    result.usage = total_usage;
+                    return result;
+                }
+                _ => {
+                    let mut result = result;
+                    result.usage = total_usage;
+                    return result;
+                }
+            }
+        }
+    }
+
+    /// The pre-6.4 strategy execution body: resolve (prebuilt or runtime)
+    /// subgraph, run members topologically with the Law 7 tool loop,
+    /// accumulate usage, surface the exit output.
     #[tracing::instrument(skip(self, node), fields(node_id = %node.id, model = %node.model, kind = ?node.kind, strategy = ?node.strategy))]
-    async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult {
+    async fn execute_legacy(&self, node: &ExecutionNode) -> NodeExecutionResult {
         let start = std::time::Instant::now();
         let strategy_label = node.strategy.as_label();
         let subgraph = self.resolve_strategy(node).await;
@@ -130,12 +305,14 @@ impl Executor for DefaultExecutor {
         );
 
         let n_sub_nodes = subgraph.nodes.len();
-        let mut incoming: HashMap<uuid::Uuid, Vec<uuid::Uuid>> = HashMap::with_capacity(n_sub_nodes);
+        let mut incoming: HashMap<uuid::Uuid, Vec<uuid::Uuid>> =
+            HashMap::with_capacity(n_sub_nodes);
         for edge in &subgraph.edges {
             incoming.entry(edge.to).or_default().push(edge.from);
         }
         let mut remaining: Vec<&ExecutionNode> = subgraph.nodes.iter().collect();
-        let mut completed: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::with_capacity(n_sub_nodes);
+        let mut completed: std::collections::HashSet<uuid::Uuid> =
+            std::collections::HashSet::with_capacity(n_sub_nodes);
         let mut order: Vec<&ExecutionNode> = Vec::with_capacity(n_sub_nodes);
         while !remaining.is_empty() {
             let ready: Vec<&ExecutionNode> = remaining
@@ -158,7 +335,8 @@ impl Executor for DefaultExecutor {
             remaining.retain(|n| !completed.contains(&n.id));
         }
 
-        let mut node_outputs: HashMap<uuid::Uuid, serde_json::Value> = HashMap::with_capacity(n_sub_nodes);
+        let mut node_outputs: HashMap<uuid::Uuid, serde_json::Value> =
+            HashMap::with_capacity(n_sub_nodes);
 
         for sub_node in order {
             match sub_node.kind {
@@ -233,8 +411,15 @@ impl Executor for DefaultExecutor {
                                     .strategy_latency_seconds
                                     .with_label_values(&[&strategy_label])
                                     .observe(latency as f64 / 1000.0);
+                                // Cancellation markers pass through verbatim so the
+                                // retry wrap never re-queues a cancelled node.
+                                let reason = if e.to_string() == CANCELLED_MARKER {
+                                    CANCELLED_MARKER.to_string()
+                                } else {
+                                    format!("Provider error: {}", e)
+                                };
                                 return NodeExecutionResult {
-                                    state: NodeState::Failed(format!("Provider error: {}", e)),
+                                    state: NodeState::Failed(reason),
                                     usage: accumulated_usage,
                                     latency_ms: latency,
                                     output: None,
@@ -254,7 +439,9 @@ impl Executor for DefaultExecutor {
                             "LLM node completed"
                         );
 
-                        output_value = response.choices.first()
+                        output_value = response
+                            .choices
+                            .first()
                             .map(|c| c.message.content.clone())
                             .map(serde_json::Value::String);
 
@@ -262,7 +449,8 @@ impl Executor for DefaultExecutor {
                             accumulated_usage = Some(match accumulated_usage {
                                 Some(acc) => Usage {
                                     prompt_tokens: acc.prompt_tokens + usage.prompt_tokens,
-                                    completion_tokens: acc.completion_tokens + usage.completion_tokens,
+                                    completion_tokens: acc.completion_tokens
+                                        + usage.completion_tokens,
                                     total_tokens: acc.total_tokens + usage.total_tokens,
                                 },
                                 None => usage,
@@ -270,9 +458,7 @@ impl Executor for DefaultExecutor {
                         }
 
                         let native_calls = response.native_tool_calls.as_deref().unwrap_or(&[]);
-                        let results = self
-                            .execute_native_tool_calls(sub_node, native_calls)
-                            .await;
+                        let results = self.execute_native_tool_calls(sub_node, native_calls).await;
                         let executed_any = results["tool_calls"]
                             .as_array()
                             .map(|c| c.iter().any(|x| x["executed"] == true))
@@ -292,7 +478,9 @@ impl Executor for DefaultExecutor {
 
                         request.messages.push(ChatMessage {
                             role: "assistant".to_string(),
-                            content: response.choices.first()
+                            content: response
+                                .choices
+                                .first()
                                 .map(|c| c.message.content.clone())
                                 .unwrap_or_default(),
                         });
@@ -306,13 +494,15 @@ impl Executor for DefaultExecutor {
                             tool_round,
                             "tool round completed; continuing LLM loop"
                         );
-                    }; // tool loop
+                    } // tool loop
 
                     #[cfg(feature = "semantic-cache")]
                     if let Some(ref cache) = self.cache {
                         if let Some(content) = output_value.as_ref().and_then(|v| v.as_str()) {
                             if !content.trim().is_empty() {
-                                cache.put(&cache_key, serde_json::json!({ "content": content })).await;
+                                cache
+                                    .put(&cache_key, serde_json::json!({ "content": content }))
+                                    .await;
                             }
                         }
                     }
@@ -353,6 +543,22 @@ impl Executor for DefaultExecutor {
             usage: accumulated_usage,
             latency_ms: latency,
             output: output_value,
+        }
+    }
+}
+
+#[async_trait]
+impl Executor for DefaultExecutor {
+    #[tracing::instrument(skip(self, node, ctx), fields(node_id = %node.id, model = %node.model, kind = ?node.kind, strategy = ?node.strategy))]
+    async fn execute_node(
+        &self,
+        node: &ExecutionNode,
+        ctx: &NodeExecContext,
+    ) -> NodeExecutionResult {
+        if self.delegate_to_crates(node) {
+            self.execute_crates(node, ctx).await
+        } else {
+            self.execute_legacy_with_retry(node).await
         }
     }
 

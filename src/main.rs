@@ -9,6 +9,7 @@ mod server;
 mod context;
 mod requirements;
 mod planner;
+mod ir;
 mod compiler;
 mod scheduler;
 mod executor;

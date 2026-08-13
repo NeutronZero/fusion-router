@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use crate::types::{ExecutionGraph, ExecutionInstance, ExecutionResult, ReservationId};
 
 pub mod default;
-pub mod work_queue;
 pub mod crates_adapter;
 pub mod connector_health;
 pub mod connector_resolver;

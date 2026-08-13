@@ -1,6 +1,6 @@
 # Phase 6 — Inventory & Call-Graph Freeze (6.0)
 
-Status: as of commit after Phase 6 PR1/PR2 delegation. Source of truth: `master` (pushed directly; no PR flow).
+Status: Phase 6.4–6.7 implementation complete locally; source of truth: `master` (pushed directly; no PR flow).
 
 ## Goal
 
@@ -22,7 +22,7 @@ src/ (binary + providers + API)
 |---|---|---|---|---|---|
 | `POST /v1/chat/completions` (`src/server/handlers/chat.rs:25`) | `[src] IntentPlanner::plan` (`pipeline.rs:114` → `planner/intent_planner.rs:419`) | `[crates→src] build_compiler` (`state.rs:74`, pipeline.rs:127) | `[src] DefaultScheduler` (`pipeline.rs:238`, `scheduler/default.rs:41`) | `[src] DefaultExecutor` (`node_exec.rs:119`) | `[src] providers/mod.rs:256` |
 | `POST /v1/messages` (`handlers/anthropic.rs:21`) | same `process_request` as chat | same | same | same | same |
-| `POST /v1/executions` (`server/execution.rs:293`) | **none** (IR from body) | `[crates→src] build_compiler` (`main.rs:191-197`, `execution.rs:130`) | **none** — hand-rolled topo loop (`execution.rs:70-104`) | `[src] DefaultExecutor` (`execution.rs:188`) | same |
+| `POST /v1/executions` (`server/execution.rs:293`) | **none** (IR from body) | `[crates→src] build_compiler` (`main.rs:191-197`, `execution.rs:130`) | `[src→crates] DefaultScheduler` (`execution.rs`) | `[src] DefaultExecutor` with crates ProviderExecutor delegation | same |
 | Streaming chat/anthropic | — | — | — | — | direct `provider.chat_stream` (no graph) |
 | `fusion-router review` CLI (`review.rs:181`) | none (hand-built node) | Consensus expansion only — now `[crates] fusion_compiler::strategy_expansion` (`review.rs:253`) | `[src] DefaultScheduler::new(1)` (`review.rs:272`) | `[src] DefaultExecutor` | `[src] ProviderRegistry` |
 | `fusion` CLI / `eval_runner` bin | — | — | — | — | release governance / dev harness, no runtime pipeline |
@@ -37,9 +37,9 @@ src/ (binary + providers + API)
 | 3 | Policy bridge | `src/policy::ir::PolicyIR` | `fusion_compiler::policy::PolicyIR` via `src/policy/bridge.rs` `From` | ✅ DONE (PR1) |
 | 4 | Strategy expansion (compile-time) | `src/compiler/strategy_expansion` (7 kinds; dead in lib, kept for runtime `strategy_ir_from_node`) | `fusion_compiler::strategy_expansion` (Consensus) | ✅ DONE (PR2); 6.6 cleanup pending |
 | 5 | Scheduler | `src/scheduler/default.rs` (`schedule`, `run_with_cancellation`) | `fusion_scheduler::DefaultScheduler` — **DELEGATED** (commit `d685a05`): `BudgetEnvelope` lifted to `fusion_types`, enforced in crates loop (iteration cap at loop head; cost/token breach skips outstanding nodes, completes unsuccessfully); src executor adapted via `CratesExecutorAdapter` (retry/fallback + terminal-output tracking); error mapping preserves `Internal("Request cancelled by client")` | ✅ flip done — `schedule` stays src-side (thin allocator) |
-| 6 | Executor / runtime | `src/executor/node_exec.rs` `DefaultExecutor` | `fusion_runtime::RuntimeEngine` + `ProviderExecutor`; `ChatProvider` wrappers for real providers | ⏳ PR3/PR4 |
-| 7 | Planner | `src/planner/intent_planner.rs` `IntentPlanner::plan` | `fusion_planner::PlannerService` | ⏳ PR5 |
-| 8 | `/v1/executions` scheduler gap | hand-rolled topo loop (`execution.rs`) | insert crates scheduler hop | ⏳ PR3 |
+| 6 | Executor / runtime | `src/executor/node_exec.rs` `DefaultExecutor` | `fusion_runtime::ProviderExecutor` for plain Single leaves; `FusionChatProvider`/`FusionTool` bridges; legacy path retained for strategies/tools | ✅ DONE (6.4) |
+| 7 | Planner | `src/planner/intent_planner.rs` `IntentPlanner::plan` | `fusion_planner::IntentPlanner::plan_intent` via `src/ir/adapter.rs`; src annotates models/strategies | ✅ DONE (6.5) |
+| 8 | `/v1/executions` scheduler gap | hand-rolled topo loop (`execution.rs`) | src Scheduler hop with crates scheduler delegation and deterministic event replay | ✅ DONE (6.4) |
 
 ## 6.0.3 — Key call sites (grep results, authoritative)
 
@@ -58,6 +58,7 @@ src/ (binary + providers + API)
 
 - `cargo test --workspace`: green except pre-existing `config_reload_tests::test_provider_registry_rejects_bad_prepare` (fails at HEAD too)
 - `cargo build --examples`: green
+- `cargo test --lib`: 738 tests green after the 6.4 executor flip.
 - Parity coverage: `phase6_consensus_expands_through_crates_lower`, `phase6_dead_node_elimination_is_live` (src/compiler/mod.rs), bridge unit tests (src/policy/bridge.rs, src/resource/kernel_adapter.rs), Law 1/2/4 tests unchanged and passing
 - `fusion-scheduler` parity (commit `8f00021`): 17 tests green — conditional edge activation, loop continue/exit, loop-back iteration caps, pre-run + mid-run cancellation, per-token cost
 
@@ -70,6 +71,15 @@ Commit `d685a05` flips every production call site (pipeline, review, eval, distr
 3. **Error mapping** — crates `PlatformError::Scheduler{code:"CANCELLED"}` → `SchedulerError::Internal("Request cancelled by client")`.
 
 Coverage: 19 fusion-scheduler tests (budget iteration cap, breach-skip + usage parity), 6 adapter tests (retry, fallback success/failure, no-fallback exhaustion, cancellation pass-through, terminal tracking), plus `tests/unit/regressions.rs` budget + terminal tests running against the delegated path. Full workspace green except the pre-existing `config_reload_tests` failure.
+
+## Phase 6.4–6.7 — DONE LOCALLY
+
+1. Plain Single leaves delegate to `fusion_runtime::ProviderExecutor`; retry/fallback ownership is no longer duplicated in `CratesExecutorAdapter`.
+2. Tool-call Law 7 behavior remains on the src legacy path, including fail-closed and `executed: false` output contracts.
+3. `/v1/executions` uses the src Scheduler and replays lifecycle events from the scheduler outcome.
+4. Intent planning uses the crates planner templates through the existing IR adapter.
+5. Dead `src/scheduler/work_queue.rs` was removed; compiler strategy expansion and legacy passes remain because they still have live callers.
+6. `cargo build --examples` is green; workspace tests remain green except the pre-existing config reload failure.
 
 ## Known debt (deliberate, this phase)
 

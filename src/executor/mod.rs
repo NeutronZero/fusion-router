@@ -1,33 +1,38 @@
 use async_trait::async_trait;
 
 pub mod capability_executor;
+mod fusion_bridge;
 mod node_exec;
 mod strategy_resolver;
 mod tool_loop;
 
+pub use fusion_bridge::{connect_tools, FusionChatProvider, FusionTool};
 pub use node_exec::DefaultExecutor;
 
-use crate::types::{ExecutionNode, ExecutionSubgraph, NodeExecutionResult};
+use crate::types::{ExecutionNode, ExecutionSubgraph, NodeExecContext, NodeExecutionResult};
 
 #[async_trait]
 pub trait Executor: Send + Sync {
-    async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult;
+    async fn execute_node(
+        &self,
+        node: &ExecutionNode,
+        ctx: &NodeExecContext,
+    ) -> NodeExecutionResult;
     async fn resolve_strategy(&self, node: &ExecutionNode) -> ExecutionSubgraph;
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use uuid::Uuid;
     use crate::providers::ChatProvider;
     use crate::strategies::consensus::ConsensusStrategy;
     use crate::strategies::single::SingleStrategy;
     use crate::strategies::Strategy;
     use crate::tools::ToolRegistry;
     use crate::types::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use uuid::Uuid;
 
     struct MockChatProvider;
 
@@ -167,7 +172,10 @@ mod tests {
     async fn test_resolve_strategy_consensus_subgraph_inherits_node_model() {
         let provider = Arc::new(MockChatProvider);
         let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-        strategies.insert(StrategyKind::Consensus, Box::new(ConsensusStrategy::default()));
+        strategies.insert(
+            StrategyKind::Consensus,
+            Box::new(ConsensusStrategy::default()),
+        );
         let executor = DefaultExecutor::new(provider, strategies);
         let mut node = make_llm_node(StrategyKind::Consensus);
         node.model = "gpt-4-turbo".into();
@@ -186,7 +194,10 @@ mod tests {
     async fn test_resolve_strategy_propagates_parent_messages_to_subnodes() {
         let provider = Arc::new(MockChatProvider);
         let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-        strategies.insert(StrategyKind::Consensus, Box::new(ConsensusStrategy::default()));
+        strategies.insert(
+            StrategyKind::Consensus,
+            Box::new(ConsensusStrategy::default()),
+        );
         let executor = DefaultExecutor::new(provider, strategies);
         let mut node = make_llm_node(StrategyKind::Consensus);
         node.config.insert(
@@ -217,7 +228,9 @@ mod tests {
         let executor = DefaultExecutor::new(provider, strategies);
         let node = make_llm_node(StrategyKind::Single);
 
-        let result = executor.execute_node(&node).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
 
         assert_eq!(result.state, NodeState::Succeeded);
         assert_eq!(
@@ -237,7 +250,9 @@ mod tests {
         let executor = DefaultExecutor::new(provider, strategies);
         let node = make_llm_node(StrategyKind::Fusion);
 
-        let result = executor.execute_node(&node).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
 
         assert_eq!(result.state, NodeState::Succeeded);
     }
@@ -253,21 +268,30 @@ mod tests {
         let subgraph = executor.resolve_strategy(&node).await;
 
         assert_eq!(subgraph.nodes.len(), 1);
-        assert!(matches!(subgraph.nodes[0].kind, ExecutionNodeKind::LLMGenerate));
+        assert!(matches!(
+            subgraph.nodes[0].kind,
+            ExecutionNodeKind::LLMGenerate
+        ));
     }
 
     #[tokio::test]
     async fn test_resolve_strategy_consensus() {
         let provider = Arc::new(MockChatProvider);
         let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-        strategies.insert(StrategyKind::Consensus, Box::new(ConsensusStrategy::default()));
+        strategies.insert(
+            StrategyKind::Consensus,
+            Box::new(ConsensusStrategy::default()),
+        );
         let executor = DefaultExecutor::new(provider, strategies);
         let node = make_llm_node(StrategyKind::Consensus);
 
         let subgraph = executor.resolve_strategy(&node).await;
 
         assert_eq!(subgraph.nodes.len(), 4);
-        assert!(matches!(subgraph.nodes[0].kind, ExecutionNodeKind::LLMGenerate));
+        assert!(matches!(
+            subgraph.nodes[0].kind,
+            ExecutionNodeKind::LLMGenerate
+        ));
         assert!(matches!(
             subgraph.nodes.last().unwrap().kind,
             ExecutionNodeKind::LLMJudge
@@ -282,7 +306,9 @@ mod tests {
         let executor = DefaultExecutor::new(provider, strategies);
         let node = make_judge_node(StrategyKind::Fusion);
 
-        let _ = executor.execute_node(&node).await;
+        let _ = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
 
         let request = captured.lock().unwrap().take().unwrap();
         let has_system = request.messages.iter().any(|m| m.role == "system");
@@ -340,7 +366,10 @@ mod tests {
         let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
         let provider = Arc::new(CapturingAllProvider(captured.clone()));
         let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-        strategies.insert(StrategyKind::Consensus, Box::new(ConsensusStrategy { count: 2 }));
+        strategies.insert(
+            StrategyKind::Consensus,
+            Box::new(ConsensusStrategy { count: 2 }),
+        );
         let executor = DefaultExecutor::new(provider, strategies);
 
         let mut node = make_llm_node(StrategyKind::Consensus);
@@ -349,12 +378,17 @@ mod tests {
             serde_json::json!([{"role": "user", "content": "original prompt"}]),
         );
 
-        let result = executor.execute_node(&node).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         assert_eq!(result.state, NodeState::Succeeded);
 
         let requests = captured.lock().unwrap();
         // 2 members + 1 judge
-        assert!(requests.len() >= 2, "expected at least member + judge calls");
+        assert!(
+            requests.len() >= 2,
+            "expected at least member + judge calls"
+        );
 
         // The judge request (last one, since judge runs last in topo order)
         let judge_request = requests.last().expect("should have judge request");
@@ -411,7 +445,9 @@ mod tests {
             &self,
             _request: &ChatCompletionRequest,
         ) -> anyhow::Result<ChatCompletionResponse> {
-            let n = self.request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let n = self
+                .request_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let calls = if n < self.tool_call_requests {
                 Some(self.tool_calls.clone())
             } else {
@@ -495,12 +531,12 @@ mod tests {
             .with_tool_registry(calculator_registry())
             .with_allow_auto_exec(true);
         let mut node = make_llm_node(StrategyKind::Single);
-        node.config.insert(
-            "tool_allowlist".into(),
-            serde_json::json!(["calculator"]),
-        );
+        node.config
+            .insert("tool_allowlist".into(), serde_json::json!(["calculator"]));
 
-        let result = executor.execute_node(&node).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
 
         assert_eq!(result.state, NodeState::Succeeded);
         let output = result.output.expect("output must be present");
@@ -537,12 +573,12 @@ mod tests {
             .with_tool_registry(calculator_registry())
             .with_allow_auto_exec(true);
         let mut node = make_llm_node(StrategyKind::Single);
-        node.config.insert(
-            "tool_allowlist".into(),
-            serde_json::json!(["calculator"]),
-        );
+        node.config
+            .insert("tool_allowlist".into(), serde_json::json!(["calculator"]));
 
-        let result = executor.execute_node(&node).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
 
         assert_eq!(result.state, NodeState::Succeeded);
         let output = result.output.expect("tool call results must be produced");
@@ -556,7 +592,10 @@ mod tests {
         assert_eq!(search["tool"], "search");
         assert_eq!(search["executed"], false, "search is outside the allowlist");
         assert!(
-            search["reason"].as_str().unwrap_or("").contains("allowlist"),
+            search["reason"]
+                .as_str()
+                .unwrap_or("")
+                .contains("allowlist"),
             "non-allowlisted call must explain why it was not executed"
         );
     }
@@ -576,18 +615,17 @@ mod tests {
         let executor = DefaultExecutor::new(provider, single_strategies())
             .with_tool_registry(calculator_registry());
         let mut node = make_llm_node(StrategyKind::Single);
-        node.config.insert(
-            "tool_allowlist".into(),
-            serde_json::json!(["calculator"]),
-        );
+        node.config
+            .insert("tool_allowlist".into(), serde_json::json!(["calculator"]));
 
-        let result = executor.execute_node(&node).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
 
         assert_eq!(result.state, NodeState::Succeeded);
         let output = result.output.expect("tool call results must be produced");
         assert_eq!(
-            output["tool_calls"][0]["executed"],
-            false,
+            output["tool_calls"][0]["executed"], false,
             "auto-exec disabled must never execute a tool"
         );
         assert!(
@@ -614,12 +652,13 @@ mod tests {
 
         let node = make_llm_node(StrategyKind::Single);
 
-        let result = executor.execute_node(&node).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         assert_eq!(result.state, NodeState::Succeeded);
         let output = result.output.expect("tool call results must be produced");
         assert_eq!(
-            output["tool_calls"][0]["executed"],
-            false,
+            output["tool_calls"][0]["executed"], false,
             "absent allowlist must block all tool execution"
         );
     }
@@ -635,7 +674,9 @@ mod tests {
             .with_allow_auto_exec(true);
         let node = make_llm_node(StrategyKind::Single);
 
-        let _ = executor.execute_node(&node).await;
+        let _ = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         let request = captured.lock().unwrap().take().unwrap();
         assert!(
             request.tools.is_none(),
@@ -643,13 +684,15 @@ mod tests {
         );
 
         let mut node = make_llm_node(StrategyKind::Single);
-        node.config.insert(
-            "tool_allowlist".into(),
-            serde_json::json!(["calculator"]),
-        );
-        let _ = executor.execute_node(&node).await;
+        node.config
+            .insert("tool_allowlist".into(), serde_json::json!(["calculator"]));
+        let _ = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         let request = captured.lock().unwrap().take().unwrap();
-        let tools = request.tools.expect("allowlist must advertise tool definitions");
+        let tools = request
+            .tools
+            .expect("allowlist must advertise tool definitions");
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "calculator");
         assert!(tools[0].parameters.is_some(), "schema must be advertised");
@@ -657,11 +700,11 @@ mod tests {
         let executor_disabled = DefaultExecutor::new(provider, single_strategies())
             .with_tool_registry(calculator_registry());
         let mut node = make_llm_node(StrategyKind::Single);
-        node.config.insert(
-            "tool_allowlist".into(),
-            serde_json::json!(["calculator"]),
-        );
-        let _ = executor_disabled.execute_node(&node).await;
+        node.config
+            .insert("tool_allowlist".into(), serde_json::json!(["calculator"]));
+        let _ = executor_disabled
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         let request = captured.lock().unwrap().take().unwrap();
         assert!(
             request.tools.is_none(),
@@ -685,17 +728,19 @@ mod tests {
             request_count: std::sync::atomic::AtomicUsize::new(0),
         });
         let mut registry = ToolRegistry::new();
-        registry.register(Arc::new(crate::tools::builtin::FileReadTool::new(".".into())));
+        registry.register(Arc::new(crate::tools::builtin::FileReadTool::new(
+            ".".into(),
+        )));
         let executor = DefaultExecutor::new(provider, single_strategies())
             .with_tool_registry(Arc::new(registry))
             .with_allow_auto_exec(true);
         let mut node = make_llm_node(StrategyKind::Single);
-        node.config.insert(
-            "tool_allowlist".into(),
-            serde_json::json!(["file_read"]),
-        );
+        node.config
+            .insert("tool_allowlist".into(), serde_json::json!(["file_read"]));
 
-        let result = executor.execute_node(&node).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
 
         assert_eq!(result.state, NodeState::Succeeded);
         assert_eq!(
@@ -704,7 +749,10 @@ mod tests {
             "after tool rounds the model's final text must be the output"
         );
         let usage = result.usage.expect("usage accumulated across rounds");
-        assert_eq!(usage.total_tokens, 45, "3 provider calls (2 tool + 1 text) x 15 tokens");
+        assert_eq!(
+            usage.total_tokens, 45,
+            "3 provider calls (2 tool + 1 text) x 15 tokens"
+        );
     }
 
     /// The tool loop must terminate even when the model never stops calling
@@ -725,13 +773,14 @@ mod tests {
             .with_tool_registry(calculator_registry())
             .with_allow_auto_exec(true);
         let mut node = make_llm_node(StrategyKind::Single);
-        node.config.insert(
-            "tool_allowlist".into(),
-            serde_json::json!(["calculator"]),
-        );
-        node.config.insert("max_tool_rounds".into(), serde_json::json!(3));
+        node.config
+            .insert("tool_allowlist".into(), serde_json::json!(["calculator"]));
+        node.config
+            .insert("max_tool_rounds".into(), serde_json::json!(3));
 
-        let result = executor.execute_node(&node).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
 
         assert_eq!(result.state, NodeState::Succeeded);
         assert!(
@@ -852,11 +901,16 @@ mod tests {
                 64,
             ));
             cache
-                .put(&cache_key, serde_json::json!({ "content": "cached member" }))
+                .put(
+                    &cache_key,
+                    serde_json::json!({ "content": "cached member" }),
+                )
                 .await;
             let executor = executor.with_cache(cache);
 
-            let result = executor.execute_node(&node).await;
+            let result = executor
+                .execute_node(&node, &NodeExecContext::default())
+                .await;
 
             assert_eq!(result.state, NodeState::Succeeded);
             assert_eq!(
@@ -880,8 +934,13 @@ mod tests {
 
         #[async_trait]
         impl ChatProvider for FailingProvider {
-            fn name(&self) -> &str { "failing" }
-            async fn chat_completion(&self, _req: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
+            fn name(&self) -> &str {
+                "failing"
+            }
+            async fn chat_completion(
+                &self,
+                _req: &ChatCompletionRequest,
+            ) -> anyhow::Result<ChatCompletionResponse> {
                 let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if n == 0 {
                     Ok(ChatCompletionResponse {
@@ -889,9 +948,20 @@ mod tests {
                         object: "chat.completion".into(),
                         created: 0,
                         model: "mock".into(),
-                        choices: vec![Choice { index: 0, message: ChatMessage { role: "assistant".into(), content: "ok".into() }, finish_reason: "stop".into() }],
+                        choices: vec![Choice {
+                            index: 0,
+                            message: ChatMessage {
+                                role: "assistant".into(),
+                                content: "ok".into(),
+                            },
+                            finish_reason: "stop".into(),
+                        }],
                         native_tool_calls: None,
-                        usage: Some(Usage { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 }),
+                        usage: Some(Usage {
+                            prompt_tokens: 10,
+                            completion_tokens: 20,
+                            total_tokens: 30,
+                        }),
                     })
                 } else {
                     anyhow::bail!("provider simulated failure")
@@ -899,18 +969,319 @@ mod tests {
             }
         }
 
-        let provider = Arc::new(FailingProvider { calls: std::sync::atomic::AtomicUsize::new(0) });
+        let provider = Arc::new(FailingProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
         let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-        strategies.insert(StrategyKind::Consensus, Box::new(crate::strategies::consensus::ConsensusStrategy::default()));
+        strategies.insert(
+            StrategyKind::Consensus,
+            Box::new(crate::strategies::consensus::ConsensusStrategy::default()),
+        );
         let executor = DefaultExecutor::new(provider, strategies);
         let node = make_llm_node(StrategyKind::Consensus);
 
-        let result = executor.execute_node(&node).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
 
         assert!(matches!(result.state, NodeState::Failed(_)));
         let usage = result.usage.expect("accumulated usage from successful first stage must be preserved on second stage failure");
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 20);
         assert_eq!(usage.total_tokens, 30);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 6.4: plain Single leaves delegate to fusion_runtime::ProviderExecutor
+    // -----------------------------------------------------------------------
+
+    fn make_single_leaf(config: HashMap<&str, serde_json::Value>) -> ExecutionNode {
+        ExecutionNode {
+            id: Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMGenerate,
+            strategy: StrategyKind::Single,
+            model: "gpt-4".to_string(),
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
+            fallback: None,
+            config: config
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+            subgraph: None,
+        }
+    }
+
+    /// Provider that fails the first `fail_first` requests, then succeeds.
+    struct SequenceProvider {
+        calls: std::sync::atomic::AtomicUsize,
+        fail_first: usize,
+        fail_models: Vec<String>,
+        content: String,
+        recorded_models: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl ChatProvider for SequenceProvider {
+        fn name(&self) -> &str {
+            "sequence"
+        }
+
+        async fn chat_completion(
+            &self,
+            request: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
+            self.recorded_models
+                .lock()
+                .unwrap()
+                .push(request.model.clone());
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let model_fails = self.fail_models.iter().any(|m| m == &request.model);
+            if model_fails || n < self.fail_first {
+                anyhow::bail!("provider simulated failure");
+            }
+            Ok(ChatCompletionResponse {
+                id: "seq".into(),
+                object: "chat.completion".into(),
+                created: 0,
+                model: request.model.clone(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: self.content.clone(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
+                native_tool_calls: None,
+                usage: Some(Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 20,
+                    total_tokens: 30,
+                }),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_single_leaf_delegates_to_crates_executor_with_string_output() {
+        let provider = Arc::new(SequenceProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: 0,
+            fail_models: vec![],
+            content: "crates response".into(),
+            recorded_models: std::sync::Mutex::new(Vec::new()),
+        });
+        let executor = DefaultExecutor::new(provider.clone(), HashMap::new());
+        let node = make_single_leaf(HashMap::new());
+
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        assert_eq!(
+            result.output,
+            Some(serde_json::Value::String("crates response".into())),
+            "leaf LLM output must keep the src String contract"
+        );
+        assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_single_leaf_retries_inside_crates_executor() {
+        let provider = Arc::new(SequenceProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: 1,
+            fail_models: vec![],
+            content: "recovered".into(),
+            recorded_models: std::sync::Mutex::new(Vec::new()),
+        });
+        let executor = DefaultExecutor::new(provider.clone(), HashMap::new());
+        let mut node = make_single_leaf(HashMap::new());
+        node.retry_policy = RetryPolicy {
+            max_retries: 2,
+            backoff_ms: 0,
+        };
+
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        assert_eq!(
+            provider.calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "initial attempt + 1 retry inside ProviderExecutor"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_single_leaf_fallback_inside_crates_executor() {
+        let provider = Arc::new(SequenceProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: 0,
+            fail_models: vec!["gpt-4".to_string()],
+            content: "fallback answer".into(),
+            recorded_models: std::sync::Mutex::new(Vec::new()),
+        });
+        let executor = DefaultExecutor::new(provider.clone(), HashMap::new());
+        let mut node = make_single_leaf(HashMap::new());
+        node.fallback = Some(FallbackConfig {
+            model: "fallback-model".into(),
+            provider: "fb".into(),
+        });
+
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        let models = provider.recorded_models.lock().unwrap().clone();
+        assert_eq!(
+            models.len(),
+            2,
+            "primary fails once, fallback model attempted"
+        );
+        assert_eq!(models[1], "fallback-model");
+    }
+
+    #[tokio::test]
+    async fn test_control_leaf_node_output_is_none() {
+        let provider = Arc::new(SequenceProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: 0,
+            fail_models: vec![],
+            content: "unused".into(),
+            recorded_models: std::sync::Mutex::new(Vec::new()),
+        });
+        let executor = DefaultExecutor::new(provider.clone(), HashMap::new());
+        let mut node = make_single_leaf(HashMap::new());
+        node.kind = ExecutionNodeKind::Gate;
+
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        assert_eq!(
+            result.output, None,
+            "control nodes must keep the src contract of no output"
+        );
+        assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_legacy_path_retries_then_succeeds() {
+        // A tool allowlist routes execution to the legacy Law 7 path, whose
+        // retry loop moved in from the crates adapter (Phase 6.4).
+        let provider = Arc::new(SequenceProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: 2,
+            fail_models: vec![],
+            content: "legacy recovered".into(),
+            recorded_models: std::sync::Mutex::new(Vec::new()),
+        });
+        let executor = DefaultExecutor::new(provider.clone(), HashMap::new());
+        let mut node = make_single_leaf(HashMap::from([(
+            "tool_allowlist".into(),
+            serde_json::json!(["calculator"]),
+        )]));
+        node.retry_policy = RetryPolicy {
+            max_retries: 2,
+            backoff_ms: 0,
+        };
+
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+
+        assert_eq!(result.state, NodeState::Succeeded);
+        assert_eq!(
+            provider.calls.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "2 failures + 1 success via the legacy retry loop"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_legacy_path_fallback_after_exhausted_retries() {
+        let provider = Arc::new(SequenceProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: 0,
+            fail_models: vec!["gpt-4".to_string(), "backup-model".to_string()],
+            content: "never".into(),
+            recorded_models: std::sync::Mutex::new(Vec::new()),
+        });
+        let executor = DefaultExecutor::new(provider.clone(), HashMap::new());
+        let mut node = make_single_leaf(HashMap::from([(
+            "tool_allowlist".into(),
+            serde_json::json!(["calculator"]),
+        )]));
+        node.retry_policy = RetryPolicy {
+            max_retries: 1,
+            backoff_ms: 0,
+        };
+        node.fallback = Some(FallbackConfig {
+            model: "backup-model".into(),
+            provider: "backup".into(),
+        });
+
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+
+        assert!(matches!(
+            result.state,
+            NodeState::Failed(reason) if reason.starts_with("Fallback failed:")
+        ));
+        let models = provider.recorded_models.lock().unwrap().clone();
+        assert_eq!(models.len(), 3, "2 primary attempts + 1 fallback");
+        assert_eq!(models[2], "backup-model");
+    }
+
+    #[tokio::test]
+    async fn test_legacy_path_never_retries_cancellation_marker() {
+        struct CancelledProvider(std::sync::atomic::AtomicUsize);
+        #[async_trait]
+        impl ChatProvider for CancelledProvider {
+            fn name(&self) -> &str {
+                "cancelled"
+            }
+            async fn chat_completion(
+                &self,
+                _request: &ChatCompletionRequest,
+            ) -> anyhow::Result<ChatCompletionResponse> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(anyhow::anyhow!("Cancelled by client"))
+            }
+        }
+
+        let provider = Arc::new(CancelledProvider(std::sync::atomic::AtomicUsize::new(0)));
+        let executor = DefaultExecutor::new(provider.clone(), HashMap::new());
+        let mut node = make_single_leaf(HashMap::from([(
+            "tool_allowlist".into(),
+            serde_json::json!(["calculator"]),
+        )]));
+        node.retry_policy = RetryPolicy {
+            max_retries: 5,
+            backoff_ms: 0,
+        };
+
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+
+        assert!(matches!(
+            result.state,
+            NodeState::Failed(reason) if reason.contains("Cancelled by client")
+        ));
+        assert_eq!(
+            provider.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "cancellation must never be retried"
+        );
     }
 }

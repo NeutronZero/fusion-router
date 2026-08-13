@@ -15,7 +15,11 @@ struct MockExecutor {
 
 #[async_trait]
 impl Executor for MockExecutor {
-    async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult {
+    async fn execute_node(
+        &self,
+        node: &ExecutionNode,
+        _ctx: &NodeExecContext,
+    ) -> NodeExecutionResult {
         let text = self
             .outputs
             .get(&node.id)
