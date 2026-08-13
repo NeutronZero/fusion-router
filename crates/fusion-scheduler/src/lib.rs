@@ -13,10 +13,11 @@ pub mod work_queue;
 pub use work_queue::WorkQueue;
 
 /// Trait for executing a single node. Implementors provide the actual
-/// LLM/provider dispatch. The scheduler calls this for each ready node.
+/// LLM/provider dispatch. The scheduler calls this for each ready node,
+/// passing a context with parent outputs.
 #[async_trait]
 pub trait Executor: Send + Sync {
-    async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult;
+    async fn execute_node(&self, node: &ExecutionNode, ctx: &NodeExecContext) -> NodeExecutionResult;
 }
 
 /// Result of a full scheduler run.
@@ -84,9 +85,26 @@ impl DefaultScheduler {
 
                 // Find the node to clone for the executor
                 let node = graph.nodes.iter().find(|n| n.id == node_id).unwrap().clone();
+
+                // Build parent context: outputs of immediate predecessors
+                let incoming: Vec<uuid::Uuid> = graph.edges.iter()
+                    .filter(|e| e.to == node_id)
+                    .map(|e| e.from)
+                    .collect();
+                let mut parent_outputs = HashMap::new();
+                for parent_id in incoming {
+                    if let Some(out) = outputs.get(&parent_id) {
+                        parent_outputs.insert(parent_id, out.clone());
+                    }
+                }
+                let ctx = NodeExecContext {
+                    parent_outputs,
+                    graph_outputs: outputs.clone(),
+                };
+
                 let executor_ref = executor;
                 handles.push(async move {
-                    let result = executor_ref.execute_node(&node).await;
+                    let result = executor_ref.execute_node(&node, &ctx).await;
                     (node.id, result)
                 });
             }
@@ -202,7 +220,7 @@ mod tests {
 
     #[async_trait]
     impl Executor for MockExecutor {
-        async fn execute_node(&self, _node: &ExecutionNode) -> NodeExecutionResult {
+        async fn execute_node(&self, _node: &ExecutionNode, _ctx: &NodeExecContext) -> NodeExecutionResult {
             NodeExecutionResult {
                 state: NodeState::Succeeded,
                 usage: Some(Usage {
@@ -304,7 +322,7 @@ mod tests {
 
         #[async_trait]
         impl Executor for FailingExecutor {
-            async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult {
+            async fn execute_node(&self, node: &ExecutionNode, _ctx: &NodeExecContext) -> NodeExecutionResult {
                 if node.model == "fail" {
                     NodeExecutionResult {
                         state: NodeState::Failed("provider error".into()),
@@ -368,5 +386,75 @@ mod tests {
         let scheduler = DefaultScheduler::new();
         let outcome = scheduler.run(graph, &FailingExecutor).await.unwrap();
         assert!(!outcome.success);
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_passes_parent_context() {
+        use std::sync::Mutex;
+        static CAPTURED: Mutex<Option<(uuid::Uuid, serde_json::Value)>> = Mutex::new(None);
+
+        struct ContextCapturingExecutor;
+        #[async_trait]
+        impl Executor for ContextCapturingExecutor {
+            async fn execute_node(&self, node: &ExecutionNode, ctx: &NodeExecContext) -> NodeExecutionResult {
+                if node.model == "child" {
+                    let parent = ctx.parent_outputs.iter().next().map(|(k, v)| (*k, v.clone()));
+                    *CAPTURED.lock().unwrap() = parent;
+                }
+                NodeExecutionResult {
+                    state: NodeState::Succeeded,
+                    usage: None,
+                    latency_ms: 0,
+                    output: Some(serde_json::json!({"child": "done"})),
+                }
+            }
+        }
+
+        let n1 = uuid::Uuid::new_v4();
+        let n2 = uuid::Uuid::new_v4();
+        let graph = Arc::new(ExecutionGraph {
+            graph_id: uuid::Uuid::new_v4(),
+            nodes: vec![
+                ExecutionNode {
+                    id: n1,
+                    kind: ExecutionNodeKind::LLMGenerate,
+                    strategy: StrategyKind::Single,
+                    model: "parent".into(),
+                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    fallback: None,
+                    config: HashMap::new(),
+                    subgraph: None,
+                },
+                ExecutionNode {
+                    id: n2,
+                    kind: ExecutionNodeKind::LLMGenerate,
+                    strategy: StrategyKind::Single,
+                    model: "child".into(),
+                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    fallback: None,
+                    config: HashMap::new(),
+                    subgraph: None,
+                },
+            ],
+            edges: vec![ExecutionEdge { from: n1, to: n2, condition: None }],
+            metadata: GraphMetadata {
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+                max_depth: 2,
+                node_count: 2,
+            },
+            total_tokens: 0,
+            total_cost: 0,
+            primitive_graph_hash: 0,
+        });
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler.run(graph, &ContextCapturingExecutor).await.unwrap();
+        assert!(outcome.success);
+        let captured = CAPTURED.lock().unwrap().take();
+        assert!(captured.is_some(), "child node must receive parent context");
+        let (parent_id, parent_output) = captured.unwrap();
+        assert_eq!(parent_id, n1, "parent output must be from n1");
+        assert_eq!(parent_output["child"], "done", "parent sees child output in graph_outputs");
     }
 }

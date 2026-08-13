@@ -226,6 +226,16 @@ pub struct NodeExecutionResult {
     pub output: Option<serde_json::Value>,
 }
 
+/// Context passed to an executor for a single node execution.
+///
+/// `parent_outputs` maps predecessor node IDs to their outputs (immediate
+/// dependencies only). `graph_outputs` contains all outputs produced so far.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NodeExecContext {
+    pub parent_outputs: HashMap<uuid::Uuid, serde_json::Value>,
+    pub graph_outputs: HashMap<uuid::Uuid, serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionRecord {
     pub record_id: uuid::Uuid,

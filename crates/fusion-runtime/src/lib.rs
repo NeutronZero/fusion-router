@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use fusion_scheduler::{DefaultScheduler, Executor, ExecutionOutcome};
-use fusion_types::{ExecutionGraph, ExecutionNode, NodeExecutionResult, NodeState, Usage};
+use fusion_types::{ExecutionGraph, ExecutionNode, NodeExecContext, NodeExecutionResult, NodeState, Usage};
 use std::sync::Arc;
 
 /// Chat completion request sent to a provider.
@@ -75,7 +75,7 @@ struct ProviderExecutor {
 
 #[async_trait]
 impl Executor for ProviderExecutor {
-    async fn execute_node(&self, node: &ExecutionNode) -> NodeExecutionResult {
+    async fn execute_node(&self, node: &ExecutionNode, ctx: &NodeExecContext) -> NodeExecutionResult {
         let request = ChatRequest {
             model: node.model.clone(),
             messages: vec![ChatMessage {
