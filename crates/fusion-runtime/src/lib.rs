@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use fusion_scheduler::{DefaultScheduler, Executor, ExecutionOutcome};
 use fusion_types::{
     ExecutionGraph, ExecutionNode, ExecutionNodeKind, NodeExecContext, NodeExecutionResult,
-    NodeState, StrategyKind, Usage,
+    NodeState, StrategyKind, ToolCall, Usage,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -32,11 +32,16 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+/// A tool call emitted by a provider. Reuses `fusion_types::ToolCall`.
+
 /// Response from a chat provider.
 #[derive(Debug, Clone)]
 pub struct ChatResponse {
     pub content: String,
     pub usage: Option<Usage>,
+    /// Provider-native tool calls. Executed by the runtime ONLY when they are
+    /// allowlisted (Law 7 / ADR-037: fail closed by default).
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// Trait for LLM chat providers. Implementors dispatch requests to actual
@@ -71,6 +76,7 @@ impl ChatProvider for MockProvider {
                 completion_tokens: 25,
                 total_tokens: 75,
             }),
+            tool_calls: vec![],
         })
     }
 }
@@ -105,7 +111,51 @@ impl ChatProvider for SpyProvider {
                 completion_tokens: 25,
                 total_tokens: 75,
             }),
+            tool_calls: vec![],
         })
+    }
+}
+
+/// Provider-backed executor that satisfies the scheduler's `Executor` trait.
+/// Routes each node's model string to the chat provider.
+// ---------------------------------------------------------------------------
+// Tools (Phase 4.5) — fail-closed by default
+// ---------------------------------------------------------------------------
+
+/// A tool executable by the runtime. Tools are only invoked when the node's
+/// `tool_allowlist` config names them AND auto-execution is enabled.
+#[async_trait]
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    async fn execute(&self, arguments: serde_json::Value) -> Result<serde_json::Value, String>;
+}
+
+/// In-memory tool registry.
+#[derive(Default, Clone)]
+pub struct ToolRegistry {
+    tools: std::collections::HashMap<String, Arc<dyn Tool>>,
+}
+
+impl ToolRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register(&mut self, tool: Arc<dyn Tool>) {
+        self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools.get(name).cloned()
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.tools.keys().cloned().collect()
     }
 }
 
@@ -113,11 +163,27 @@ impl ChatProvider for SpyProvider {
 /// Routes each node's model string to the chat provider.
 pub struct ProviderExecutor {
     provider: Arc<dyn ChatProvider>,
+    tools: ToolRegistry,
+    allow_auto_exec: bool,
 }
 
 impl ProviderExecutor {
     pub fn new(provider: Arc<dyn ChatProvider>) -> Self {
-        Self { provider }
+        Self {
+            provider,
+            tools: ToolRegistry::new(),
+            allow_auto_exec: false,
+        }
+    }
+
+    pub fn with_tools(mut self, tools: ToolRegistry) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    pub fn with_allow_auto_exec(mut self, allow: bool) -> Self {
+        self.allow_auto_exec = allow;
+        self
     }
 
     /// Builds a `ChatRequest` from node config and execution context.
@@ -306,6 +372,82 @@ impl ProviderExecutor {
             })),
         }
     }
+
+    /// Single chat round-trip with optional tool execution loop.
+    ///
+    /// If the provider returns tool calls, each call is executed ONLY when
+    /// auto-execution is enabled AND the tool is named in the node's
+    /// `tool_allowlist` config AND present in the registry (fail closed).
+    /// Tool results are appended as a `tool` message and the loop repeats
+    /// until the provider returns plain content or `max_tool_iterations` is
+    /// reached.
+    async fn roundtrip(&self, node: &ExecutionNode, request: ChatRequest) -> Result<ChatResponse, String> {
+        let max_iterations = node
+            .config
+            .get("max_tool_iterations")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(8) as usize;
+        let mut request = request;
+
+        for iteration in 0..=max_iterations {
+            let response = self.provider.chat_completion(&request).await?;
+            if response.tool_calls.is_empty() {
+                return Ok(response);
+            }
+
+            if iteration == max_iterations {
+                return Err(format!(
+                    "exceeded max_tool_iterations ({max_iterations}) for node {}",
+                    node.id
+                ));
+            }
+            if !self.allow_auto_exec {
+                return Err(format!(
+                    "provider requested tool call(s) but auto-exec is disabled (node {})",
+                    node.id
+                ));
+            }
+
+            let allowlist: Vec<String> = node
+                .config
+                .get("tool_allowlist")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut results: Vec<serde_json::Value> = Vec::new();
+            for call in &response.tool_calls {
+                if !allowlist.contains(&call.name) {
+                    return Err(format!(
+                        "tool '{}' not allowed for node {} (fail closed: allowlist)",
+                        call.name, node.id
+                    ));
+                }
+                let tool = self.tools.get(&call.name).ok_or_else(|| {
+                    format!("tool '{}' not registered (node {})", call.name, node.id)
+                })?;
+                let outcome = tool.execute(call.arguments.clone()).await;
+                results.push(serde_json::json!({
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "error": outcome.is_err(),
+                    "result": outcome.unwrap_or_else(|e| serde_json::json!({ "error": e })),
+                }));
+            }
+
+            request.messages.push(ChatMessage {
+                role: "tool".into(),
+                content: serde_json::to_string(&results)
+                    .map_err(|e| format!("failed to encode tool results: {e}"))?,
+            });
+        }
+
+        Err(format!("tool loop terminated unexpectedly for node {}", node.id))
+    }
 }
 
 #[async_trait]
@@ -351,7 +493,7 @@ impl Executor for ProviderExecutor {
             attempts -= 1;
 
             let request = self.build_request(node, ctx);
-            match self.provider.chat_completion(&request).await {
+            match self.roundtrip(node, request).await {
                 Ok(response) => {
                     return NodeExecutionResult {
                         state: NodeState::Succeeded,
@@ -378,7 +520,7 @@ impl Executor for ProviderExecutor {
         if let Some(fallback) = &node.fallback {
             let mut fallback_request = self.build_request(node, ctx);
             fallback_request.model = fallback.model.clone();
-            match self.provider.chat_completion(&fallback_request).await {
+            match self.roundtrip(node, fallback_request).await {
                 Ok(response) => {
                     return NodeExecutionResult {
                         state: NodeState::Succeeded,
@@ -410,6 +552,8 @@ impl Executor for ProviderExecutor {
 pub struct RuntimeEngine {
     scheduler: DefaultScheduler,
     provider: Arc<dyn ChatProvider>,
+    tools: ToolRegistry,
+    allow_auto_exec: bool,
 }
 
 impl RuntimeEngine {
@@ -417,6 +561,8 @@ impl RuntimeEngine {
         Self {
             scheduler: DefaultScheduler::new(),
             provider,
+            tools: ToolRegistry::new(),
+            allow_auto_exec: false,
         }
     }
 
@@ -424,13 +570,29 @@ impl RuntimeEngine {
         Self {
             scheduler: DefaultScheduler::with_max_concurrent(max_concurrent),
             provider,
+            tools: ToolRegistry::new(),
+            allow_auto_exec: false,
         }
+    }
+
+    /// Registers a tool for potential execution by LLM nodes.
+    pub fn with_tool(mut self, tool: Arc<dyn Tool>) -> Self {
+        self.tools.register(tool);
+        self
+    }
+
+    /// Enables auto-execution of allowlisted tool calls (default: false).
+    pub fn with_allow_auto_exec(mut self, allow: bool) -> Self {
+        self.allow_auto_exec = allow;
+        self
     }
 
     /// Execute a full execution graph to completion.
     pub async fn run(&self, graph: Arc<ExecutionGraph>) -> Result<ExecutionOutcome, String> {
         let executor = ProviderExecutor {
             provider: self.provider.clone(),
+            tools: self.tools.clone(),
+            allow_auto_exec: self.allow_auto_exec,
         };
         self.scheduler.run(graph, &executor).await.map_err(|e| format!("{:?}", e))
     }
@@ -516,9 +678,7 @@ mod tests {
 
     #[test]
     fn test_build_request_messages_from_config() {
-        let executor = ProviderExecutor {
-            provider: Arc::new(MockProvider::default_response()),
-        };
+        let executor = ProviderExecutor::new(Arc::new(MockProvider::default_response()));
         let node = ExecutionNode {
             id: uuid::Uuid::new_v4(),
             kind: ExecutionNodeKind::LLMGenerate,
@@ -545,9 +705,7 @@ mod tests {
 
     #[test]
     fn test_build_request_judge_gets_system_prompt_and_parent_context() {
-        let executor = ProviderExecutor {
-            provider: Arc::new(MockProvider::default_response()),
-        };
+        let executor = ProviderExecutor::new(Arc::new(MockProvider::default_response()));
         let parent_id = uuid::Uuid::new_v4();
         let node = ExecutionNode {
             id: uuid::Uuid::new_v4(),
@@ -575,9 +733,7 @@ mod tests {
 
     #[test]
     fn test_build_request_system_prompt_inserted_once() {
-        let executor = ProviderExecutor {
-            provider: Arc::new(MockProvider::default_response()),
-        };
+        let executor = ProviderExecutor::new(Arc::new(MockProvider::default_response()));
         // Config already has a system message: no injection
         let node = ExecutionNode {
             id: uuid::Uuid::new_v4(),
@@ -639,6 +795,7 @@ mod tests {
                         completion_tokens: 5,
                         total_tokens: 15,
                     }),
+                    tool_calls: vec![],
                 })
             }
         }
@@ -683,7 +840,7 @@ mod tests {
     #[tokio::test]
     async fn test_retry_succeeds_on_second_attempt() {
         let provider = Arc::new(FlakyProvider::new(1));
-        let executor = ProviderExecutor { provider: provider.clone() };
+        let executor = ProviderExecutor::new(provider.clone());
         let node = make_llm_node("primary-model", 2, None);
         let result = executor.execute_node(&node, &NodeExecContext::default()).await;
         assert!(matches!(result.state, NodeState::Succeeded), "retry should succeed");
@@ -693,7 +850,7 @@ mod tests {
     #[tokio::test]
     async fn test_retries_exhausted_then_fallback_model_used() {
         let provider = Arc::new(FailingProvider::new());
-        let executor = ProviderExecutor { provider: provider.clone() };
+        let executor = ProviderExecutor::new(provider.clone());
         let node = make_llm_node("primary-model", 1, Some("fallback-model"));
         let result = executor.execute_node(&node, &NodeExecContext::default()).await;
         // FailingProvider always fails, so node itself fails — but we must
@@ -708,7 +865,7 @@ mod tests {
     #[tokio::test]
     async fn test_no_fallback_fails_after_retries() {
         let provider = Arc::new(FailingProvider::new());
-        let executor = ProviderExecutor { provider: provider.clone() };
+        let executor = ProviderExecutor::new(provider.clone());
         let node = make_llm_node("primary-model", 1, None);
         let result = executor.execute_node(&node, &NodeExecContext::default()).await;
         assert!(matches!(result.state, NodeState::Failed(_)));
@@ -728,6 +885,7 @@ mod tests {
                     Ok(ChatResponse {
                         content: "fallback answer".into(),
                         usage: Some(Usage { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }),
+                        tool_calls: vec![],
                     })
                 } else {
                     Err("primary down".into())
@@ -736,7 +894,7 @@ mod tests {
         }
 
         let provider = Arc::new(FallbackSucceedsProvider { attempts: std::sync::Mutex::new(Vec::new()) });
-        let executor = ProviderExecutor { provider: provider.clone() };
+        let executor = ProviderExecutor::new(provider.clone());
         let node = make_llm_node("primary-model", 0, Some("fallback-model"));
         let result = executor.execute_node(&node, &NodeExecContext::default()).await;
         assert!(matches!(result.state, NodeState::Succeeded), "fallback must save the node");
@@ -811,7 +969,7 @@ mod tests {
     #[tokio::test]
     async fn test_subgraph_executes_members_and_judge() {
         let (node, spy) = make_consensus_subgraph();
-        let executor = ProviderExecutor { provider: spy.clone() };
+        let executor = ProviderExecutor::new(spy.clone());
         let result = executor.execute_node(&node, &NodeExecContext::default()).await;
         assert!(matches!(result.state, NodeState::Succeeded), "subgraph must succeed");
         let output = result.output.expect("output");
@@ -840,7 +998,7 @@ mod tests {
         let spy = Arc::new(FailingProvider::new());
         let (mut node, _) = make_consensus_subgraph();
         node.subgraph.as_mut().unwrap().nodes[0].retry_policy = RetryPolicy { max_retries: 0, backoff_ms: 0 };
-        let executor = ProviderExecutor { provider: spy };
+        let executor = ProviderExecutor::new(spy);
         let result = executor.execute_node(&node, &NodeExecContext::default()).await;
         assert!(matches!(result.state, NodeState::Failed(_)), "subgraph member failure must propagate");
     }
@@ -852,7 +1010,7 @@ mod tests {
     #[tokio::test]
     async fn test_gate_node_does_not_call_provider() {
         let spy = Arc::new(SpyProvider::new());
-        let executor = ProviderExecutor { provider: spy.clone() };
+        let executor = ProviderExecutor::new(spy.clone());
         let node = ExecutionNode {
             id: uuid::Uuid::new_v4(),
             kind: ExecutionNodeKind::Gate,
@@ -867,4 +1025,203 @@ mod tests {
         assert!(matches!(result.state, NodeState::Succeeded), "gate must succeed");
         assert!(spy.last_request().is_none(), "gate must NOT call the LLM provider");
     }
+
+    // -----------------------------------------------------------------------
+    // Phase 4.5: tools — fail closed by default
+    // -----------------------------------------------------------------------
+
+    /// Provider that returns a tool call on its first invocation, then a plain
+    /// answer on subsequent invocations.
+    struct ToolingProvider {
+        calls: std::sync::Mutex<usize>,
+    }
+
+    impl ToolingProvider {
+        fn new() -> Self {
+            Self { calls: std::sync::Mutex::new(0) }
+        }
+
+        fn call_count(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    #[async_trait]
+    impl ChatProvider for ToolingProvider {
+        async fn chat_completion(&self, request: &ChatRequest) -> Result<ChatResponse, String> {
+            let mut calls = self.calls.lock().unwrap();
+            *calls += 1;
+            if *calls == 1 {
+                return Ok(ChatResponse {
+                    content: String::new(),
+                    usage: Some(Usage {
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                        total_tokens: 15,
+                    }),
+                    tool_calls: vec![ToolCall {
+                        id: "call_1".into(),
+                        name: "echo".into(),
+                        arguments: serde_json::json!({ "text": "hi" }),
+                    }],
+                });
+            }
+            Ok(ChatResponse {
+                content: format!("final answer (tool shim messages: {})", request.messages.len()),
+                usage: Some(Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                }),
+                tool_calls: vec![],
+            })
+        }
+    }
+
+    struct EchoTool;
+
+    #[async_trait]
+    impl Tool for EchoTool {
+        fn name(&self) -> &str {
+            "echo"
+        }
+
+        fn description(&self) -> &str {
+            "Echoes back its text argument."
+        }
+
+        async fn execute(&self, arguments: serde_json::Value) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({ "echoed": arguments.get("text") }))
+        }
+    }
+
+    fn tool_node(config: std::collections::HashMap<String, serde_json::Value>) -> ExecutionNode {
+        ExecutionNode {
+            id: uuid::Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMGenerate,
+            strategy: StrategyKind::Single,
+            model: "tool-model".into(),
+            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            fallback: None,
+            config,
+            subgraph: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_calls_fail_closed_when_auto_exec_disabled() {
+        let executor = ProviderExecutor {
+            provider: Arc::new(ToolingProvider::new()),
+            tools: ToolRegistry::default(),
+            allow_auto_exec: false,
+        };
+        let node = tool_node(HashMap::new());
+        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        assert!(
+            matches!(&result.state, NodeState::Failed(msg) if msg.contains("auto-exec")),
+            "tool calls with auto-exec disabled must fail closed, got {:?}",
+            result.state
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tool_not_in_allowlist_fails_closed() {
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(EchoTool));
+        let executor = ProviderExecutor {
+            provider: Arc::new(ToolingProvider::new()),
+            tools,
+            allow_auto_exec: true,
+        };
+        let node = tool_node(HashMap::new());
+        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        assert!(
+            matches!(&result.state, NodeState::Failed(msg) if msg.contains("allowlist")),
+            "tool outside allowlist must fail closed, got {:?}",
+            result.state
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tool_not_registered_fails_closed() {
+        let executor = ProviderExecutor {
+            provider: Arc::new(ToolingProvider::new()),
+            tools: ToolRegistry::default(),
+            allow_auto_exec: true,
+        };
+        let node = tool_node(HashMap::from([(
+            "tool_allowlist".to_string(),
+            serde_json::json!(["echo"]),
+        )]));
+        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        assert!(
+            matches!(&result.state, NodeState::Failed(msg) if msg.contains("not registered")),
+            "unregistered tool must fail closed, got {:?}",
+            result.state
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tool_executes_when_allowlisted_and_registered() {
+        let provider = Arc::new(ToolingProvider::new());
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(EchoTool));
+        let executor = ProviderExecutor {
+            provider: provider.clone(),
+            tools,
+            allow_auto_exec: true,
+        };
+        let node = tool_node(HashMap::from([(
+            "tool_allowlist".to_string(),
+            serde_json::json!(["echo"]),
+        )]));
+        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        assert!(matches!(result.state, NodeState::Succeeded), "expected success, got {:?}", result.state);
+        assert_eq!(provider.call_count(), 2, "provider must be called twice (tool + final)");
+        let output = result.output.expect("output");
+        assert!(
+            output["content"].as_str().unwrap().contains("tool shim messages: 1"),
+            "second round-trip must include one tool-results message, got {:?}",
+            output
+        );
+    }
+
+    #[tokio::test]
+    async fn test_max_tool_iterations_guard() {
+        struct InfiniteToolProvider;
+
+        #[async_trait]
+        impl ChatProvider for InfiniteToolProvider {
+            async fn chat_completion(&self, _request: &ChatRequest) -> Result<ChatResponse, String> {
+                Ok(ChatResponse {
+                    content: String::new(),
+                    usage: None,
+                    tool_calls: vec![ToolCall {
+                        id: "call_1".into(),
+                        name: "echo".into(),
+                        arguments: serde_json::json!({}),
+                    }],
+                })
+            }
+        }
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(EchoTool));
+        let executor = ProviderExecutor {
+            provider: Arc::new(InfiniteToolProvider),
+            tools,
+            allow_auto_exec: true,
+        };
+        let node = tool_node(HashMap::from([(
+            "tool_allowlist".to_string(),
+            serde_json::json!(["echo"]),
+        )]));
+        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        assert!(
+            matches!(&result.state, NodeState::Failed(msg) if msg.contains("max_tool_iterations")),
+            "infinite tool loop must be capped, got {:?}",
+            result.state
+        );
+    }
 }
+
