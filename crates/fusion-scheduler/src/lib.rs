@@ -7,9 +7,13 @@
 //! `src/scheduler/default.rs::run_inner` semantic contract —
 //! cancellation (loop-head check + per-node `select!`), `Conditional` edge
 //! activation from node output, `Loop` continue/exit (`"exit"`-conditioned
-//! edges), loop-back iteration caps (`max_iterations` on the loop node), and
-//! per-token cost accounting. Retry/fallback stay in the executor
-//! (`fusion_runtime::ProviderExecutor`), not the scheduler.
+//! edges), loop-back iteration caps (`max_iterations` on the loop node),
+//! per-token cost accounting, and optional `BudgetEnvelope` enforcement
+//! (iteration cap at the loop head; cost/token checks after each node's
+//! usage — a breach skips outstanding nodes and completes the run as
+//! unsuccessful). Retry/fallback stay in the executor
+//! (`fusion_runtime::ProviderExecutor`; the src boundary adapter), not the
+//! scheduler.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,7 +67,20 @@ impl DefaultScheduler {
         graph: Arc<ExecutionGraph>,
         executor: &dyn Executor,
     ) -> Result<ExecutionOutcome, PlatformError> {
-        self.run_inner(graph, executor, None).await
+        self.run_inner(graph, executor, None, None).await
+    }
+
+    /// Execute a graph under a per-request budget envelope.
+    /// `max_iterations` bounds outer loop iterations (guards runaway graphs);
+    /// cost/token limits are checked after each node's usage, skipping all
+    /// outstanding nodes and completing unsuccessfully on breach.
+    pub async fn run_with_budget(
+        &self,
+        graph: Arc<ExecutionGraph>,
+        executor: &dyn Executor,
+        envelope: &BudgetEnvelope,
+    ) -> Result<ExecutionOutcome, PlatformError> {
+        self.run_inner(graph, executor, None, Some(envelope)).await
     }
 
     /// Execute a graph with client cancellation. The loop checks the token
@@ -76,7 +93,19 @@ impl DefaultScheduler {
         executor: &dyn Executor,
         cancellation_token: &CancellationToken,
     ) -> Result<ExecutionOutcome, PlatformError> {
-        self.run_inner(graph, executor, Some(cancellation_token)).await
+        self.run_inner(graph, executor, Some(cancellation_token), None).await
+    }
+
+    /// Execute a graph with client cancellation AND a per-request budget
+    /// envelope (see `run_with_budget` for the enforcement contract).
+    pub async fn run_with_cancellation_and_budget(
+        &self,
+        graph: Arc<ExecutionGraph>,
+        executor: &dyn Executor,
+        cancellation_token: &CancellationToken,
+        envelope: &BudgetEnvelope,
+    ) -> Result<ExecutionOutcome, PlatformError> {
+        self.run_inner(graph, executor, Some(cancellation_token), Some(envelope)).await
     }
 
     async fn run_inner(
@@ -84,6 +113,7 @@ impl DefaultScheduler {
         graph: Arc<ExecutionGraph>,
         executor: &dyn Executor,
         cancel: Option<&CancellationToken>,
+        envelope: Option<&BudgetEnvelope>,
     ) -> Result<ExecutionOutcome, PlatformError> {
         let mut queue = WorkQueue::new(graph.clone());
         let mut node_states: HashMap<uuid::Uuid, NodeState> = HashMap::new();
@@ -111,6 +141,15 @@ impl DefaultScheduler {
                         message: "Request cancelled by client".into(),
                         recovery_suggestion: "Retry the request with a fresh cancellation token".into(),
                     });
+                }
+            }
+
+            // Enforce per-request budget iteration limit (same position as the
+            // monolith run_inner: loop head, after the cancellation check).
+            if let Some(ref envelope) = envelope {
+                if envelope.increment_iteration().is_err() {
+                    tracing::info!("Budget iteration limit reached; stopping scheduler loop");
+                    break;
                 }
             }
 
@@ -185,18 +224,46 @@ impl DefaultScheduler {
             // Wait for all nodes in this batch
             for handle in handles {
                 let (node_id, result) = handle.await;
+
+                // Cost/token accounting runs for ANY result carrying usage
+                // (including failed provider calls), matching the monolith —
+                // then the budget envelope is checked after accumulation.
+                if let Some(ref usage) = result.usage {
+                    total_tokens += usage.total_tokens as u64;
+                    total_cost += usage.prompt_tokens as f64 * COST_PER_INPUT_TOKEN
+                        + usage.completion_tokens as f64 * COST_PER_OUTPUT_TOKEN;
+
+                    if let Some(ref envelope) = envelope {
+                        let cost_millicosts = (usage.prompt_tokens as f64 * COST_PER_INPUT_TOKEN
+                            + usage.completion_tokens as f64 * COST_PER_OUTPUT_TOKEN) * 1000.0;
+                        if let Err(ref e) = envelope.record_and_check(cost_millicosts as u64, usage.total_tokens as u64) {
+                            tracing::info!(node_id = ?node_id, error = %e, "Budget envelope breached; stopping further execution");
+                            for node in &graph.nodes {
+                                if !node_states.contains_key(&node.id)
+                                    || matches!(node_states.get(&node.id), Some(NodeState::Pending))
+                                {
+                                    node_states.insert(node.id, NodeState::Skipped);
+                                }
+                            }
+                            let total_latency_ms = start.elapsed().as_millis() as u64;
+                            return Ok(ExecutionOutcome {
+                                success: false,
+                                outputs,
+                                node_states,
+                                total_latency_ms,
+                                total_cost,
+                                total_tokens,
+                            });
+                        }
+                    }
+                }
+
                 match result.state {
                     NodeState::Succeeded => {
                         tracing::info!(node_id = ?node_id, latency_ms = result.latency_ms, "Node succeeded");
                         node_states.insert(node_id, NodeState::Succeeded);
                         let output_val = result.output.unwrap_or(serde_json::Value::Null);
                         outputs.insert(node_id, output_val.clone());
-
-                        if let Some(ref usage) = result.usage {
-                            total_tokens += usage.total_tokens as u64;
-                            total_cost += usage.prompt_tokens as f64 * COST_PER_INPUT_TOKEN
-                                + usage.completion_tokens as f64 * COST_PER_OUTPUT_TOKEN;
-                        }
 
                         let node_kind = queue.graph().nodes.get(node_index[&node_id]).map(|n| n.kind.clone());
 
@@ -936,5 +1003,63 @@ mod tests {
         let expected = 1000.0 * COST_PER_INPUT_TOKEN + 500.0 * COST_PER_OUTPUT_TOKEN;
         assert!((outcome.total_cost - expected).abs() < 1e-12, "cost must use per-token rates: {} vs {}", outcome.total_cost, expected);
         assert_eq!(outcome.total_tokens, 1500);
+    }
+
+    #[tokio::test]
+    async fn test_budget_iteration_cap_stops_run() {
+        let node = uuid::Uuid::new_v4();
+        let graph = RecordingExecutor::graph_of(
+            vec![RecordingExecutor::node_node(node, ExecutionNodeKind::LLMGenerate, "n")],
+            vec![],
+        );
+        let env = BudgetEnvelope::new(1000, 1000, 0);
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler.run_with_budget(graph, &MockExecutor, &env).await.unwrap();
+
+        // Monolith parity: iteration cap breached at the first loop head,
+        // before any node runs; the graph completes unsuccessfully.
+        assert!(!outcome.success);
+        assert!(!outcome.node_states.contains_key(&node), "node must never run under a zero-iteration envelope");
+    }
+
+    #[tokio::test]
+    async fn test_budget_breach_skips_pending_nodes_and_counts_usage() {
+        struct UsageExecutor;
+        #[async_trait]
+        impl Executor for UsageExecutor {
+            async fn execute_node(&self, _node: &ExecutionNode, _ctx: &NodeExecContext) -> NodeExecutionResult {
+                NodeExecutionResult {
+                    state: NodeState::Succeeded,
+                    usage: Some(Usage {
+                        prompt_tokens: 10,
+                        completion_tokens: 10,
+                        total_tokens: 20,
+                    }),
+                    latency_ms: 1,
+                    output: Some(serde_json::json!("ok")),
+                }
+            }
+        }
+
+        let n1 = uuid::Uuid::new_v4();
+        let n2 = uuid::Uuid::new_v4();
+        let graph = RecordingExecutor::graph_of(
+            vec![
+                RecordingExecutor::node_node(n1, ExecutionNodeKind::LLMGenerate, "n1"),
+                RecordingExecutor::node_node(n2, ExecutionNodeKind::LLMGenerate, "n2"),
+            ],
+            vec![ExecutionEdge { from: n1, to: n2, condition: None }],
+        );
+        // Token limit 5 < 20 consumed per node: breach on the first usage.
+        let env = BudgetEnvelope::new(1000, 5, 10);
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler.run_with_budget(graph, &UsageExecutor, &env).await.unwrap();
+
+        assert!(!outcome.success, "breach must complete the run unsuccessfully");
+        assert_eq!(outcome.total_tokens, 20, "usage from the succeeded node must still be counted");
+        assert_eq!(outcome.total_cost, 10.0 * COST_PER_INPUT_TOKEN + 10.0 * COST_PER_OUTPUT_TOKEN);
+        assert!(matches!(outcome.node_states.get(&n2), Some(NodeState::Skipped)), "outstanding node must be skipped");
     }
 }

@@ -1,5 +1,5 @@
 use fusion_router::providers::circuit_breaker::{CircuitBreaker, CircuitState};
-use fusion_router::resource::budget::BudgetExceededError;
+use fusion_types::BudgetExceededError;
 use fusion_router::resource::{BudgetEnvelope, DefaultResourceManager, ResourceGuard, ResourceManager};
 use fusion_router::types::{ExecutionGraph, GraphMetadata, Quota};
 use std::sync::Arc;

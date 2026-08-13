@@ -1,106 +1,13 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+//! Per-request budget envelope (canonical definition lives in `fusion_types`).
+//! Re-exported here so existing callers and the `ExecutionInstance` field keep
+//! their `crate::resource::BudgetEnvelope` path (Phase 6.3b lift).
 
-#[derive(Debug)]
-pub struct BudgetEnvelope {
-    pub max_cost_millicosts: u64,
-    pub max_tokens: u64,
-    pub max_iterations: u32,
-    spent_cost_millicosts: Arc<AtomicU64>,
-    spent_tokens: Arc<AtomicU64>,
-    current_iterations: Arc<AtomicU64>,
-}
-
-impl BudgetEnvelope {
-    pub fn new(max_cost_millicosts: u64, max_tokens: u64, max_iterations: u32) -> Self {
-        Self {
-            max_cost_millicosts,
-            max_tokens,
-            max_iterations,
-            spent_cost_millicosts: Arc::new(AtomicU64::new(0)),
-            spent_tokens: Arc::new(AtomicU64::new(0)),
-            current_iterations: Arc::new(AtomicU64::new(0)),
-        }
-    }
-
-    pub fn record_and_check(&self, cost_millicosts: u64, tokens: u64) -> Result<(), BudgetExceededError> {
-        let prev_cost = self.spent_cost_millicosts.fetch_add(cost_millicosts, Ordering::SeqCst);
-        let new_cost = prev_cost + cost_millicosts;
-        let prev_tokens = self.spent_tokens.fetch_add(tokens, Ordering::SeqCst);
-        let new_tokens = prev_tokens + tokens;
-
-        if new_cost > self.max_cost_millicosts {
-            return Err(BudgetExceededError::Cost {
-                spent: new_cost,
-                max: self.max_cost_millicosts,
-            });
-        }
-        if new_tokens > self.max_tokens {
-            return Err(BudgetExceededError::Tokens {
-                spent: new_tokens,
-                max: self.max_tokens,
-            });
-        }
-        Ok(())
-    }
-
-    pub fn increment_iteration(&self) -> Result<u64, BudgetExceededError> {
-        let iter = self.current_iterations.fetch_add(1, Ordering::SeqCst) + 1;
-        if iter > self.max_iterations as u64 {
-            return Err(BudgetExceededError::Iterations {
-                current: iter,
-                max: self.max_iterations,
-            });
-        }
-        Ok(iter)
-    }
-
-    pub fn spent_cost_millicosts(&self) -> u64 {
-        self.spent_cost_millicosts.load(Ordering::Acquire)
-    }
-
-    pub fn spent_tokens(&self) -> u64 {
-        self.spent_tokens.load(Ordering::Acquire)
-    }
-
-    pub fn current_iterations(&self) -> u64 {
-        self.current_iterations.load(Ordering::Acquire)
-    }
-}
-
-impl Clone for BudgetEnvelope {
-    fn clone(&self) -> Self {
-        Self {
-            max_cost_millicosts: self.max_cost_millicosts,
-            max_tokens: self.max_tokens,
-            max_iterations: self.max_iterations,
-            spent_cost_millicosts: self.spent_cost_millicosts.clone(),
-            spent_tokens: self.spent_tokens.clone(),
-            current_iterations: self.current_iterations.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum BudgetExceededError {
-    Cost { spent: u64, max: u64 },
-    Tokens { spent: u64, max: u64 },
-    Iterations { current: u64, max: u32 },
-}
-
-impl std::fmt::Display for BudgetExceededError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Cost { spent, max } => write!(f, "Cost budget exceeded: {} millicosts spent, {} max", spent, max),
-            Self::Tokens { spent, max } => write!(f, "Token budget exceeded: {} tokens spent, {} max", spent, max),
-            Self::Iterations { current, max } => write!(f, "Iteration budget exceeded: {} iterations, {} max", current, max),
-        }
-    }
-}
+pub use fusion_types::BudgetEnvelope;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fusion_types::BudgetExceededError;
 
     #[test]
     fn test_record_within_budget() {

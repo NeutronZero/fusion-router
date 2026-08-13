@@ -1,20 +1,26 @@
+//! Production scheduler entry point (Phase 6.3b flip).
+//!
+//! `DefaultScheduler` now delegates run execution to
+//! `fusion_scheduler::DefaultScheduler`. The src-side executor is adapted
+//! through `CratesExecutorAdapter`, which carries the two behaviors the
+//! monolith loop used to own (retry/fallback, terminal-output tracking).
+//! The budget envelope is enforced inside the crates loop
+//! (`run_with_budget` / `run_with_cancellation_and_budget`).
+//!
+//! `schedule` remains src-side: it just allocates an `ExecutionInstance`
+//! describing the graph; only running is delegated.
+
 use std::collections::HashMap;
-use std::time::Instant;
-use futures::stream::{self, StreamExt};
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, info_span, Instrument};
 use uuid::Uuid;
 
 use crate::executor::Executor;
-use crate::scheduler::work_queue::WorkQueue;
-use crate::transport::backoff::Backoff;
+use crate::scheduler::crates_adapter::CratesExecutorAdapter;
 use crate::types::{
-    ExecutionGraph, ExecutionInstance, NodeExecutionResult, ExecutionNodeKind, ExecutionResult, NodeState,
-    ReservationId, SchedulerError,
+    ExecutionGraph, ExecutionInstance, ExecutionResult, NodeState, ReservationId, SchedulerError,
 };
 
-const COST_PER_INPUT_TOKEN: f64 = 0.002 / 1000.0;
-const COST_PER_OUTPUT_TOKEN: f64 = 0.01 / 1000.0;
 const DEFAULT_MAX_CONCURRENT: usize = 16;
 
 pub struct DefaultScheduler {
@@ -66,7 +72,7 @@ impl crate::scheduler::Scheduler for DefaultScheduler {
         instance: &mut ExecutionInstance,
         executor: &dyn Executor,
     ) -> Result<ExecutionResult, SchedulerError> {
-        self.run_inner(instance, executor, None).await
+        self.run_crates(instance, executor, None).await
     }
 
     #[tracing::instrument(skip(self, instance, executor, cancellation_token), fields(graph_id = %instance.graph.graph_id))]
@@ -76,339 +82,70 @@ impl crate::scheduler::Scheduler for DefaultScheduler {
         executor: &dyn Executor,
         cancellation_token: &CancellationToken,
     ) -> Result<ExecutionResult, SchedulerError> {
-        self.run_inner(instance, executor, Some(cancellation_token)).await
+        self.run_crates(instance, executor, Some(cancellation_token)).await
     }
 }
 
 impl DefaultScheduler {
-    // Single authoritative execution loop.
-    // All scheduler entry points MUST delegate here.
-    async fn run_inner(
+    // Delegated execution: fusion_scheduler drives the DAG; this function
+    // maps the crates outcome back onto the src ExecutionInstance contract.
+    async fn run_crates(
         &self,
         instance: &mut ExecutionInstance,
         executor: &dyn Executor,
         cancel: Option<&CancellationToken>,
     ) -> Result<ExecutionResult, SchedulerError> {
-        let start = Instant::now();
-        let mut total_tokens: u64 = 0;
-        let mut total_cost: f64 = 0.0;
-        let n_nodes = instance.graph.nodes.len();
-        let mut retry_counts: HashMap<Uuid, u32> = HashMap::with_capacity(n_nodes);
-        let mut retry_backoffs: HashMap<Uuid, Backoff> = HashMap::with_capacity(n_nodes);
-        let mut loop_iterations: HashMap<Uuid, u32> = HashMap::with_capacity(n_nodes);
+        let (adapter, tracker) = CratesExecutorAdapter::new(executor);
+        let crates_scheduler = fusion_scheduler::DefaultScheduler::with_max_concurrent(self.max_concurrent);
+        let graph = Arc::clone(&instance.graph);
 
-        let mut queue = WorkQueue::new(std::sync::Arc::clone(&instance.graph));
-
-        // Frozen graph: node positions never change, so an id -> index map
-        // turns repeated linear scans into O(1) lookups.
-        let node_index: HashMap<Uuid, usize> = queue
-            .graph()
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.id, i))
-            .collect();
-
-        loop {
-            if let Some(cancellation_token) = cancel {
-                if cancellation_token.is_cancelled() {
-                    info!("Cancellation requested; aborting scheduler loop");
-                    return Err(SchedulerError::Internal(
-                        "Request cancelled by client".into(),
-                    ));
-                }
+        let outcome = match (cancel, instance.budget_envelope.as_ref()) {
+            (Some(token), Some(envelope)) => {
+                crates_scheduler
+                    .run_with_cancellation_and_budget(graph, &adapter, token, envelope)
+                    .await
             }
-
-            // Enforce per-request budget iteration limit
-            if let Some(ref envelope) = instance.budget_envelope {
-                if envelope.increment_iteration().is_err() {
-                    info!("Budget iteration limit reached; stopping scheduler loop");
-                    break;
-                }
-            }
-
-            let ready_ids: Vec<Uuid> = {
-                let ready = queue.get_ready(&instance.node_states);
-                if ready.is_empty() && queue.is_done(&instance.node_states) {
-                    break;
-                }
-                if ready.is_empty() {
-                    break;
-                }
-                ready.iter().map(|n| n.id).collect()
-            };
-
-            for &id in &ready_ids {
-                queue.mark_in_progress(id);
-                instance.node_states.insert(id, NodeState::Running);
-            }
-
-            let graph = std::sync::Arc::clone(&instance.graph);
-            let mut handles = Vec::new();
-
-            for &id in &ready_ids {
-                let node_idx = node_index[&id];
-                let node_id = id;
-                let node_kind = graph.nodes[node_idx].kind.clone();
-                let span = info_span!("exec_node", node_id = %node_id, instance_id = %instance.instance_id, kind = ?node_kind);
-                let cancel_token = cancel.cloned();
-                let graph = std::sync::Arc::clone(&graph);
-                handles.push(
-                    async move {
-                        let node = &graph.nodes[node_idx];
-                        if let Some(token) = cancel_token {
-                            tokio::select! {
-                                biased;
-                                _ = token.cancelled() => {
-                                    (node_id, NodeExecutionResult {
-                                        state: NodeState::Failed("Cancelled by client".into()),
-                                        usage: None,
-                                        latency_ms: 0,
-                                        output: None,
-                                    })
-                                }
-                                result = executor.execute_node(node) => {
-                                    (node_id, result)
-                                }
-                            }
-                        } else {
-                            let result = executor.execute_node(node).await;
-                            (node_id, result)
-                        }
-                    }
-                    .instrument(span),
-                );
-            }
-
-            let results: Vec<_> = stream::iter(handles)
-                .buffer_unordered(self.max_concurrent)
-                .collect()
-                .await;
-
-            for (node_id, exec_result) in results {
-                let latency = exec_result.latency_ms;
-                if let Some(ref usage) = exec_result.usage {
-                    total_tokens += usage.total_tokens as u64;
-                    total_cost += usage.prompt_tokens as f64 * COST_PER_INPUT_TOKEN
-                        + usage.completion_tokens as f64 * COST_PER_OUTPUT_TOKEN;
-
-                    // Check per-request budget envelope after accumulating usage
-                    if let Some(ref envelope) = instance.budget_envelope {
-                        let cost_millicosts = (usage.prompt_tokens as f64 * COST_PER_INPUT_TOKEN
-                            + usage.completion_tokens as f64 * COST_PER_OUTPUT_TOKEN) * 1000.0;
-                        if let Err(ref e) = envelope.record_and_check(cost_millicosts as u64, usage.total_tokens as u64) {
-                            info!(node_id = ?node_id, error = %e, "Budget envelope breached; stopping further execution");
-                            for node in &queue.graph().nodes {
-                                if matches!(instance.node_states.get(&node.id), Some(NodeState::Pending) | None) {
-                                    instance.node_states.insert(node.id, NodeState::Skipped);
-                                }
-                            }
-                            let total_latency = start.elapsed().as_millis() as u64;
-                            return Ok(ExecutionResult {
-                                instance_id: instance.instance_id,
-                                success: false,
-                                outputs: instance.outputs.clone(),
-                                total_latency_ms: total_latency,
-                                total_cost,
-                                total_tokens,
-                                terminal_node_id: instance.terminal_node_id,
-                                final_output: instance.final_output.clone(),
-                            });
-                        }
-                    }
-                }
-                match exec_result.state {
-                    NodeState::Succeeded => {
-                        retry_counts.remove(&node_id);
-                        retry_backoffs.remove(&node_id);
-                        info!(node_id = ?node_id, latency_ms = latency, "Node succeeded");
-                        instance.node_states.insert(node_id, NodeState::Succeeded);
-                        let output_val = exec_result.output.unwrap_or(serde_json::Value::Null);
-                        instance.outputs.insert(node_id, output_val.clone());
-
-                        // Track terminal node output
-                        instance.terminal_node_id = Some(node_id);
-                        if output_val != serde_json::Value::Null {
-                            instance.final_output = Some(output_val);
-                        }
-
-                        let node_kind = Some(queue.graph().nodes[node_index[&node_id]].kind.clone());
-
-                        match node_kind {
-                            Some(ExecutionNodeKind::Conditional) => {
-                                queue.mark_conditional_completed(node_id);
-                                let result_val = instance.outputs.get(&node_id)
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("true");
-                                let matched_targets: Vec<Uuid> = queue.outgoing_edges(node_id).iter()
-                                    .filter(|e| match e.condition.as_deref() {
-                                        Some(cond) => cond == result_val,
-                                        None => true,
-                                    })
-                                    .map(|e| e.to)
-                                    .collect();
-                                for to in matched_targets {
-                                    queue.activate_edge(node_id, to);
-                                }
-                            }
-                            Some(ExecutionNodeKind::Loop) => {
-                                queue.mark_completed(node_id);
-                                let should_continue = instance.outputs.get(&node_id)
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false);
-                                if should_continue {
-                                    let body_ids: Vec<Uuid> = queue.outgoing_edges(node_id).iter()
-                                        .filter(|e| e.condition.as_deref() != Some("exit"))
-                                        .map(|e| e.to)
-                                        .collect();
-                                    for &body_id in &body_ids {
-                                        instance.node_states.insert(body_id, NodeState::Pending);
-                                    }
-                                    queue.reset_loop_body(&body_ids);
-                                } else {
-                                    let exit_targets: Vec<Uuid> = queue.outgoing_edges(node_id).iter()
-                                        .filter(|e| e.condition.as_deref() == Some("exit"))
-                                        .map(|e| e.to)
-                                        .collect();
-                                    for to in exit_targets {
-                                        queue.activate_edge(node_id, to);
-                                    }
-                                }
-                            }
-                            _ => {
-                                queue.mark_completed(node_id);
-                                if queue.has_loop_back_edge(node_id) {
-                                    if let Some(loop_node_id) = queue.loop_back_target(node_id) {
-                                        let iter_count = loop_iterations.entry(loop_node_id).or_insert(0);
-                                        let max_iters = queue.graph().nodes[node_index[&loop_node_id]]
-                                            .config
-                                            .get("max_iterations")
-                                            .and_then(|v| v.as_u64())
-                                            .unwrap_or(10) as u32;
-                                        if *iter_count < max_iters {
-                                            *iter_count += 1;
-                                            info!(
-                                                loop_node_id = ?loop_node_id,
-                                                iteration = *iter_count,
-                                                max = max_iters,
-                                                "Loop iteration"
-                                            );
-                                            let body_ids: Vec<Uuid> = queue.outgoing_edges(loop_node_id).iter()
-                                                .filter(|e| e.condition.as_deref() != Some("exit"))
-                                                .map(|e| e.to)
-                                                .collect();
-                                            for &body_id in &body_ids {
-                                                instance.node_states.insert(body_id, NodeState::Pending);
-                                            }
-                                            queue.reset_loop_body(&body_ids);
-                                            instance.node_states.insert(loop_node_id, NodeState::Pending);
-                                            queue.reset_ready(loop_node_id);
-                                            queue.activate_edge(node_id, loop_node_id);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    NodeState::Failed(reason) => {
-                        info!(node_id = ?node_id, reason = %reason, latency_ms = latency, "Node failed");
-                        let retries = retry_counts.entry(node_id).or_insert(0);
-                        let node = &queue.graph().nodes[node_index[&node_id]];
-
-                        if *retries < node.retry_policy.max_retries {
-                            *retries += 1;
-                            info!(
-                                node_id = ?node_id,
-                                attempt = *retries,
-                                max = node.retry_policy.max_retries,
-                                "Retrying node after backoff"
-                            );
-                            if node.retry_policy.backoff_ms > 0 {
-                                let max_ms = node.retry_policy
-                                    .backoff_ms
-                                    .saturating_mul(10);
-                                let backoff = retry_backoffs
-                                    .entry(node_id)
-                                    .or_insert_with(|| Backoff::new(
-                                        node.retry_policy.backoff_ms,
-                                        max_ms,
-                                    ));
-                                tokio::time::sleep(backoff.next()).await;
-                            }
-                            instance.node_states.insert(node_id, NodeState::Pending);
-                            queue.reset_ready(node_id);
-                        } else {
-                            retry_backoffs.remove(&node_id);
-                            if let Some(ref fallback) = node.fallback {
-                                info!(
-                                    node_id = ?node_id,
-                                    fallback_model = %fallback.model,
-                                    "Attempting fallback execution"
-                                );
-                                let mut fallback_node = node.clone();
-                                fallback_node.model = fallback.model.clone();
-                                let fb_result = executor.execute_node(&fallback_node).await;
-                                match fb_result.state {
-                                    NodeState::Succeeded => {
-                                        info!(node_id = ?node_id, "Fallback succeeded");
-                                        instance
-                                            .node_states
-                                            .insert(node_id, NodeState::Succeeded);
-                                        queue.mark_completed(node_id);
-                                        let fb_out = fb_result.output.unwrap_or(serde_json::Value::Null);
-                                        instance.outputs.insert(node_id, fb_out.clone());
-                                        instance.terminal_node_id = Some(node_id);
-                                        if fb_out != serde_json::Value::Null {
-                                            instance.final_output = Some(fb_out);
-                                        }
-                                    }
-                                    NodeState::Failed(fb_reason) => {
-                                        instance.node_states.insert(
-                                            node_id,
-                                            NodeState::Failed(format!(
-                                                "Fallback failed: {}",
-                                                fb_reason
-                                            )),
-                                        );
-                                        queue.mark_failed(node_id);
-                                    }
-                                    _ => {
-                                        instance.node_states.insert(
-                                            node_id,
-                                            NodeState::Succeeded,
-                                        );
-                                        queue.mark_completed(node_id);
-                                    }
-                                }
-                            } else {
-                                instance
-                                    .node_states
-                                    .insert(node_id, NodeState::Failed(reason));
-                                queue.mark_failed(node_id);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            (Some(token), None) => crates_scheduler.run_with_cancellation(graph, &adapter, token).await,
+            (None, Some(envelope)) => crates_scheduler.run_with_budget(graph, &adapter, envelope).await,
+            (None, None) => crates_scheduler.run(graph, &adapter).await,
         }
+        .map_err(map_crates_error)?;
 
-        let total_latency = start.elapsed().as_millis() as u64;
-        let success = instance
-            .node_states
-            .values()
-            .all(|s| matches!(s, NodeState::Succeeded | NodeState::Skipped));
+        // Overlay the crates outcome onto the instance: pre-seeded Pending
+        // states for nodes that never ran are preserved (matches the
+        // monolith's in-place mutation), success/failure states overwrite.
+        let mut states = instance.node_states.clone();
+        states.extend(outcome.node_states);
+        instance.node_states = states;
+        instance.outputs = outcome.outputs;
+
+        let tracker_guard = tracker.lock().unwrap();
+        instance.terminal_node_id = tracker_guard.terminal_node_id;
+        instance.final_output = tracker_guard.final_output.clone();
+        let terminal_node_id = instance.terminal_node_id;
+        let final_output = instance.final_output.clone();
+        drop(tracker_guard);
 
         Ok(ExecutionResult {
             instance_id: instance.instance_id,
-            success,
+            success: outcome.success,
             outputs: instance.outputs.clone(),
-            total_latency_ms: total_latency,
-            total_cost,
-            total_tokens,
-            terminal_node_id: instance.terminal_node_id,
-            final_output: instance.final_output.clone(),
+            total_latency_ms: outcome.total_latency_ms,
+            total_cost: outcome.total_cost,
+            total_tokens: outcome.total_tokens,
+            terminal_node_id,
+            final_output,
         })
+    }
+}
+
+fn map_crates_error(err: fusion_core::PlatformError) -> SchedulerError {
+    match err {
+        fusion_core::PlatformError::Scheduler { code, message: _message, .. } if code == "CANCELLED" => {
+            SchedulerError::Internal("Request cancelled by client".into())
+        }
+        fusion_core::PlatformError::Scheduler { message, .. } => SchedulerError::Internal(message),
+        other => SchedulerError::Internal(other.to_string()),
     }
 }
 

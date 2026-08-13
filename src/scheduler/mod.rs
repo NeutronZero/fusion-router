@@ -3,6 +3,7 @@ use crate::types::{ExecutionGraph, ExecutionInstance, ExecutionResult, Reservati
 
 pub mod default;
 pub mod work_queue;
+pub mod crates_adapter;
 pub mod connector_health;
 pub mod connector_resolver;
 pub mod connector_subscriber;
