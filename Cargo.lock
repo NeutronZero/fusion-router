@@ -1091,6 +1091,7 @@ dependencies = [
  "fusion-core",
  "fusion-ir",
  "fusion-kernel",
+ "fusion-runtime",
  "fusion-types",
  "serde",
  "serde_json",
