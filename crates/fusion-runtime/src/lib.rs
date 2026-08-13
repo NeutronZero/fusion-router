@@ -7,18 +7,26 @@
 
 use async_trait::async_trait;
 use fusion_scheduler::{DefaultScheduler, Executor, ExecutionOutcome};
-use fusion_types::{ExecutionGraph, ExecutionNode, NodeExecContext, NodeExecutionResult, NodeState, Usage};
+use fusion_types::{
+    ExecutionGraph, ExecutionNode, ExecutionNodeKind, NodeExecContext, NodeExecutionResult,
+    NodeState, StrategyKind, Usage,
+};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Chat completion request sent to a provider.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
 }
 
 /// A chat message with role and content.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -67,22 +75,154 @@ impl ChatProvider for MockProvider {
     }
 }
 
+/// Spy provider that records the last request for assertions.
+pub struct SpyProvider {
+    pub last_request: std::sync::Mutex<Option<ChatRequest>>,
+    response_prefix: String,
+}
+
+impl SpyProvider {
+    pub fn new() -> Self {
+        Self {
+            last_request: std::sync::Mutex::new(None),
+            response_prefix: "spy response".into(),
+        }
+    }
+
+    pub fn last_request(&self) -> Option<ChatRequest> {
+        self.last_request.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl ChatProvider for SpyProvider {
+    async fn chat_completion(&self, request: &ChatRequest) -> Result<ChatResponse, String> {
+        *self.last_request.lock().unwrap() = Some(request.clone());
+        Ok(ChatResponse {
+            content: format!("{} for model {}", self.response_prefix, request.model),
+            usage: Some(Usage {
+                prompt_tokens: 50,
+                completion_tokens: 25,
+                total_tokens: 75,
+            }),
+        })
+    }
+}
+
 /// Provider-backed executor that satisfies the scheduler's `Executor` trait.
 /// Routes each node's model string to the chat provider.
-struct ProviderExecutor {
+pub struct ProviderExecutor {
     provider: Arc<dyn ChatProvider>,
+}
+
+impl ProviderExecutor {
+    pub fn new(provider: Arc<dyn ChatProvider>) -> Self {
+        Self { provider }
+    }
+
+    /// Builds a `ChatRequest` from node config and execution context.
+    ///
+    /// Order:
+    /// 1. `config["messages"]` (JSON array of {role, content}) if present
+    /// 2. System prompt injected by kind (Judge) / strategy (Reflection) when
+    ///    no system message exists
+    /// 3. Parent outputs appended as user messages (Judge / Review / Generate)
+    pub fn build_request(&self, node: &ExecutionNode, ctx: &NodeExecContext) -> ChatRequest {
+        let mut messages: Vec<ChatMessage> = node
+            .config
+            .get("messages")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        let temperature = node
+            .config
+            .get("temperature")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32);
+
+        let max_tokens = node
+            .config
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+
+        if !messages.iter().any(|m| m.role == "system") {
+            let system_prompt = match node.kind {
+                ExecutionNodeKind::LLMJudge => Some(
+                    "You are a judge evaluating the quality and correctness of responses. \
+                     Assess the provided answers critically and select the best one, explaining your reasoning.",
+                ),
+                _ => match node.strategy {
+                    StrategyKind::Reflection => Some(
+                        "You are a reflective reviewer. Analyze the previous response, identify \
+                         potential issues, and provide an improved version.",
+                    ),
+                    _ => None,
+                },
+            };
+            if let Some(prompt) = system_prompt {
+                messages.insert(0, ChatMessage {
+                    role: "system".into(),
+                    content: prompt.to_string(),
+                });
+            }
+        }
+
+        // Append parent outputs as user context
+        if !ctx.parent_outputs.is_empty() {
+            match node.kind {
+                ExecutionNodeKind::LLMJudge
+                | ExecutionNodeKind::LLMReview
+                | ExecutionNodeKind::LLMGenerate => {
+                    for (parent_id, output) in &ctx.parent_outputs {
+                        messages.push(ChatMessage {
+                            role: "user".into(),
+                            content: format!(
+                                "Context from parent node {}:\n{}",
+                                parent_id, output
+                            ),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        ChatRequest {
+            model: node.model.clone(),
+            messages,
+            temperature,
+            max_tokens,
+        }
+    }
 }
 
 #[async_trait]
 impl Executor for ProviderExecutor {
     async fn execute_node(&self, node: &ExecutionNode, ctx: &NodeExecContext) -> NodeExecutionResult {
-        let request = ChatRequest {
-            model: node.model.clone(),
-            messages: vec![ChatMessage {
-                role: "user".into(),
-                content: format!("Execute node {:?}", node.kind),
-            }],
-        };
+        if matches!(
+            node.kind,
+            ExecutionNodeKind::Gate
+                | ExecutionNodeKind::Transform
+                | ExecutionNodeKind::Conditional
+                | ExecutionNodeKind::Loop
+                | ExecutionNodeKind::Split
+                | ExecutionNodeKind::Join
+                | ExecutionNodeKind::Barrier
+        ) {
+            // Control-flow / non-LLM nodes: no provider call.
+            return NodeExecutionResult {
+                state: NodeState::Succeeded,
+                usage: None,
+                latency_ms: 0,
+                output: Some(serde_json::json!({
+                    "kind": format!("{:?}", node.kind),
+                    "node_id": node.id.to_string(),
+                })),
+            };
+        }
+
+        let request = self.build_request(node, ctx);
 
         match self.provider.chat_completion(&request).await {
             Ok(response) => NodeExecutionResult {
@@ -138,6 +278,7 @@ impl RuntimeEngine {
 mod tests {
     use super::*;
     use fusion_types::*;
+    use std::collections::HashMap;
 
     fn make_simple_graph() -> Arc<ExecutionGraph> {
         let n1 = uuid::Uuid::new_v4();
@@ -185,6 +326,8 @@ mod tests {
         let response = provider.chat_completion(&ChatRequest {
             model: "gpt-4".into(),
             messages: vec![],
+            temperature: None,
+            max_tokens: None,
         }).await.expect("chat");
         assert!(response.content.contains("hello"));
         assert!(response.usage.is_some());
@@ -207,5 +350,93 @@ mod tests {
         let graph = make_simple_graph();
         let outcome = engine.run(graph).await.expect("run");
         assert!(outcome.total_tokens > 0);
+    }
+
+    #[test]
+    fn test_build_request_messages_from_config() {
+        let executor = ProviderExecutor {
+            provider: Arc::new(MockProvider::default_response()),
+        };
+        let node = ExecutionNode {
+            id: uuid::Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMGenerate,
+            strategy: StrategyKind::Single,
+            model: "m".into(),
+            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            fallback: None,
+            config: HashMap::from([
+                ("messages".into(), serde_json::json!([
+                    {"role": "user", "content": "hello from config"}
+                ])),
+                ("temperature".into(), serde_json::json!(0.7)),
+                ("max_tokens".into(), serde_json::json!(512)),
+            ]),
+            subgraph: None,
+        };
+        let request = executor.build_request(&node, &NodeExecContext::default());
+        assert_eq!(request.messages.len(), 1);
+        assert_eq!(request.messages[0].role, "user");
+        assert_eq!(request.messages[0].content, "hello from config");
+        assert_eq!(request.temperature, Some(0.7));
+        assert_eq!(request.max_tokens, Some(512));
+    }
+
+    #[test]
+    fn test_build_request_judge_gets_system_prompt_and_parent_context() {
+        let executor = ProviderExecutor {
+            provider: Arc::new(MockProvider::default_response()),
+        };
+        let parent_id = uuid::Uuid::new_v4();
+        let node = ExecutionNode {
+            id: uuid::Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMJudge,
+            strategy: StrategyKind::Single,
+            model: "judge".into(),
+            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            fallback: None,
+            config: HashMap::new(),
+            subgraph: None,
+        };
+        let ctx = NodeExecContext {
+            parent_outputs: HashMap::from([(parent_id, serde_json::json!({"answer": "42"}))]),
+            graph_outputs: HashMap::new(),
+        };
+        let request = executor.build_request(&node, &ctx);
+        // system + 1 parent context message
+        assert_eq!(request.messages.len(), 2);
+        assert_eq!(request.messages[0].role, "system");
+        assert!(request.messages[0].content.contains("judge"));
+        assert_eq!(request.messages[1].role, "user");
+        assert!(request.messages[1].content.contains(&parent_id.to_string()));
+        assert!(request.messages[1].content.contains("42"));
+    }
+
+    #[test]
+    fn test_build_request_system_prompt_inserted_once() {
+        let executor = ProviderExecutor {
+            provider: Arc::new(MockProvider::default_response()),
+        };
+        // Config already has a system message: no injection
+        let node = ExecutionNode {
+            id: uuid::Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMJudge,
+            strategy: StrategyKind::Single,
+            model: "judge".into(),
+            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            fallback: None,
+            config: HashMap::from([
+                ("messages".into(), serde_json::json!([
+                    {"role": "system", "content": "custom system"}
+                ])),
+            ]),
+            subgraph: None,
+        };
+        let request = executor.build_request(&node, &NodeExecContext::default());
+        assert_eq!(
+            request.messages.iter().filter(|m| m.role == "system").count(),
+            1,
+            "system prompt must be inserted exactly once"
+        );
+        assert_eq!(request.messages[0].content, "custom system");
     }
 }
