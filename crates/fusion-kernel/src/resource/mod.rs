@@ -25,13 +25,13 @@ pub struct Quota {
 #[async_trait]
 pub trait ResourceManager: Send + Sync {
     /// Returns true if the estimated cost and tokens fit within remaining quota.
-    async fn can_afford(&self, estimated_cost: f64, estimated_tokens: u64) -> bool;
+    async fn can_afford(&self, estimated_cost: NanoUSD, estimated_tokens: u64) -> bool;
 
     /// Atomically reserves budget for an execution. Returns false if insufficient.
-    async fn try_reserve(&self, estimated_cost: f64, estimated_tokens: u64) -> bool;
+    async fn try_reserve(&self, estimated_cost: NanoUSD, estimated_tokens: u64) -> bool;
 
     /// Releases previously reserved budget.
-    async fn release(&self, estimated_cost: f64, estimated_tokens: u64) -> anyhow::Result<()>;
+    async fn release(&self, estimated_cost: NanoUSD, estimated_tokens: u64) -> anyhow::Result<()>;
 
     /// Returns the budget quota.
     fn quota(&self) -> &Quota;
@@ -44,13 +44,11 @@ pub trait ResourceManager: Send + Sync {
 
     /// Records actual measured usage (e.g. from a stream meter) so quota
     /// accounting reflects reality rather than only estimates. No-op by default.
-    async fn record_usage(&self, _cost_millicosts: u64, _tokens: u64) {}
+    async fn record_usage(&self, _cost_nanos: NanoUSD, _tokens: u64) {}
 }
 
 /// Test-double resource manager for crate-level tests.
-/// Tracks actual state — `can_afford()` checks against quota.
-/// Tests budget *plumbing* and basic *logic*; real production accounting
-/// stays in the monolith's `DefaultResourceManager`.
+#[derive(Debug)]
 pub struct StubResourceManager {
     quota: Quota,
     cost: AtomicU64,
@@ -58,52 +56,58 @@ pub struct StubResourceManager {
 }
 
 impl StubResourceManager {
-    pub fn new(max_daily_cost: f64, max_daily_tokens: u64) -> Self {
+    pub fn new(quota: Quota) -> Self {
         Self {
-            quota: Quota { max_daily_cost, max_daily_tokens },
+            quota,
             cost: AtomicU64::new(0),
             tokens: AtomicU64::new(0),
         }
     }
 
     /// Simulate spend for testing accumulated-state scenarios.
-    pub fn simulate_spend(&self, cost_millicosts: u64, tokens: u64) {
-        self.cost.fetch_add(cost_millicosts, Ordering::Relaxed);
+    pub fn simulate_spend(&self, cost_nanos: u64, tokens: u64) {
+        self.cost.fetch_add(cost_nanos, Ordering::Relaxed);
         self.tokens.fetch_add(tokens, Ordering::Relaxed);
+    }
+}
+
+impl Default for StubResourceManager {
+    fn default() -> Self {
+        Self::new(Quota { max_daily_cost: 0.0, max_daily_tokens: 0 })
     }
 }
 
 #[async_trait]
 impl ResourceManager for StubResourceManager {
-    async fn can_afford(&self, estimated_cost: f64, estimated_tokens: u64) -> bool {
-        let cost_millicosts = (estimated_cost * 1000.0) as u64;
+    async fn can_afford(&self, estimated_cost: NanoUSD, estimated_tokens: u64) -> bool {
+        let cost_nanos = estimated_cost.as_nanos();
         let current_cost = self.cost.load(Ordering::Acquire);
         let current_tokens = self.tokens.load(Ordering::Acquire);
-        let max_cost = (self.quota.max_daily_cost * 1000.0) as u64;
+        let max_cost = (self.quota.max_daily_cost * 1_000_000_000.0) as u64;
         let max_tokens = self.quota.max_daily_tokens;
-        (current_cost + cost_millicosts <= max_cost) && (current_tokens + estimated_tokens <= max_tokens)
+        (current_cost + cost_nanos <= max_cost) && (current_tokens + estimated_tokens <= max_tokens)
     }
 
-    async fn try_reserve(&self, estimated_cost: f64, estimated_tokens: u64) -> bool {
-        let cost_millicosts = (estimated_cost * 1000.0) as u64;
-        let max_cost = (self.quota.max_daily_cost * 1000.0) as u64;
+    async fn try_reserve(&self, estimated_cost: NanoUSD, estimated_tokens: u64) -> bool {
+        let cost_nanos = estimated_cost.as_nanos();
+        let max_cost = (self.quota.max_daily_cost * 1_000_000_000.0) as u64;
         let max_tokens = self.quota.max_daily_tokens;
 
         let current_cost = self.cost.load(Ordering::Relaxed);
         let current_tokens = self.tokens.load(Ordering::Relaxed);
 
-        if current_cost + cost_millicosts > max_cost || current_tokens + estimated_tokens > max_tokens {
+        if current_cost + cost_nanos > max_cost || current_tokens + estimated_tokens > max_tokens {
             return false;
         }
 
-        self.cost.store(current_cost + cost_millicosts, Ordering::Release);
+        self.cost.store(current_cost + cost_nanos, Ordering::Release);
         self.tokens.store(current_tokens + estimated_tokens, Ordering::Release);
         true
     }
 
-    async fn release(&self, estimated_cost: f64, estimated_tokens: u64) -> anyhow::Result<()> {
-        let cost_millicosts = (estimated_cost * 1000.0) as u64;
-        self.cost.fetch_sub(cost_millicosts, Ordering::Relaxed);
+    async fn release(&self, estimated_cost: NanoUSD, estimated_tokens: u64) -> anyhow::Result<()> {
+        let cost_nanos = estimated_cost.as_nanos();
+        self.cost.fetch_sub(cost_nanos, Ordering::Relaxed);
         self.tokens.fetch_sub(estimated_tokens, Ordering::Relaxed);
         Ok(())
     }

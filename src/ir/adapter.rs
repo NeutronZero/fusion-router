@@ -37,8 +37,12 @@ pub fn node_kind_of(kind: &WorkflowNodeKind) -> IRNodeKind {
 pub fn workflow_to_types(ir: &WorkflowIR) -> Result<TypesWorkflowIR, String> {
     let mut nodes = Vec::with_capacity(ir.nodes().len());
     for node in ir.nodes() {
-        let config: std::collections::HashMap<String, serde_json::Value> =
+        let mut config: std::collections::HashMap<String, serde_json::Value> =
             node.config().clone().into_iter().collect();
+        if let Some(cap) = node.capability() {
+            config.insert("capability".to_string(), serde_json::json!(cap));
+        }
+        config.insert("semantic_kind".to_string(), serde_json::json!(format!("{:?}", node.kind())));
         nodes.push(crate::types::IRNode {
             id: uuid_for(node.id()),
             kind: node_kind_of(&node.kind()),

@@ -227,8 +227,22 @@ async fn main() {
     let ops_inspector = Arc::new(crate::operations::runtime_inspector::RuntimeInspector::new(ops_cache.clone()));
     let ops_store = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let ops_audit = Arc::new(crate::telemetry::audit::AuditLog::new(1000));
-    let ops_policy_admin = Arc::new(crate::operations::policy_admin::PolicyAdmin::new(ops_store, ops_audit.clone()));
-    let ops_verifier = Arc::new(crate::operations::MockPackageVerifier);
+    let ops_policy_registry = Arc::new(crate::policy::PolicyRegistry::new());
+    let ops_policy_admin = Arc::new(crate::operations::policy_admin::PolicyAdmin::new_with_registry(
+        ops_policy_registry.clone(),
+        ops_store,
+        ops_audit.clone(),
+    ));
+
+    let archive_path = std::path::PathBuf::from("release_archive");
+    let archive_backend = crate::release::archive::FilesystemArchiveBackend::new(&archive_path);
+    let signing_key = std::env::var("FUSION_SIGNING_KEY").ok();
+    let signer: Option<Arc<dyn crate::release::signing::Signer>> = signing_key.map(|key| {
+        Arc::new(crate::release::signing::HmacSigner::new(&key)) as Arc<dyn crate::release::signing::Signer>
+    });
+    let ops_verifier: Arc<dyn crate::operations::PackageVerifier> = Arc::new(
+        crate::operations::ArchivePackageVerifier::new(archive_backend, signer),
+    );
     let ops_attestation_viewer = Arc::new(crate::operations::attestation_viewer::AttestationViewer::new(ops_verifier, ops_audit));
 
     let ops_state = crate::operations::handlers::OperationsState {

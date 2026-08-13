@@ -1,3 +1,6 @@
+pub mod monetary;
+pub use monetary::NanoUSD;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

@@ -483,13 +483,22 @@ impl IntentPlanner {
             ExecutionIntent::Balanced => fusion_planner::ExecutionIntent::Balanced,
             ExecutionIntent::Exhaustive => fusion_planner::ExecutionIntent::Exhaustive,
             ExecutionIntent::Constrained { max_cost_usd, .. } => {
-                fusion_planner::ExecutionIntent::Constrained {
-                    max_cost_usd: *max_cost_usd,
-                }
+                let cost = max_cost_usd.and_then(|usd| fusion_core::NanoUSD::checked_from_decimal_usd(&usd.to_string()).ok());
+                fusion_planner::ExecutionIntent::Constrained { max_cost: cost }
             }
         };
-        let planner = fusion_planner::IntentPlanner::new(fusion_core::ModelCatalog::default());
-        let contract = planner.plan_intent(&crates_intent).ok()?;
+        let req = fusion_planner::PlanningRequest {
+            intent: crates_intent,
+            user_prompt: String::new(),
+            requested_model: Some(model.to_string()),
+            requirements: fusion_planner::RequirementsSnapshot::default(),
+            policies: fusion_planner::PolicySnapshot::default(),
+            capability_catalog: fusion_kernel::CapabilityCatalog::new(),
+            model_catalog: self.model_catalog.clone(),
+            telemetry: fusion_planner::RoutingTelemetrySnapshot::default(),
+        };
+        let planner = fusion_planner::IntentPlanner::new(self.model_catalog.clone());
+        let contract = planner.plan(&req).ok()?;
         let mut plan = crate::ir::adapter::workflow_to_types(&contract).ok()?;
 
         // The contract speed template has an explicit Output node; the live
@@ -575,18 +584,7 @@ impl Planner for IntentPlanner {
             }
         });
         self.plan_from_crates(&intent, &model)
-            .unwrap_or_else(|| match intent {
-                ExecutionIntent::Quality => self.build_quality(&model),
-                ExecutionIntent::Speed => self.build_speed(&model),
-                ExecutionIntent::Balanced => self.build_balanced(&model),
-                ExecutionIntent::Exhaustive => self.build_exhaustive(&model),
-                ExecutionIntent::Constrained { max_cost_usd, .. }
-                    if max_cost_usd.is_some_and(|v| v < 0.02) =>
-                {
-                    self.build_speed(&model)
-                }
-                ExecutionIntent::Constrained { .. } => self.build_balanced(&model),
-            })
+            .unwrap_or_else(|| panic!("Planning failure in fusion-planner for intent {:?}", intent))
     }
 }
 

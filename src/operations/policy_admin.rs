@@ -7,6 +7,7 @@ use crate::operations::OperationError;
 pub struct PolicyAdmin {
     store: Arc<Mutex<Vec<PolicyDeclaration>>>,
     audit_log: Arc<AuditLog>,
+    registry: Option<Arc<crate::policy::PolicyRegistry>>,
 }
 
 impl PolicyAdmin {
@@ -14,7 +15,15 @@ impl PolicyAdmin {
         store: Arc<Mutex<Vec<PolicyDeclaration>>>,
         audit_log: Arc<AuditLog>,
     ) -> Self {
-        Self { store, audit_log }
+        Self { store, audit_log, registry: None }
+    }
+
+    pub fn new_with_registry(
+        registry: Arc<crate::policy::PolicyRegistry>,
+        store: Arc<Mutex<Vec<PolicyDeclaration>>>,
+        audit_log: Arc<AuditLog>,
+    ) -> Self {
+        Self { store, audit_log, registry: Some(registry) }
     }
 
     pub fn list_policies(&self) -> Result<Vec<PolicyDeclaration>, OperationError> {

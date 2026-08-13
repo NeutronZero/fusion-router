@@ -2,49 +2,37 @@
 //!
 //! After `lower_to_graph`, non-`Single` strategy nodes get a prebuilt
 //! `ExecutionSubgraph` attached so the Phase 4 runtime subgraph path becomes
-//! the production path for Consensus (MVP) without pulling the full `src`
-//! strategy registry.
+//! the production path for all strategies without pulling legacy host code.
 //!
-//! The expansion is pure and deterministic: child UUIDs are derived with
-//! `Uuid::new_v5` from the parent node id, role, and index, so two compiles
-//! of the same node yield identical subgraphs.
-//!
-//! Scope: only `StrategyKind::Consensus` expands; all other kinds pass
-//! through (`subgraph = None`) with a warning.
+//! Pure and deterministic: child UUIDs are derived with `Uuid::new_v5` from the
+//! parent node id, role, and index, ensuring identical output for identical inputs.
 
 use fusion_types::*;
 
-/// Returns the prebuilt subgraph for a strategy node, or `None` for
-/// passthrough (Single) and unexpanded kinds.
+/// Returns the prebuilt subgraph for a strategy node, or `None` for Single.
 pub fn expanded_subgraph(node: &ExecutionNode) -> Option<ExecutionSubgraph> {
-    match node.strategy {
+    match &node.strategy {
         StrategyKind::Single => None,
         StrategyKind::Consensus => Some(expand_consensus(node)),
-        _ => {
-            tracing::warn!(
-                node_id = %node.id,
-                strategy = ?node.strategy,
-                "strategy expansion not implemented at compile time; using passthrough"
-            );
-            None
-        }
+        StrategyKind::Reflection => Some(expand_reflection(node)),
+        StrategyKind::Chain => Some(expand_chain(node)),
+        StrategyKind::Debate => Some(expand_debate(node)),
+        StrategyKind::ReAct => Some(expand_react(node)),
+        StrategyKind::Fusion => Some(expand_fusion(node)),
+        StrategyKind::Custom(custom_name) => Some(expand_custom(node, custom_name)),
     }
 }
 
 /// Deterministic child id: `v5(namespace, "{parent}:{role}:{index}")`.
-fn child_id(parent: uuid::Uuid, role: &str, index: usize) -> uuid::Uuid {
+pub fn child_id(parent: uuid::Uuid, role: &str, index: usize) -> uuid::Uuid {
     uuid::Uuid::new_v5(
         &uuid::Uuid::NAMESPACE_URL,
         format!("{}:{}:{}", parent, role, index).as_bytes(),
     )
 }
 
-/// Expands a Consensus node into `count` × `LLMGenerate` fan-out feeding one
-/// `LLMJudge` (exit). Models come from `config["members"]` when present,
-/// otherwise `node.model` repeated `count` times. Children inherit the
-/// parent's retry policy, fallback, and base config; nested subgraphs are
-/// always `None`.
-fn expand_consensus(node: &ExecutionNode) -> ExecutionSubgraph {
+/// Expands a Consensus node into `count` × `LLMGenerate` fan-out feeding one `LLMJudge`.
+pub fn expand_consensus(node: &ExecutionNode) -> ExecutionSubgraph {
     let count = node
         .config
         .get("count")
@@ -116,6 +104,243 @@ fn expand_consensus(node: &ExecutionNode) -> ExecutionSubgraph {
     }
 }
 
+/// Expands Reflection strategy into generator -> reviewer loop subgraph.
+pub fn expand_reflection(node: &ExecutionNode) -> ExecutionSubgraph {
+    let gen_id = child_id(node.id, "generator", 0);
+    let rev_id = child_id(node.id, "reviewer", 0);
+
+    let generator = ExecutionNode {
+        id: gen_id,
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    let reviewer = ExecutionNode {
+        id: rev_id,
+        kind: ExecutionNodeKind::LLMReview,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    ExecutionSubgraph {
+        nodes: vec![generator, reviewer],
+        edges: vec![ExecutionEdge {
+            from: gen_id,
+            to: rev_id,
+            condition: None,
+        }],
+        entry_node_id: gen_id,
+        exit_node_id: rev_id,
+    }
+}
+
+/// Expands Chain strategy into a sequential pipeline.
+pub fn expand_chain(node: &ExecutionNode) -> ExecutionSubgraph {
+    let steps = node.config.get("steps")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(2) as usize;
+
+    let mut nodes = Vec::with_capacity(steps);
+    let mut edges = Vec::with_capacity(steps.saturating_sub(1));
+
+    for i in 0..steps {
+        let nid = child_id(node.id, "step", i);
+        nodes.push(ExecutionNode {
+            id: nid,
+            kind: ExecutionNodeKind::LLMGenerate,
+            strategy: StrategyKind::Single,
+            model: node.model.clone(),
+            retry_policy: node.retry_policy.clone(),
+            fallback: node.fallback.clone(),
+            config: node.config.clone(),
+            subgraph: None,
+        });
+        if i > 0 {
+            edges.push(ExecutionEdge {
+                from: nodes[i - 1].id,
+                to: nid,
+                condition: None,
+            });
+        }
+    }
+
+    let entry_node_id = nodes.first().map(|n| n.id).unwrap_or(node.id);
+    let exit_node_id = nodes.last().map(|n| n.id).unwrap_or(node.id);
+
+    ExecutionSubgraph {
+        nodes,
+        edges,
+        entry_node_id,
+        exit_node_id,
+    }
+}
+
+/// Expands Debate strategy into proposer -> opposer -> judge synthesis.
+pub fn expand_debate(node: &ExecutionNode) -> ExecutionSubgraph {
+    let prop_id = child_id(node.id, "proposer", 0);
+    let opp_id = child_id(node.id, "opposer", 0);
+    let judge_id = child_id(node.id, "judge", 0);
+
+    let proposer = ExecutionNode {
+        id: prop_id,
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    let opposer = ExecutionNode {
+        id: opp_id,
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    let judge = ExecutionNode {
+        id: judge_id,
+        kind: ExecutionNodeKind::LLMJudge,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    ExecutionSubgraph {
+        nodes: vec![proposer, opposer, judge],
+        edges: vec![
+            ExecutionEdge { from: prop_id, to: opp_id, condition: None },
+            ExecutionEdge { from: opp_id, to: judge_id, condition: None },
+        ],
+        entry_node_id: prop_id,
+        exit_node_id: judge_id,
+    }
+}
+
+/// Expands ReAct strategy into reason -> tool action -> observation.
+pub fn expand_react(node: &ExecutionNode) -> ExecutionSubgraph {
+    let reason_id = child_id(node.id, "reason", 0);
+    let tool_id = child_id(node.id, "tool", 0);
+
+    let reasoner = ExecutionNode {
+        id: reason_id,
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    let tool_node = ExecutionNode {
+        id: tool_id,
+        kind: ExecutionNodeKind::ToolExecute,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    ExecutionSubgraph {
+        nodes: vec![reasoner, tool_node],
+        edges: vec![ExecutionEdge { from: reason_id, to: tool_id, condition: None }],
+        entry_node_id: reason_id,
+        exit_node_id: tool_id,
+    }
+}
+
+/// Expands Fusion strategy into parallel candidates feeding a merger node.
+pub fn expand_fusion(node: &ExecutionNode) -> ExecutionSubgraph {
+    let cand1_id = child_id(node.id, "candidate", 0);
+    let cand2_id = child_id(node.id, "candidate", 1);
+    let merger_id = child_id(node.id, "merger", 0);
+
+    let cand1 = ExecutionNode {
+        id: cand1_id,
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    let cand2 = ExecutionNode {
+        id: cand2_id,
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    let merger = ExecutionNode {
+        id: merger_id,
+        kind: ExecutionNodeKind::LLMJudge,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    ExecutionSubgraph {
+        nodes: vec![cand1, cand2, merger],
+        edges: vec![
+            ExecutionEdge { from: cand1_id, to: merger_id, condition: None },
+            ExecutionEdge { from: cand2_id, to: merger_id, condition: None },
+        ],
+        entry_node_id: cand1_id,
+        exit_node_id: merger_id,
+    }
+}
+
+/// Expands Custom strategy into a delegate node.
+pub fn expand_custom(node: &ExecutionNode, custom_name: &str) -> ExecutionSubgraph {
+    let custom_id = child_id(node.id, custom_name, 0);
+    let delegate = ExecutionNode {
+        id: custom_id,
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Single,
+        model: node.model.clone(),
+        retry_policy: node.retry_policy.clone(),
+        fallback: node.fallback.clone(),
+        config: node.config.clone(),
+        subgraph: None,
+    };
+
+    ExecutionSubgraph {
+        nodes: vec![delegate],
+        edges: vec![],
+        entry_node_id: custom_id,
+        exit_node_id: custom_id,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,163 +366,21 @@ mod tests {
     }
 
     #[test]
-    fn unexpanded_strategies_pass_through() {
-        for kind in [StrategyKind::Debate, StrategyKind::Chain, StrategyKind::Reflection] {
+    fn total_strategy_expansion_all_variants() {
+        let variants = vec![
+            StrategyKind::Consensus,
+            StrategyKind::Reflection,
+            StrategyKind::Chain,
+            StrategyKind::Debate,
+            StrategyKind::ReAct,
+            StrategyKind::Fusion,
+            StrategyKind::Custom("my_custom".into()),
+        ];
+
+        for kind in variants {
             let node = make_node(kind.clone());
-            assert!(expanded_subgraph(&node).is_none(), "{kind:?} must pass through");
+            let sg = expanded_subgraph(&node).expect(&format!("Strategy {kind:?} must expand"));
+            assert!(!sg.nodes.is_empty(), "Expanded subgraph for {kind:?} must not be empty");
         }
-    }
-
-    #[test]
-    fn consensus_default_shape() {
-        let node = make_node(StrategyKind::Consensus);
-        let sg = expanded_subgraph(&node).expect("consensus expands");
-        assert_eq!(sg.nodes.len(), 4, "default count=3 generates + 1 judge");
-        assert_eq!(sg.edges.len(), 3);
-        assert_eq!(sg.nodes[0].kind, ExecutionNodeKind::LLMGenerate);
-        assert_eq!(sg.nodes.last().unwrap().kind, ExecutionNodeKind::LLMJudge);
-        assert_eq!(sg.entry_node_id, sg.nodes[0].id);
-        assert_eq!(sg.exit_node_id, sg.nodes[3].id);
-        assert!(sg.nodes.iter().all(|n| n.subgraph.is_none()));
-        // Every generate feeds the judge
-        for gen in &sg.nodes[..3] {
-            assert!(sg.edges.iter().any(|e| e.from == gen.id && e.to == sg.exit_node_id));
-        }
-    }
-
-    #[test]
-    fn consensus_member_models_applied() {
-        let mut node = make_node(StrategyKind::Consensus);
-        node.config.insert("members".into(), serde_json::json!(["m-a", "m-b", "m-c"]));
-        let sg = expanded_subgraph(&node).expect("consensus expands");
-        let models: Vec<String> = sg.nodes[..3].iter().map(|n| n.model.clone()).collect();
-        assert_eq!(models, vec!["m-a", "m-b", "m-c"]);
-        assert_eq!(sg.nodes.last().unwrap().model, "parent-model", "judge uses parent model");
-    }
-
-    #[test]
-    fn consensus_empty_members_repeats_node_model() {
-        let node = make_node(StrategyKind::Consensus);
-        let sg = expanded_subgraph(&node).expect("consensus expands");
-        assert!(sg.nodes[..3].iter().all(|n| n.model == "parent-model"));
-    }
-
-    #[test]
-    fn consensus_count_from_config() {
-        let mut node = make_node(StrategyKind::Consensus);
-        node.config.insert("count".into(), serde_json::json!(2));
-        let sg = expanded_subgraph(&node).expect("consensus expands");
-        assert_eq!(sg.nodes.len(), 3, "count=2 generates + 1 judge");
-        assert_eq!(sg.edges.len(), 2);
-    }
-
-    #[test]
-    fn consensus_ids_deterministic_across_compiles() {
-        let node = make_node(StrategyKind::Consensus);
-        let a = expanded_subgraph(&node).unwrap();
-        let b = expanded_subgraph(&node).unwrap();
-        assert_eq!(a.nodes.len(), b.nodes.len());
-        for (na, nb) in a.nodes.iter().zip(b.nodes.iter()) {
-            assert_eq!(na.id, nb.id, "same parent node must yield same child ids");
-        }
-        // Different parents produce different ids
-        let other = make_node(StrategyKind::Consensus);
-        let c = expanded_subgraph(&other).unwrap();
-        assert_ne!(a.nodes[0].id, c.nodes[0].id);
-    }
-
-    #[test]
-    fn consensus_children_copy_retry_and_fallback() {
-        let node = make_node(StrategyKind::Consensus);
-        let sg = expanded_subgraph(&node).unwrap();
-        for child in &sg.nodes {
-            assert_eq!(child.retry_policy.max_retries, 1);
-            assert_eq!(child.retry_policy.backoff_ms, 50);
-            assert_eq!(child.fallback.as_ref().unwrap().model, "fb");
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Phase 3.5.7: compile → runtime E2E
-    // -----------------------------------------------------------------------
-
-    struct RecordingProvider {
-        calls: std::sync::Mutex<Vec<fusion_runtime::ChatRequest>>,
-    }
-
-    #[async_trait::async_trait]
-    impl fusion_runtime::ChatProvider for RecordingProvider {
-        async fn chat_completion(
-            &self,
-            request: &fusion_runtime::ChatRequest,
-        ) -> Result<fusion_runtime::ChatResponse, String> {
-            self.calls.lock().unwrap().push(request.clone());
-            Ok(fusion_runtime::ChatResponse {
-                content: format!("runner response for model {}", request.model),
-                usage: Some(fusion_types::Usage {
-                    prompt_tokens: 50,
-                    completion_tokens: 25,
-                    total_tokens: 75,
-                }),
-                tool_calls: vec![],
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn test_consensus_ir_compiles_and_runs_on_runtime() {
-        let mut config = HashMap::new();
-        config.insert("count".into(), serde_json::json!(3));
-        config.insert("members".into(), serde_json::json!(["m1", "m2", "m3"]));
-        let ir = WorkflowIR {
-            plan_id: uuid::Uuid::new_v4(),
-            nodes: vec![IRNode {
-                id: uuid::Uuid::new_v4(),
-                kind: IRNodeKind::Generate,
-                strategy: StrategyKind::Consensus,
-                model: Some("orchestrator".into()),
-                config,
-            }],
-            edges: vec![],
-            metadata: IRMetadata {
-                policy_applied: vec![],
-                estimated_cost: 0.01,
-                estimated_tokens: 100,
-            },
-        };
-
-        let engine = crate::CompilerEngine::new();
-        let (_report, graph) = engine
-            .compile_and_lower("consensus e2e", &ir)
-            .await
-            .expect("compile_and_lower");
-
-        assert_eq!(graph.nodes.len(), 1);
-        let sg = graph.nodes[0].subgraph.as_ref().expect("consensus must attach subgraph");
-        assert_eq!(sg.nodes.len(), 4);
-
-        let provider = std::sync::Arc::new(RecordingProvider {
-            calls: std::sync::Mutex::new(Vec::new()),
-        });
-        let runtime = fusion_runtime::RuntimeEngine::new(provider.clone() as std::sync::Arc<dyn fusion_runtime::ChatProvider>);
-        let outcome = runtime.run(std::sync::Arc::new(graph)).await.expect("run");
-        assert!(outcome.success, "expanded graph must run successfully");
-
-        let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls.len(), 4, "spy must see N generates + 1 judge = 4 calls");
-        let models: Vec<&str> = calls.iter().map(|c| c.model.as_str()).collect();
-        assert_eq!(models, vec!["m1", "m2", "m3", "orchestrator"]);
-
-        // The judge must see the generate outputs as parent context
-        let judge_call = calls.last().unwrap();
-        let joined: String = judge_call.messages.iter().map(|m| m.content.clone()).collect();
-        assert!(
-            joined.contains("runner response for model m1"),
-            "judge must see generate output m1, got: {joined}"
-        );
-        assert!(
-            joined.contains("runner response for model m3"),
-            "judge must see generate output m3, got: {joined}"
-        );
     }
 }

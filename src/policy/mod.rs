@@ -5,7 +5,10 @@ pub mod bridge;
 pub mod diagnostics;
 pub mod ir;
 pub mod precedence;
+pub mod policy_registry;
 pub mod trace;
+
+pub use policy_registry::PolicyRegistry;
 
 #[allow(unused_imports)]
 pub use ast::{PolicyAST, PolicyDeclaration, PolicyParser};

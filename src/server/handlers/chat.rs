@@ -45,8 +45,11 @@ pub async fn chat_completions(
             .into_response();
     }
 
-    if request.stream {
-        tracing::info!(request_id = %request_id, "streaming request");
+    let direct_stream_allowed = std::env::var("FUSION_EXPERIMENTAL_DIRECT_STREAM")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    if request.stream && direct_stream_allowed {
+        tracing::info!(request_id = %request_id, "streaming request via direct provider escape hatch");
         return stream_response(state, request, request_id).await;
     }
 
@@ -242,11 +245,6 @@ pub(crate) async fn process_request(
     let mut ir = step_plan
         .execute((reqs.clone(), Some(evidence)), &mut pctx)
         .await?;
-    if !request.model.trim().is_empty() {
-        for node in &mut ir.nodes {
-            node.model = Some(request.model.trim().to_string());
-        }
-    }
 
     if let Some(strategy) = &request.strategy {
         let kind = match strategy.kind.as_str() {

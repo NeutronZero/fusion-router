@@ -1,18 +1,11 @@
 pub mod capability;
+pub mod planning_request;
+
+pub use planning_request::*;
 
 use fusion_core::{ModelCatalog, PlatformError};
 use fusion_ir::{WorkflowBuilder, WorkflowIR};
 use fusion_kernel::{CapabilityCatalog, CapabilitySystem};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ExecutionIntent {
-    Quality,
-    Speed,
-    Balanced,
-    Exhaustive,
-    Constrained { max_cost_usd: Option<f64> },
-}
 
 pub struct IntentPlanner {
     pub model_catalog: ModelCatalog,
@@ -98,15 +91,19 @@ impl IntentPlanner {
             ExecutionIntent::Speed => self.build_speed(),
             ExecutionIntent::Balanced => self.build_balanced(),
             ExecutionIntent::Exhaustive => self.build_exhaustive(),
-            ExecutionIntent::Constrained { max_cost_usd } => {
-                if let Some(cost) = max_cost_usd {
-                    if *cost < 0.02 {
+            ExecutionIntent::Constrained { max_cost } => {
+                if let Some(cost) = max_cost {
+                    if cost.as_nanos() < 20_000_000 {
                         return self.build_speed();
                     }
                 }
                 self.build_balanced()
             }
         }
+    }
+
+    pub fn plan(&self, req: &PlanningRequest) -> Result<WorkflowIR, PlatformError> {
+        self.plan_intent(&req.intent)
     }
 }
 

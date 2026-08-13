@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 pub mod passes;
 pub mod policy;
 pub mod score;
+pub mod strategy_compiler;
 pub mod strategy_expansion;
 
 /// Weights for sub-scores in the route scoring formula.
