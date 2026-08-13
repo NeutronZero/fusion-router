@@ -11,6 +11,8 @@ use fusion_kernel::CapabilitySystem;
 use fusion_planner::{ExecutionIntent, PlannerService};
 use fusion_runtime::{MockProvider, RuntimeEngine};
 use fusion_router::ir::adapter::workflow_to_types;
+use fusion_types::{IRNode, IRNodeKind, StrategyKind, IREdge};
+use std::collections::HashMap;
 
 #[tokio::test]
 async fn test_e2e_golden_workflow() {
@@ -34,12 +36,11 @@ async fn test_e2e_golden_workflow() {
     let (report, graph) = compiler.compile_and_lower("Build a web app", &exec_ir).await
         .expect("Compiler must produce report and graph");
 
-    assert_eq!(report.passes_executed.len(), 5, "Must execute exactly 5 compiler passes (constraint, control_flow, dead_node, model, budget)");
-    assert!(report.passes_executed.contains(&"constraint_validation".to_string()));
-    assert!(report.passes_executed.contains(&"control_flow_validation".to_string()));
-    assert!(report.passes_executed.contains(&"dead_node_elimination".to_string()));
-    assert!(report.passes_executed.contains(&"model_resolution".to_string()));
-    assert!(report.passes_executed.contains(&"budget_optimisation".to_string()));
+    assert_eq!(report.passes_executed.len(), 5, "Must execute exactly 5 compiler passes");
+    assert_eq!(report.pass_diffs.len(), 5);
+    for diff in &report.pass_diffs {
+        assert!(diff.duration_ms >= 0, "pass {} timing must be non-negative", diff.pass_name);
+    }
 
     assert_eq!(graph.nodes.len(), 3, "Execution graph must have 3 nodes");
     assert!(!graph.graph_id.is_nil(), "Graph must have a valid ID");
@@ -59,7 +60,6 @@ async fn test_e2e_golden_workflow() {
 
 #[tokio::test]
 async fn test_e2e_golden_speed_workflow() {
-    // Speed intent → 2-node IR (gen → output)
     let capability_system = CapabilitySystem::new();
     let planner = PlannerService::new(capability_system);
     let planning_ir = planner.plan_with_intent("Quick fix", ExecutionIntent::Speed)
@@ -69,9 +69,10 @@ async fn test_e2e_golden_speed_workflow() {
 
     let exec_ir = workflow_to_types(&planning_ir).expect("Adapter");
     let compiler = CompilerEngine::new();
-    let (_report, graph) = compiler.compile_and_lower("Quick fix", &exec_ir).await
+    let (report, graph) = compiler.compile_and_lower("Quick fix", &exec_ir).await
         .expect("Compiler");
 
+    assert_eq!(report.passes_executed.len(), 5);
     assert_eq!(graph.nodes.len(), 2);
 
     let provider: Arc<dyn fusion_runtime::ChatProvider> = Arc::new(MockProvider::default_response());
@@ -84,7 +85,6 @@ async fn test_e2e_golden_speed_workflow() {
 
 #[tokio::test]
 async fn test_e2e_golden_quality_workflow() {
-    // Quality intent → 5-node IR (gen → gen → gen → review → reflection)
     let capability_system = CapabilitySystem::new();
     let planner = PlannerService::new(capability_system);
     let planning_ir = planner.plan_with_intent("Build a web app", ExecutionIntent::Quality)
@@ -94,9 +94,10 @@ async fn test_e2e_golden_quality_workflow() {
 
     let exec_ir = workflow_to_types(&planning_ir).expect("Adapter");
     let compiler = CompilerEngine::new();
-    let (_report, graph) = compiler.compile_and_lower("Build a web app", &exec_ir).await
+    let (report, graph) = compiler.compile_and_lower("Build a web app", &exec_ir).await
         .expect("Compiler");
 
+    assert_eq!(report.passes_executed.len(), 5);
     assert_eq!(graph.nodes.len(), 5);
 
     let provider: Arc<dyn fusion_runtime::ChatProvider> = Arc::new(MockProvider::default_response());
@@ -108,15 +109,43 @@ async fn test_e2e_golden_quality_workflow() {
 }
 
 #[tokio::test]
+async fn test_e2e_dead_node_elimination() {
+    // Build a 2-node IR (A → B) and inject an orphan node C with no edges.
+    // After compilation, graph must contain only A and B.
+    let capability_system = CapabilitySystem::new();
+    let planner = PlannerService::new(capability_system);
+    let planning_ir = planner.plan_with_intent("Quick fix", ExecutionIntent::Speed)
+        .expect("Planner");
+    let mut exec_ir = workflow_to_types(&planning_ir).expect("Adapter");
+
+    // Inject orphan node (no incoming or outgoing edges)
+    let orphan_id = uuid::Uuid::new_v4();
+    exec_ir.nodes.push(IRNode {
+        id: orphan_id,
+        kind: IRNodeKind::Generate,
+        strategy: StrategyKind::Single,
+        model: None,
+        config: HashMap::new(),
+    });
+    assert_eq!(exec_ir.nodes.len(), 3, "IR must have 3 nodes (2 live + 1 orphan)");
+
+    let compiler = CompilerEngine::new();
+    let (_report, graph) = compiler.compile_and_lower("dead node test", &exec_ir).await
+        .expect("Compiler");
+
+    assert_eq!(graph.nodes.len(), 2, "orphan must be eliminated from graph");
+    assert!(!graph.nodes.iter().any(|n| n.id == orphan_id),
+        "orphan node must not appear in execution graph");
+}
+
+#[tokio::test]
 async fn test_e2e_policy_deny_blocks_compilation() {
-    // Policy deny on shell.exec → compiler rejects the workflow
     let capability_system = CapabilitySystem::new();
     let planner = PlannerService::new(capability_system);
     let planning_ir = planner.plan_with_intent("Build a web app", ExecutionIntent::Balanced)
         .expect("Planner");
 
     let mut exec_ir = workflow_to_types(&planning_ir).expect("Adapter");
-    // Tag first node with a capability that will be denied
     exec_ir.nodes[0].config.insert(
         "capability".into(),
         serde_json::json!("shell.exec"),

@@ -680,8 +680,12 @@ impl CompilerPass for BudgetOptimisationPass {
 // Dead-node elimination (Phase 3.3)
 // ---------------------------------------------------------------------------
 
-/// Removes nodes unreachable from any root (nodes with no incoming edges).
-/// Edges referencing eliminated nodes are also removed.
+/// Removes nodes unreachable from any edge source.
+///
+/// **Root semantics:** roots are nodes that appear as `from` in at least one
+/// edge — NOT "nodes with no incoming edges." This means isolated nodes (no
+/// incoming or outgoing edges) are always eliminated when the graph has edges.
+/// Edgeless graphs (single-node templates, etc.) keep all nodes unchanged.
 pub struct DeadNodeEliminationPass;
 
 #[async_trait::async_trait]
