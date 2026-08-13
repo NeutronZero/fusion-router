@@ -55,7 +55,7 @@ async fn test_beta_zero_bypass_certification_journey() {
     for ep in &entry_points {
         let rec = execute_canonical_pipeline(ep, "Synthesize AST graph").await;
         assert!(rec.compiler_invoked, "Compiler MUST be invoked for entry point {ep}");
-        assert_eq!(rec.passes_count, 4);
+        assert_eq!(rec.passes_count, 5);
         records.push(rec);
     }
 

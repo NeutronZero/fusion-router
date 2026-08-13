@@ -37,7 +37,7 @@ async fn test_performance_slo_certification_suite() {
     let report = compiler.compile(prompt, &exec_ir).await.expect("Compile");
     let compiler_dur_ms = start_compiler.elapsed().as_millis();
     assert!(compiler_dur_ms < 20, "Compiler latency must be < 20ms (actual: {compiler_dur_ms}ms)");
-    assert_eq!(report.passes_executed.len(), 4);
+    assert_eq!(report.passes_executed.len(), 5);
 
     // 3. Replay Engine Latency SLO Target (< 20 ms)
     let record = ExecutionRecord {
@@ -48,7 +48,7 @@ async fn test_performance_slo_certification_suite() {
         ir_version: 1,
         graph_id: "g-slo".to_string(),
         provider_id: ProviderId("openrouter".to_string()),
-        passes_count: 4,
+        passes_count: 5,
         execution_time_ms: 10,
         estimated_cost: 0.001,
         compiler_invoked: true,

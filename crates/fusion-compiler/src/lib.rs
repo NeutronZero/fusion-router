@@ -12,6 +12,7 @@ use fusion_kernel::resource::StubResourceManager;
 use serde::{Deserialize, Serialize};
 
 pub mod passes;
+pub mod policy;
 
 /// Weights for sub-scores in the route scoring formula.
 const WEIGHT_CAPABILITY: f64 = 0.3;
@@ -47,6 +48,7 @@ pub struct CompilerPassDiff {
     pub input_nodes: usize,
     pub output_nodes: usize,
     pub transformation_summary: String,
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -396,6 +398,7 @@ impl CompilerEngine {
         let passes: Vec<Box<dyn CompilerPass>> = vec![
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
+            Box::new(DeadNodeEliminationPass),
             Box::new(ModelResolutionPass::new(ModelCatalog::default())),
             Box::new(BudgetOptimisationPass { resource_manager: resource_manager.clone() }),
         ];
@@ -407,10 +410,21 @@ impl CompilerEngine {
         let passes: Vec<Box<dyn CompilerPass>> = vec![
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
+            Box::new(DeadNodeEliminationPass),
             Box::new(ModelResolutionPass::new(model_catalog)),
             Box::new(BudgetOptimisationPass { resource_manager: rm.clone() }),
         ];
         Self { passes, resource_manager: rm }
+    }
+
+    /// Creates an engine with an empty pass list and the given resource manager.
+    pub fn with_resource_manager_custom(resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>) -> Self {
+        Self { passes: Vec::new(), resource_manager }
+    }
+
+    /// Appends a pass to the pipeline.
+    pub fn add_pass(&mut self, pass: Box<dyn CompilerPass>) {
+        self.passes.push(pass);
     }
 
     pub async fn compile(&self, intent: &str, ir: &WorkflowIR) -> Result<CompilerReport, PlatformError> {
@@ -430,6 +444,7 @@ impl CompilerEngine {
         for (idx, pass) in self.passes.iter().enumerate() {
             let pass_name = pass.name().to_string();
             let input_count = current_ir.nodes.len();
+            let pass_start = std::time::Instant::now();
             current_ir = pass.apply(current_ir).await.map_err(|e| {
                 PlatformError::Compiler {
                     code: "PASS_ERROR".to_string(),
@@ -438,6 +453,7 @@ impl CompilerEngine {
                 }
             })?;
             let output_count = current_ir.nodes.len();
+            let duration_ms = pass_start.elapsed().as_millis() as u64;
 
             pass_names.push(pass_name.clone());
             pass_diffs.push(CompilerPassDiff {
@@ -446,6 +462,7 @@ impl CompilerEngine {
                 input_nodes: input_count,
                 output_nodes: output_count,
                 transformation_summary: format!("Executed pass {pass_name}"),
+                duration_ms,
             });
         }
 
@@ -493,6 +510,7 @@ impl CompilerEngine {
         for (idx, pass) in self.passes.iter().enumerate() {
             let pass_name = pass.name().to_string();
             let input_count = current_ir.nodes.len();
+            let pass_start = std::time::Instant::now();
             current_ir = pass.apply(current_ir).await.map_err(|e| {
                 PlatformError::Compiler {
                     code: "PASS_ERROR".to_string(),
@@ -501,6 +519,7 @@ impl CompilerEngine {
                 }
             })?;
             let output_count = current_ir.nodes.len();
+            let duration_ms = pass_start.elapsed().as_millis() as u64;
 
             pass_names.push(pass_name.clone());
             pass_diffs.push(CompilerPassDiff {
@@ -509,6 +528,7 @@ impl CompilerEngine {
                 input_nodes: input_count,
                 output_nodes: output_count,
                 transformation_summary: format!("Executed pass {pass_name}"),
+                duration_ms,
             });
         }
 
@@ -657,6 +677,160 @@ impl CompilerPass for BudgetOptimisationPass {
 }
 
 // ---------------------------------------------------------------------------
+// Dead-node elimination (Phase 3.3)
+// ---------------------------------------------------------------------------
+
+/// Removes nodes unreachable from any root (nodes with no incoming edges).
+/// Edges referencing eliminated nodes are also removed.
+pub struct DeadNodeEliminationPass;
+
+#[async_trait::async_trait]
+impl CompilerPass for DeadNodeEliminationPass {
+    fn name(&self) -> &str { "dead_node_elimination" }
+
+    async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
+        if ir.nodes.is_empty() {
+            return Ok(ir);
+        }
+
+        // Collect node IDs for fast lookup
+        let node_ids: HashSet<uuid::Uuid> = ir.nodes.iter().map(|n| n.id).collect();
+
+        // If there are no edges, keep all nodes (nothing can be unreachable)
+        if ir.edges.is_empty() {
+            return Ok(ir);
+        }
+
+        // Roots = nodes that are sources of at least one edge.
+        // Isolated nodes (no incoming or outgoing edges) are NOT roots and will
+        // be eliminated when the graph has edges.
+        let roots: HashSet<uuid::Uuid> = ir.edges.iter().map(|e| e.from).collect();
+
+        // BFS from roots to find reachable nodes
+        let mut reachable: HashSet<uuid::Uuid> = HashSet::new();
+        let mut queue: std::collections::VecDeque<uuid::Uuid> = roots.into_iter().collect();
+        while let Some(current) = queue.pop_front() {
+            if !reachable.insert(current) {
+                continue;
+            }
+            for edge in &ir.edges {
+                if edge.from == current && !reachable.contains(&edge.to) {
+                    queue.push_back(edge.to);
+                }
+            }
+        }
+
+        // Filter nodes and edges
+        let live_nodes: Vec<IRNode> = ir.nodes.into_iter()
+            .filter(|n| reachable.contains(&n.id))
+            .collect();
+        let live_edges: Vec<IREdge> = ir.edges.into_iter()
+            .filter(|e| reachable.contains(&e.from) && reachable.contains(&e.to))
+            .collect();
+
+        Ok(WorkflowIR {
+            plan_id: ir.plan_id,
+            nodes: live_nodes,
+            edges: live_edges,
+            metadata: ir.metadata,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Policy pass (Phase 3)
+// ---------------------------------------------------------------------------
+
+pub struct PolicyCompilerPass {
+    policy_ir: policy::PolicyIR,
+}
+
+impl PolicyCompilerPass {
+    pub fn new(policy_ir: policy::PolicyIR) -> Self {
+        Self { policy_ir }
+    }
+}
+
+#[async_trait::async_trait]
+impl CompilerPass for PolicyCompilerPass {
+    fn name(&self) -> &str { "policy" }
+
+    async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
+        let mut new_nodes = ir.nodes.clone();
+        let mut new_edges = ir.edges.clone();
+        let mut trace = policy::PolicyTrace::new();
+        let mut inserted_gate_nodes = Vec::new();
+
+        for node in &ir.nodes {
+            // Symbol key resolution: config["capability"] > model > "general"
+            let symbol_key = node
+                .config
+                .get("capability")
+                .and_then(|v| v.as_str())
+                .or(node.model.as_deref())
+                .unwrap_or("general");
+
+            if let Some(rule) = policy::PolicyPrecedenceEngine::evaluate_matching_rule(&self.policy_ir, symbol_key) {
+                trace.record(policy::PolicyMatchEvent::RuleMatched {
+                    rule_id: rule.rule_id.clone(),
+                    symbol: symbol_key.to_string(),
+                    effect: rule.effect.clone(),
+                });
+
+                if rule.effect == policy::PolicyEffect::Deny {
+                    return Err(CompilerError::ValidationError {
+                        pass: "policy".into(),
+                        node_id: Some(node.id),
+                        message: format!(
+                            "Policy rule '{}' denies target '{}' (effect: deny); node {} cannot be compiled",
+                            rule.rule_id, rule.target_pattern, node.id
+                        ),
+                    });
+                }
+
+                if rule.effect == policy::PolicyEffect::Approval {
+                    // Idempotence: skip if a Gate already guards this node
+                    let already_guarded = new_edges.iter().any(|edge| {
+                        edge.to == node.id
+                            && new_nodes.iter().any(|n| n.id == edge.from && n.kind == IRNodeKind::Gate)
+                    });
+
+                    if !already_guarded {
+                        let gate_id = uuid::Uuid::new_v4();
+                        let gate_node = IRNode {
+                            id: gate_id,
+                            kind: IRNodeKind::Gate,
+                            strategy: StrategyKind::Single,
+                            model: Some("policy.approval_gate".into()),
+                            config: std::collections::HashMap::new(),
+                        };
+                        trace.record(policy::PolicyMatchEvent::NodeInserted {
+                            gate_id,
+                            target_node_id: node.id,
+                        });
+                        inserted_gate_nodes.push(gate_node);
+                        new_edges.push(IREdge {
+                            from: gate_id,
+                            to: node.id,
+                            condition: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        new_nodes.extend(inserted_gate_nodes);
+
+        Ok(WorkflowIR {
+            plan_id: ir.plan_id,
+            nodes: new_nodes,
+            edges: new_edges,
+            metadata: ir.metadata,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Scoring
 // ---------------------------------------------------------------------------
 
@@ -716,6 +890,35 @@ impl Compiler for DefaultCompiler {
             })?;
         Ok(graph)
     }
+}
+
+// ---------------------------------------------------------------------------
+// build_compiler factory (Phase 3.2)
+// ---------------------------------------------------------------------------
+
+/// Creates a `CompilerEngine` with the mandatory pass pipeline and an optional
+/// policy pass appended at the end.
+///
+/// Mandatory order (without policy):
+///   constraint_validation → control_flow_validation →
+///   dead_node_elimination → model_resolution → budget_optimisation
+///
+/// When `policy_ir` is `Some`, the policy pass is appended last.
+pub fn build_compiler(
+    model_catalog: ModelCatalog,
+    resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>,
+    policy_ir: Option<policy::PolicyIR>,
+) -> CompilerEngine {
+    let mut engine = CompilerEngine::with_resource_manager_custom(resource_manager.clone());
+    engine.add_pass(Box::new(ConstraintValidationPass));
+    engine.add_pass(Box::new(ControlFlowValidationPass));
+    engine.add_pass(Box::new(DeadNodeEliminationPass));
+    engine.add_pass(Box::new(ModelResolutionPass::new(model_catalog)));
+    engine.add_pass(Box::new(BudgetOptimisationPass { resource_manager }));
+    if let Some(ir) = policy_ir {
+        engine.add_pass(Box::new(PolicyCompilerPass::new(ir)));
+    }
+    engine
 }
 
 // ---------------------------------------------------------------------------
@@ -860,8 +1063,12 @@ mod tests {
         let engine = CompilerEngine::new();
         let ir = test_ir();
         let report = engine.compile("Code Generation", &ir).await.expect("Compile");
-        assert_eq!(report.passes_executed.len(), 4);
-        assert_eq!(report.pass_diffs.len(), 4);
+        assert_eq!(report.passes_executed.len(), 5);
+        assert_eq!(report.pass_diffs.len(), 5);
+        // Verify per-pass timing is non-negative
+        for diff in &report.pass_diffs {
+            assert!(diff.duration_ms >= 0, "pass {} duration must be >= 0", diff.pass_name);
+        }
     }
 
     #[test]
@@ -979,5 +1186,261 @@ mod tests {
         let (_report, graph) = engine.compile_and_lower("test", &ir).await.expect("compile_and_lower");
         assert_eq!(graph.nodes.len(), 1);
         assert_eq!(graph.nodes[0].model, "gpt-4o-mini", "model_resolution must fill model from catalog");
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3: PolicyCompilerPass tests
+    // -----------------------------------------------------------------------
+
+    fn policy_ir_with_deny(target: &str) -> policy::PolicyIR {
+        policy::PolicyIR {
+            rules: vec![policy::PolicyRule {
+                rule_id: "deny-shell".into(),
+                target_pattern: target.into(),
+                priority: 100,
+                effect: policy::PolicyEffect::Deny,
+                conditions: vec![],
+                actions: vec![],
+            }],
+        }
+    }
+
+    fn policy_ir_with_approval(target: &str) -> policy::PolicyIR {
+        policy::PolicyIR {
+            rules: vec![policy::PolicyRule {
+                rule_id: "approval-web".into(),
+                target_pattern: target.into(),
+                priority: 50,
+                effect: policy::PolicyEffect::Approval,
+                conditions: vec![],
+                actions: vec![],
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_policy_deny_blocks_compilation() {
+        let pass = PolicyCompilerPass::new(policy_ir_with_deny("shell.exec"));
+        let mut config = HashMap::new();
+        config.insert("capability".into(), serde_json::json!("shell.exec"));
+        let ir = WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: uuid::Uuid::new_v4(),
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: None,
+                config,
+            }],
+            edges: vec![],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+            },
+        };
+        let result = pass.apply(ir).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("deny"), "error should mention deny: {msg}");
+    }
+
+    #[tokio::test]
+    async fn test_policy_approval_injects_gate() {
+        let pass = PolicyCompilerPass::new(policy_ir_with_approval("web.fetch"));
+        let mut config = HashMap::new();
+        config.insert("capability".into(), serde_json::json!("web.fetch"));
+        let node_id = uuid::Uuid::new_v4();
+        let ir = WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: node_id,
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: None,
+                config,
+            }],
+            edges: vec![],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+            },
+        };
+        let result = pass.apply(ir).await.expect("pass should succeed");
+        // Should have 2 nodes (original + gate) and 1 edge (gate -> original)
+        assert_eq!(result.nodes.len(), 2);
+        assert_eq!(result.edges.len(), 1);
+        let gate = result.nodes.iter().find(|n| n.kind == IRNodeKind::Gate).unwrap();
+        assert_eq!(result.edges[0].from, gate.id);
+        assert_eq!(result.edges[0].to, node_id);
+    }
+
+    #[tokio::test]
+    async fn test_policy_unrelated_not_denied() {
+        let pass = PolicyCompilerPass::new(policy_ir_with_deny("shell.exec"));
+        let mut config = HashMap::new();
+        config.insert("capability".into(), serde_json::json!("web.fetch"));
+        let ir = WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: uuid::Uuid::new_v4(),
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: None,
+                config,
+            }],
+            edges: vec![],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+            },
+        };
+        let result = pass.apply(ir).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().nodes.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_policy_deny_outranks_approval() {
+        // Deny on same target should win even if approval has higher priority
+        let ir = policy::PolicyIR {
+            rules: vec![
+                policy::PolicyRule {
+                    rule_id: "approval-high".into(),
+                    target_pattern: "shell.exec".into(),
+                    priority: 100,
+                    effect: policy::PolicyEffect::Approval,
+                    conditions: vec![],
+                    actions: vec![],
+                },
+                policy::PolicyRule {
+                    rule_id: "deny-low".into(),
+                    target_pattern: "shell.exec".into(),
+                    priority: 1,
+                    effect: policy::PolicyEffect::Deny,
+                    conditions: vec![],
+                    actions: vec![],
+                },
+            ],
+        };
+        let pass = PolicyCompilerPass::new(ir);
+        let mut config = HashMap::new();
+        config.insert("capability".into(), serde_json::json!("shell.exec"));
+        let ir = WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: uuid::Uuid::new_v4(),
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: None,
+                config,
+            }],
+            edges: vec![],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+            },
+        };
+        let result = pass.apply(ir).await;
+        assert!(result.is_err(), "deny should win over approval");
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3: DeadNodeEliminationPass tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_dead_node_elimination_removes_unreachable() {
+        let pass = DeadNodeEliminationPass;
+        let id_a = uuid::Uuid::new_v4();
+        let id_b = uuid::Uuid::new_v4();
+        let id_orphan = uuid::Uuid::new_v4();
+        let ir = WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![
+                IRNode { id: id_a, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+                IRNode { id: id_b, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+                IRNode { id: id_orphan, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            ],
+            edges: vec![IREdge { from: id_a, to: id_b, condition: None }],
+            metadata: IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
+        };
+        let result = pass.apply(ir).await.expect("pass should succeed");
+        assert_eq!(result.nodes.len(), 2, "orphan node should be eliminated");
+        assert!(result.nodes.iter().all(|n| n.id != id_orphan));
+        assert_eq!(result.edges.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_dead_node_elimination_single_live_chain_unchanged() {
+        let pass = DeadNodeEliminationPass;
+        let id_a = uuid::Uuid::new_v4();
+        let id_b = uuid::Uuid::new_v4();
+        let ir = WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![
+                IRNode { id: id_a, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+                IRNode { id: id_b, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            ],
+            edges: vec![IREdge { from: id_a, to: id_b, condition: None }],
+            metadata: IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
+        };
+        let result = pass.apply(ir).await.expect("pass should succeed");
+        assert_eq!(result.nodes.len(), 2);
+        assert_eq!(result.edges.len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3: build_compiler factory tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_build_compiler_pass_order_without_policy() {
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(f64::INFINITY, u64::MAX));
+        let engine = build_compiler(ModelCatalog::default(), rm, None);
+        let names: Vec<&str> = engine.passes.iter().map(|p| p.name()).collect();
+        assert_eq!(names, vec![
+            "constraint_validation",
+            "control_flow_validation",
+            "dead_node_elimination",
+            "model_resolution",
+            "budget_optimisation",
+        ]);
+    }
+
+    #[test]
+    fn test_build_compiler_appends_policy_when_provided() {
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(f64::INFINITY, u64::MAX));
+        let policy = policy_ir_with_deny("shell.exec");
+        let engine = build_compiler(ModelCatalog::default(), rm, Some(policy));
+        let names: Vec<&str> = engine.passes.iter().map(|p| p.name()).collect();
+        assert_eq!(names.len(), 6);
+        assert_eq!(names[5], "policy");
+    }
+
+    #[tokio::test]
+    async fn test_build_compiler_deny_blocks_through_factory() {
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(f64::INFINITY, u64::MAX));
+        let engine = build_compiler(ModelCatalog::default(), rm, Some(policy_ir_with_deny("shell.exec")));
+        let mut config = HashMap::new();
+        config.insert("capability".into(), serde_json::json!("shell.exec"));
+        let ir = WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: uuid::Uuid::new_v4(),
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: None,
+                config,
+            }],
+            edges: vec![],
+            metadata: IRMetadata { policy_applied: vec![], estimated_cost: 0.01, estimated_tokens: 100 },
+        };
+        let result = engine.compile("test", &ir).await;
+        assert!(result.is_err(), "deny policy should block compilation through factory");
     }
 }

@@ -28,8 +28,8 @@ async fn test_beta_compiler_inspector_journey() {
     assert_eq!(report.provider_comparison[0].status, "Alternative");
     assert!(report.provider_comparison[0].reason.contains("Tied with"));
 
-    // 3. Tab 3: Compiler Pass Explorer & Pass Diffs (4 passes in Phase 2a)
-    assert_eq!(report.pass_diffs.len(), 4);
+    // 3. Tab 3: Compiler Pass Explorer & Pass Diffs (5 passes in Phase 3)
+    assert_eq!(report.pass_diffs.len(), 5);
     assert_eq!(report.pass_diffs[0].pass_name, "constraint_validation");
 
     // 4. Multi-dimensional Score Verification

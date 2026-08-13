@@ -32,7 +32,7 @@ async fn test_beta_chat_end_to_end_orchestration_journey() {
     let report = compiler.compile(prompt, &exec_ir).await.expect("Compile workflow");
 
     assert_eq!(report.intent, prompt);
-    assert_eq!(report.passes_executed.len(), 4);
+    assert_eq!(report.passes_executed.len(), 5);
 
     // 3. Explain Route Verification
     let explain_scores = report.route_scores;
