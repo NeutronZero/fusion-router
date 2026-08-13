@@ -68,7 +68,7 @@ pub trait CompilerPass: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait Compiler: Send + Sync {
-    async fn compile(&self, ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError>;
+    async fn compile(&self, ir: &WorkflowIR) -> Result<ExecutionGraph, CompilerError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -708,13 +708,13 @@ impl Default for DefaultCompiler {
 
 #[async_trait::async_trait]
 impl Compiler for DefaultCompiler {
-    async fn compile(&self, ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
-        let report = self.engine.compile("Default Compilation", &ir).await
+    async fn compile(&self, ir: &WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
+        let (_report, graph) = self.engine.compile_and_lower("Default Compilation", ir).await
             .map_err(|e| CompilerError::PassError {
                 pass: "compile".into(),
                 message: e.to_string(),
             })?;
-        lower_to_graph(ir)
+        Ok(graph)
     }
 }
 
@@ -951,5 +951,33 @@ mod tests {
         let ir = test_ir();
         let result = pass.apply(ir).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_model_resolution_fills_model_after_compile_and_lower() {
+        let engine = CompilerEngine::with_model_catalog(ModelCatalog {
+            code: "deepseek-chat".into(),
+            fast: "gpt-4o-mini".into(),
+            ..ModelCatalog::default()
+        });
+        let ir = WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![IRNode {
+                id: uuid::Uuid::new_v4(),
+                kind: IRNodeKind::Generate,
+                strategy: StrategyKind::Single,
+                model: None,
+                config: HashMap::new(),
+            }],
+            edges: vec![],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                estimated_cost: 0.01,
+                estimated_tokens: 100,
+            },
+        };
+        let (_report, graph) = engine.compile_and_lower("test", &ir).await.expect("compile_and_lower");
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.nodes[0].model, "gpt-4o-mini", "model_resolution must fill model from catalog");
     }
 }
