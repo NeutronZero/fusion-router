@@ -204,6 +204,26 @@ impl WorkQueue {
             .map(|edges| edges.iter().any(|(_, cond)| cond.as_deref() == Some("loop")))
             .unwrap_or(false)
     }
+
+    /// Returns the loop node reached from `node_id` via a `"loop"`-conditioned
+    /// edge, if any (used to re-arm a loop body after an iteration).
+    pub fn loop_back_target(&self, node_id: uuid::Uuid) -> Option<uuid::Uuid> {
+        self.outgoing.get(&node_id)
+            .and_then(|edges| {
+                edges
+                    .iter()
+                    .find(|(_, cond)| cond.as_deref() == Some("loop"))
+                    .map(|(to, _)| *to)
+            })
+    }
+
+    /// Re-arms a node for execution (used to re-run a loop node).
+    pub fn reset_ready(&mut self, node_id: uuid::Uuid) {
+        self.completed.remove(&node_id);
+        self.in_progress.remove(&node_id);
+        self.failed.remove(&node_id);
+        self.ready.insert(node_id);
+    }
 }
 
 #[cfg(test)]

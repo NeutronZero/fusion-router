@@ -11,8 +11,9 @@ fusion-api-internal = { path = "../fusion-api-internal" }
 fusion-placement = { path = "../fusion-placement" }
 async-trait = "0.1"
 serde_json = "1"
-tokio = { version = "1", features = ["time"] }
-chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["time", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 

@@ -2,15 +2,27 @@
 //!
 //! The `WorkQueue` maintains execution state and provides ready-node selection.
 //! The `DefaultScheduler` runs a DAG to completion using an `Executor` trait.
+//!
+//! Phase 6.3 parity: the execution loop is a port of the monolith's
+//! `src/scheduler/default.rs::run_inner` semantic contract —
+//! cancellation (loop-head check + per-node `select!`), `Conditional` edge
+//! activation from node output, `Loop` continue/exit (`"exit"`-conditioned
+//! edges), loop-back iteration caps (`max_iterations` on the loop node), and
+//! per-token cost accounting. Retry/fallback stay in the executor
+//! (`fusion_runtime::ProviderExecutor`), not the scheduler.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
 use fusion_types::*;
 use fusion_core::PlatformError;
+use tokio_util::sync::CancellationToken;
 
 pub mod work_queue;
 pub use work_queue::WorkQueue;
+
+const COST_PER_INPUT_TOKEN: f64 = 0.002 / 1000.0;
+const COST_PER_OUTPUT_TOKEN: f64 = 0.01 / 1000.0;
 
 /// Trait for executing a single node. Implementors provide the actual
 /// LLM/provider dispatch. The scheduler calls this for each ready node,
@@ -25,6 +37,7 @@ pub trait Executor: Send + Sync {
 pub struct ExecutionOutcome {
     pub success: bool,
     pub outputs: HashMap<uuid::Uuid, serde_json::Value>,
+    pub node_states: HashMap<uuid::Uuid, NodeState>,
     pub total_latency_ms: u64,
     pub total_cost: f64,
     pub total_tokens: u64,
@@ -50,14 +63,57 @@ impl DefaultScheduler {
         graph: Arc<ExecutionGraph>,
         executor: &dyn Executor,
     ) -> Result<ExecutionOutcome, PlatformError> {
+        self.run_inner(graph, executor, None).await
+    }
+
+    /// Execute a graph with client cancellation. The loop checks the token
+    /// before each batch and races every node execution against it (biased);
+    /// a cancelled node produces `Failed("Cancelled by client")`, and a
+    /// cancelled loop-head returns `PlatformError::Scheduler`.
+    pub async fn run_with_cancellation(
+        &self,
+        graph: Arc<ExecutionGraph>,
+        executor: &dyn Executor,
+        cancellation_token: &CancellationToken,
+    ) -> Result<ExecutionOutcome, PlatformError> {
+        self.run_inner(graph, executor, Some(cancellation_token)).await
+    }
+
+    async fn run_inner(
+        &self,
+        graph: Arc<ExecutionGraph>,
+        executor: &dyn Executor,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<ExecutionOutcome, PlatformError> {
         let mut queue = WorkQueue::new(graph.clone());
         let mut node_states: HashMap<uuid::Uuid, NodeState> = HashMap::new();
         let mut outputs: HashMap<uuid::Uuid, serde_json::Value> = HashMap::new();
         let start = std::time::Instant::now();
         let mut total_cost: f64 = 0.0;
         let mut total_tokens: u64 = 0;
+        let mut loop_iterations: HashMap<uuid::Uuid, u32> = HashMap::new();
+
+        // Frozen graph: node positions never change, so an id -> index map
+        // turns repeated linear scans into O(1) lookups.
+        let node_index: HashMap<uuid::Uuid, usize> = graph
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id, i))
+            .collect();
 
         loop {
+            if let Some(token) = cancel {
+                if token.is_cancelled() {
+                    tracing::info!("Cancellation requested; aborting scheduler loop");
+                    return Err(PlatformError::Scheduler {
+                        code: "CANCELLED".into(),
+                        message: "Request cancelled by client".into(),
+                        recovery_suggestion: "Retry the request with a fresh cancellation token".into(),
+                    });
+                }
+            }
+
             if queue.is_done(&node_states) {
                 break;
             }
@@ -103,9 +159,26 @@ impl DefaultScheduler {
                 };
 
                 let executor_ref = executor;
+                let cancel_token = cancel.cloned();
                 handles.push(async move {
-                    let result = executor_ref.execute_node(&node, &ctx).await;
-                    (node.id, result)
+                    if let Some(token) = cancel_token {
+                        tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                (node.id, NodeExecutionResult {
+                                    state: NodeState::Failed("Cancelled by client".into()),
+                                    usage: None,
+                                    latency_ms: 0,
+                                    output: None,
+                                })
+                            }
+                            result = executor_ref.execute_node(&node, &ctx) => {
+                                (node.id, result)
+                            }
+                        }
+                    } else {
+                        (node.id, executor_ref.execute_node(&node, &ctx).await)
+                    }
                 });
             }
 
@@ -114,17 +187,97 @@ impl DefaultScheduler {
                 let (node_id, result) = handle.await;
                 match result.state {
                     NodeState::Succeeded => {
-                        queue.mark_completed(node_id);
+                        tracing::info!(node_id = ?node_id, latency_ms = result.latency_ms, "Node succeeded");
                         node_states.insert(node_id, NodeState::Succeeded);
-                        if let Some(output) = result.output {
-                            outputs.insert(node_id, output);
-                        }
+                        let output_val = result.output.unwrap_or(serde_json::Value::Null);
+                        outputs.insert(node_id, output_val.clone());
+
                         if let Some(ref usage) = result.usage {
                             total_tokens += usage.total_tokens as u64;
-                            total_cost += usage.total_tokens as f64 * 0.000001;
+                            total_cost += usage.prompt_tokens as f64 * COST_PER_INPUT_TOKEN
+                                + usage.completion_tokens as f64 * COST_PER_OUTPUT_TOKEN;
+                        }
+
+                        let node_kind = queue.graph().nodes.get(node_index[&node_id]).map(|n| n.kind.clone());
+
+                        match node_kind {
+                            Some(ExecutionNodeKind::Conditional) => {
+                                queue.mark_conditional_completed(node_id);
+                                let result_val = outputs.get(&node_id)
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("true");
+                                let matched_targets: Vec<uuid::Uuid> = queue.outgoing_edges(node_id).iter()
+                                    .filter(|e| match e.condition.as_deref() {
+                                        Some(cond) => cond == result_val,
+                                        None => true,
+                                    })
+                                    .map(|e| e.to)
+                                    .collect();
+                                for to in matched_targets {
+                                    queue.activate_edge(node_id, to);
+                                }
+                            }
+                            Some(ExecutionNodeKind::Loop) => {
+                                queue.mark_completed(node_id);
+                                let should_continue = outputs.get(&node_id)
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                if should_continue {
+                                    let body_ids: Vec<uuid::Uuid> = queue.outgoing_edges(node_id).iter()
+                                        .filter(|e| e.condition.as_deref() != Some("exit"))
+                                        .map(|e| e.to)
+                                        .collect();
+                                    for &body_id in &body_ids {
+                                        node_states.insert(body_id, NodeState::Pending);
+                                    }
+                                    queue.reset_loop_body(&body_ids);
+                                } else {
+                                    let exit_targets: Vec<uuid::Uuid> = queue.outgoing_edges(node_id).iter()
+                                        .filter(|e| e.condition.as_deref() == Some("exit"))
+                                        .map(|e| e.to)
+                                        .collect();
+                                    for to in exit_targets {
+                                        queue.activate_edge(node_id, to);
+                                    }
+                                }
+                            }
+                            _ => {
+                                queue.mark_completed(node_id);
+                                if queue.has_loop_back_edge(node_id) {
+                                    if let Some(loop_node_id) = queue.loop_back_target(node_id) {
+                                        let iter_count = loop_iterations.entry(loop_node_id).or_insert(0);
+                                        let max_iters = queue.graph().nodes[node_index[&loop_node_id]]
+                                            .config
+                                            .get("max_iterations")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(10) as u32;
+                                        if *iter_count < max_iters {
+                                            *iter_count += 1;
+                                            tracing::info!(
+                                                loop_node_id = ?loop_node_id,
+                                                iteration = *iter_count,
+                                                max = max_iters,
+                                                "Loop iteration"
+                                            );
+                                            let body_ids: Vec<uuid::Uuid> = queue.outgoing_edges(loop_node_id).iter()
+                                                .filter(|e| e.condition.as_deref() != Some("exit"))
+                                                .map(|e| e.to)
+                                                .collect();
+                                            for &body_id in &body_ids {
+                                                node_states.insert(body_id, NodeState::Pending);
+                                            }
+                                            queue.reset_loop_body(&body_ids);
+                                            node_states.insert(loop_node_id, NodeState::Pending);
+                                            queue.reset_ready(loop_node_id);
+                                            queue.activate_edge(node_id, loop_node_id);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     NodeState::Failed(msg) => {
+                        tracing::info!(node_id = ?node_id, reason = %msg, latency_ms = result.latency_ms, "Node failed");
                         queue.mark_failed(node_id);
                         node_states.insert(node_id, NodeState::Failed(msg));
                     }
@@ -147,6 +300,7 @@ impl DefaultScheduler {
         Ok(ExecutionOutcome {
             success,
             outputs,
+            node_states,
             total_latency_ms,
             total_cost,
             total_tokens,
@@ -456,5 +610,331 @@ mod tests {
         let (parent_id, parent_output) = captured.unwrap();
         assert_eq!(parent_id, n1, "parent output must be from n1");
         assert_eq!(parent_output["child"], "done", "parent sees child output in graph_outputs");
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 6.3 parity: monolith `run_inner` semantics
+    // -----------------------------------------------------------------------
+
+    struct RecordingExecutor {
+        executed: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingExecutor {
+        fn new() -> Self {
+            Self { executed: std::sync::Mutex::new(Vec::new()) }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.executed.lock().unwrap().clone()
+        }
+    }
+
+    impl RecordingExecutor {
+        fn node_node(id: uuid::Uuid, kind: ExecutionNodeKind, model: &str) -> ExecutionNode {
+            ExecutionNode {
+                id,
+                kind,
+                strategy: StrategyKind::Single,
+                model: model.into(),
+                retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                fallback: None,
+                config: HashMap::new(),
+                subgraph: None,
+            }
+        }
+
+        fn graph_of(nodes: Vec<ExecutionNode>, edges: Vec<ExecutionEdge>) -> Arc<ExecutionGraph> {
+            Arc::new(ExecutionGraph {
+                graph_id: uuid::Uuid::new_v4(),
+                nodes,
+                edges,
+                metadata: GraphMetadata {
+                    estimated_cost: 0.0,
+                    estimated_tokens: 0,
+                    max_depth: 4,
+                    node_count: 0,
+                },
+                total_tokens: 0,
+                total_cost: 0,
+                primitive_graph_hash: 0,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_conditional_activates_only_matching_edge() {
+        struct CondExecutor(Arc<RecordingExecutor>);
+        #[async_trait]
+        impl Executor for CondExecutor {
+            async fn execute_node(&self, node: &ExecutionNode, _ctx: &NodeExecContext) -> NodeExecutionResult {
+                let out = if node.model == "cond" {
+                    serde_json::json!("allow")
+                } else {
+                    serde_json::json!("done")
+                };
+                self.0.executed.lock().unwrap().push(node.model.clone());
+                NodeExecutionResult {
+                    state: NodeState::Succeeded,
+                    usage: None,
+                    latency_ms: 1,
+                    output: Some(out),
+                }
+            }
+        }
+
+        let cond = uuid::Uuid::new_v4();
+        let yes = uuid::Uuid::new_v4();
+        let no = uuid::Uuid::new_v4();
+        let recorder = Arc::new(RecordingExecutor::new());
+        let graph = RecordingExecutor::graph_of(
+            vec![
+                RecordingExecutor::node_node(cond, ExecutionNodeKind::Conditional, "cond"),
+                RecordingExecutor::node_node(yes, ExecutionNodeKind::LLMGenerate, "yes-branch"),
+                RecordingExecutor::node_node(no, ExecutionNodeKind::LLMGenerate, "no-branch"),
+            ],
+            vec![
+                ExecutionEdge { from: cond, to: yes, condition: Some("allow".into()) },
+                ExecutionEdge { from: cond, to: no, condition: Some("deny".into()) },
+            ],
+        );
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler.run(graph, &CondExecutor(recorder.clone())).await.unwrap();
+        let calls = recorder.calls();
+        assert!(calls.contains(&"cond".to_string()));
+        assert!(calls.contains(&"yes-branch".to_string()), "matched branch must run");
+        assert!(!calls.contains(&"no-branch".to_string()), "unmatched branch must not run");
+        // Monolith parity: an un-taken conditional branch stays Pending, so
+        // `success` requires every node Succeeded/Skipped and is false here.
+        assert!(!outcome.success, "un-taken branch must not complete the graph");
+        assert!(matches!(outcome.node_states.get(&yes), Some(NodeState::Succeeded)));
+    }
+
+    #[tokio::test]
+    async fn test_loop_continue_then_exit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let loop_calls = Arc::new(AtomicUsize::new(0));
+        let body_calls = Arc::new(AtomicUsize::new(0));
+        let exit_calls = Arc::new(AtomicUsize::new(0));
+
+        struct LoopExecutor {
+            loop_calls: Arc<AtomicUsize>,
+            body_calls: Arc<AtomicUsize>,
+            exit_calls: Arc<AtomicUsize>,
+        }
+        #[async_trait]
+        impl Executor for LoopExecutor {
+            async fn execute_node(&self, node: &ExecutionNode, _ctx: &NodeExecContext) -> NodeExecutionResult {
+                if node.model == "loop" {
+                    self.loop_calls.fetch_add(1, Ordering::SeqCst);
+                    let first = self.loop_calls.load(Ordering::SeqCst) == 1;
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!(first)),
+                    }
+                } else if node.model == "body" {
+                    self.body_calls.fetch_add(1, Ordering::SeqCst);
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!("iterated")),
+                    }
+                } else {
+                    self.exit_calls.fetch_add(1, Ordering::SeqCst);
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!("exit-reached")),
+                    }
+                }
+            }
+        }
+
+        let loop_id = uuid::Uuid::new_v4();
+        let body = uuid::Uuid::new_v4();
+        let exit = uuid::Uuid::new_v4();
+        let mut loop_node = RecordingExecutor::node_node(loop_id, ExecutionNodeKind::Loop, "loop");
+        loop_node.config.insert("max_iterations".into(), serde_json::json!(3));
+        let graph = RecordingExecutor::graph_of(
+            vec![loop_node, RecordingExecutor::node_node(body, ExecutionNodeKind::LLMGenerate, "body"), RecordingExecutor::node_node(exit, ExecutionNodeKind::LLMGenerate, "exit-node")],
+            vec![
+                ExecutionEdge { from: loop_id, to: body, condition: None },
+                ExecutionEdge { from: loop_id, to: exit, condition: Some("exit".into()) },
+                ExecutionEdge { from: body, to: loop_id, condition: Some("loop".into()) },
+            ],
+        );
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler.run(graph, &LoopExecutor {
+            loop_calls: loop_calls.clone(),
+            body_calls: body_calls.clone(),
+            exit_calls: exit_calls.clone(),
+        }).await.unwrap();
+        assert!(outcome.success);
+        // Monolith parity: the loop node re-runs once for the initial pass plus
+        // one re-arm per loop-back iteration (`max_iterations`), for a total of
+        // `max_iterations + 1` executions; the exit branch is taken once.
+        assert_eq!(loop_calls.load(Ordering::SeqCst), 4, "loop runs initial pass + 3 loop-backs");
+        assert_eq!(body_calls.load(Ordering::SeqCst), 4, "body runs once per loop execution");
+        assert_eq!(exit_calls.load(Ordering::SeqCst), 1, "exit branch taken once");
+    }
+
+    #[tokio::test]
+    async fn test_loop_back_respects_max_iterations() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let loop_calls = Arc::new(AtomicUsize::new(0));
+
+        struct BackExecutor(Arc<AtomicUsize>);
+        #[async_trait]
+        impl Executor for BackExecutor {
+            async fn execute_node(&self, node: &ExecutionNode, _ctx: &NodeExecContext) -> NodeExecutionResult {
+                if node.model == "body" {
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!("always-continue")),
+                    }
+                } else {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!(true)),
+                    }
+                }
+            }
+        }
+
+        let loop_id = uuid::Uuid::new_v4();
+        let body = uuid::Uuid::new_v4();
+        let mut loop_node = RecordingExecutor::node_node(loop_id, ExecutionNodeKind::Loop, "loop");
+        loop_node.config.insert("max_iterations".into(), serde_json::json!(2));
+        let graph = RecordingExecutor::graph_of(
+            vec![loop_node, RecordingExecutor::node_node(body, ExecutionNodeKind::LLMGenerate, "body")],
+            vec![
+                ExecutionEdge { from: loop_id, to: body, condition: None },
+                ExecutionEdge { from: body, to: loop_id, condition: Some("loop".into()) },
+            ],
+        );
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler.run(graph, &BackExecutor(loop_calls.clone())).await.unwrap();
+        assert!(outcome.success);
+        // Monolith parity: `max_iterations` loop-backs plus the initial pass.
+        assert_eq!(loop_calls.load(Ordering::SeqCst), 3, "loop runs initial pass + 2 loop-backs before the cap stops re-arming");
+    }
+
+    #[tokio::test]
+    async fn test_cancellation_before_run_errors() {
+        let node = uuid::Uuid::new_v4();
+        let graph = RecordingExecutor::graph_of(
+            vec![RecordingExecutor::node_node(node, ExecutionNodeKind::LLMGenerate, "n")],
+            vec![],
+        );
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let scheduler = DefaultScheduler::new();
+        let err = scheduler.run_with_cancellation(graph, &MockExecutor, &token).await;
+        assert!(matches!(err, Err(PlatformError::Scheduler { code, .. }) if code == "CANCELLED"));
+    }
+
+    #[tokio::test]
+    async fn test_cancellation_mid_run_fails_pending_nodes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        let started = Arc::new(AtomicUsize::new(0));
+
+        struct SlowExecutor {
+            started: Arc<AtomicUsize>,
+        }
+        #[async_trait]
+        impl Executor for SlowExecutor {
+            async fn execute_node(&self, _node: &ExecutionNode, _ctx: &NodeExecContext) -> NodeExecutionResult {
+                self.started.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                NodeExecutionResult {
+                    state: NodeState::Succeeded,
+                    usage: None,
+                    latency_ms: 0,
+                    output: Some(serde_json::json!("late")),
+                }
+            }
+        }
+
+        let n1 = uuid::Uuid::new_v4();
+        let n2 = uuid::Uuid::new_v4();
+        let graph = RecordingExecutor::graph_of(
+            vec![
+                RecordingExecutor::node_node(n1, ExecutionNodeKind::LLMGenerate, "n1"),
+                RecordingExecutor::node_node(n2, ExecutionNodeKind::LLMGenerate, "n2"),
+            ],
+            vec![],
+        );
+
+        let token = CancellationToken::new();
+        let scheduler = DefaultScheduler::new();
+        let executor = SlowExecutor { started: started.clone() };
+        let handle = tokio::spawn({
+            let token = token.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                token.cancel();
+            }
+        });
+        let outcome = scheduler.run_with_cancellation(graph, &executor, &token).await;
+        handle.await.unwrap();
+
+        assert!(started.load(Ordering::SeqCst) >= 1, "slow node must have started");
+        match outcome {
+            Err(PlatformError::Scheduler { code, .. }) => assert_eq!(code, "CANCELLED"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(outcome) => {
+                assert!(!outcome.success, "cancelled nodes must not yield success");
+                assert!(
+                    outcome.node_states.values().any(|s| matches!(s, NodeState::Failed(m) if m == "Cancelled by client")),
+                    "pending in-flight nodes must be failed with the cancellation message"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cost_uses_per_token_rates() {
+        struct PricingExecutor;
+        #[async_trait]
+        impl Executor for PricingExecutor {
+            async fn execute_node(&self, _node: &ExecutionNode, _ctx: &NodeExecContext) -> NodeExecutionResult {
+                NodeExecutionResult {
+                    state: NodeState::Succeeded,
+                    usage: Some(Usage {
+                        prompt_tokens: 1000,
+                        completion_tokens: 500,
+                        total_tokens: 1500,
+                    }),
+                    latency_ms: 1,
+                    output: Some(serde_json::json!("ok")),
+                }
+            }
+        }
+
+        let node = uuid::Uuid::new_v4();
+        let graph = RecordingExecutor::graph_of(
+            vec![RecordingExecutor::node_node(node, ExecutionNodeKind::LLMGenerate, "n")],
+            vec![],
+        );
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler.run(graph, &PricingExecutor).await.unwrap();
+        let expected = 1000.0 * COST_PER_INPUT_TOKEN + 500.0 * COST_PER_OUTPUT_TOKEN;
+        assert!((outcome.total_cost - expected).abs() < 1e-12, "cost must use per-token rates: {} vs {}", outcome.total_cost, expected);
+        assert_eq!(outcome.total_tokens, 1500);
     }
 }
