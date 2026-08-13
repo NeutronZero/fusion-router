@@ -6,6 +6,7 @@
 //! - `RuntimeEngine` that integrates scheduler + provider
 
 use async_trait::async_trait;
+use fusion_kernel::resource::ResourceManager;
 use fusion_scheduler::{DefaultScheduler, Executor, ExecutionOutcome};
 use fusion_types::{
     ExecutionGraph, ExecutionNode, ExecutionNodeKind, NodeExecContext, NodeExecutionResult,
@@ -165,6 +166,9 @@ pub struct ProviderExecutor {
     provider: Arc<dyn ChatProvider>,
     tools: ToolRegistry,
     allow_auto_exec: bool,
+    /// Optional budget envelope (Phase 4.6). When set, each node's provider
+    /// calls are gated by `can_afford` and actual usage is recorded.
+    resource_manager: Option<Arc<dyn ResourceManager>>,
 }
 
 impl ProviderExecutor {
@@ -173,6 +177,7 @@ impl ProviderExecutor {
             provider,
             tools: ToolRegistry::new(),
             allow_auto_exec: false,
+            resource_manager: None,
         }
     }
 
@@ -183,6 +188,11 @@ impl ProviderExecutor {
 
     pub fn with_allow_auto_exec(mut self, allow: bool) -> Self {
         self.allow_auto_exec = allow;
+        self
+    }
+
+    pub fn with_resource_manager(mut self, rm: Arc<dyn ResourceManager>) -> Self {
+        self.resource_manager = Some(rm);
         self
     }
 
@@ -381,6 +391,9 @@ impl ProviderExecutor {
     /// Tool results are appended as a `tool` message and the loop repeats
     /// until the provider returns plain content or `max_tool_iterations` is
     /// reached.
+    ///
+    /// When a `resource_manager` is attached, every provider call is gated by
+    /// `can_afford` and actual usage is recorded on success (Phase 4.6).
     async fn roundtrip(&self, node: &ExecutionNode, request: ChatRequest) -> Result<ChatResponse, String> {
         let max_iterations = node
             .config
@@ -390,7 +403,32 @@ impl ProviderExecutor {
         let mut request = request;
 
         for iteration in 0..=max_iterations {
+            if let Some(rm) = &self.resource_manager {
+                let estimated_cost = node
+                    .config
+                    .get("budget_estimated_cost")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.001);
+                let estimated_tokens = node
+                    .config
+                    .get("budget_estimated_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                if !rm.can_afford(estimated_cost, estimated_tokens).await {
+                    return Err(format!(
+                        "budget exceeded for node {}: cannot afford estimated \
+                         cost {estimated_cost} / tokens {estimated_tokens}",
+                        node.id
+                    ));
+                }
+            }
+
             let response = self.provider.chat_completion(&request).await?;
+            if let Some(rm) = &self.resource_manager {
+                if let Some(usage) = &response.usage {
+                    rm.record_usage(0, usage.total_tokens as u64).await;
+                }
+            }
             if response.tool_calls.is_empty() {
                 return Ok(response);
             }
@@ -554,6 +592,7 @@ pub struct RuntimeEngine {
     provider: Arc<dyn ChatProvider>,
     tools: ToolRegistry,
     allow_auto_exec: bool,
+    resource_manager: Option<Arc<dyn ResourceManager>>,
 }
 
 impl RuntimeEngine {
@@ -563,6 +602,7 @@ impl RuntimeEngine {
             provider,
             tools: ToolRegistry::new(),
             allow_auto_exec: false,
+            resource_manager: None,
         }
     }
 
@@ -572,6 +612,7 @@ impl RuntimeEngine {
             provider,
             tools: ToolRegistry::new(),
             allow_auto_exec: false,
+            resource_manager: None,
         }
     }
 
@@ -587,12 +628,20 @@ impl RuntimeEngine {
         self
     }
 
+    /// Attaches an optional budget envelope (Phase 4.6). Each node's provider
+    /// calls are gated by `can_afford`; actual usage is recorded on success.
+    pub fn with_resource_manager(mut self, rm: Arc<dyn ResourceManager>) -> Self {
+        self.resource_manager = Some(rm);
+        self
+    }
+
     /// Execute a full execution graph to completion.
     pub async fn run(&self, graph: Arc<ExecutionGraph>) -> Result<ExecutionOutcome, String> {
         let executor = ProviderExecutor {
             provider: self.provider.clone(),
             tools: self.tools.clone(),
             allow_auto_exec: self.allow_auto_exec,
+            resource_manager: self.resource_manager.clone(),
         };
         self.scheduler.run(graph, &executor).await.map_err(|e| format!("{:?}", e))
     }
@@ -1110,11 +1159,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_calls_fail_closed_when_auto_exec_disabled() {
-        let executor = ProviderExecutor {
-            provider: Arc::new(ToolingProvider::new()),
-            tools: ToolRegistry::default(),
-            allow_auto_exec: false,
-        };
+        let executor = ProviderExecutor::new(Arc::new(ToolingProvider::new()));
         let node = tool_node(HashMap::new());
         let result = executor.execute_node(&node, &NodeExecContext::default()).await;
         assert!(
@@ -1128,11 +1173,9 @@ mod tests {
     async fn test_tool_not_in_allowlist_fails_closed() {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
-        let executor = ProviderExecutor {
-            provider: Arc::new(ToolingProvider::new()),
-            tools,
-            allow_auto_exec: true,
-        };
+        let executor = ProviderExecutor::new(Arc::new(ToolingProvider::new()))
+            .with_tools(tools)
+            .with_allow_auto_exec(true);
         let node = tool_node(HashMap::new());
         let result = executor.execute_node(&node, &NodeExecContext::default()).await;
         assert!(
@@ -1144,11 +1187,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_not_registered_fails_closed() {
-        let executor = ProviderExecutor {
-            provider: Arc::new(ToolingProvider::new()),
-            tools: ToolRegistry::default(),
-            allow_auto_exec: true,
-        };
+        let executor = ProviderExecutor::new(Arc::new(ToolingProvider::new()))
+            .with_allow_auto_exec(true);
         let node = tool_node(HashMap::from([(
             "tool_allowlist".to_string(),
             serde_json::json!(["echo"]),
@@ -1166,11 +1206,9 @@ mod tests {
         let provider = Arc::new(ToolingProvider::new());
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
-        let executor = ProviderExecutor {
-            provider: provider.clone(),
-            tools,
-            allow_auto_exec: true,
-        };
+        let executor = ProviderExecutor::new(provider.clone())
+            .with_tools(tools)
+            .with_allow_auto_exec(true);
         let node = tool_node(HashMap::from([(
             "tool_allowlist".to_string(),
             serde_json::json!(["echo"]),
@@ -1207,11 +1245,9 @@ mod tests {
 
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
-        let executor = ProviderExecutor {
-            provider: Arc::new(InfiniteToolProvider),
-            tools,
-            allow_auto_exec: true,
-        };
+        let executor = ProviderExecutor::new(Arc::new(InfiniteToolProvider))
+            .with_tools(tools)
+            .with_allow_auto_exec(true);
         let node = tool_node(HashMap::from([(
             "tool_allowlist".to_string(),
             serde_json::json!(["echo"]),
@@ -1222,6 +1258,289 @@ mod tests {
             "infinite tool loop must be capped, got {:?}",
             result.state
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4.6: runtime budget envelope (light)
+    // -----------------------------------------------------------------------
+
+    fn make_chain_graph(models: &[&str], config: HashMap<String, serde_json::Value>) -> Arc<ExecutionGraph> {
+        let node_ids: Vec<uuid::Uuid> = models.iter().map(|_| uuid::Uuid::new_v4()).collect();
+        Arc::new(ExecutionGraph {
+            graph_id: uuid::Uuid::new_v4(),
+            nodes: node_ids
+                .iter()
+                .zip(models)
+                .map(|(id, model)| ExecutionNode {
+                    id: *id,
+                    kind: ExecutionNodeKind::LLMGenerate,
+                    strategy: StrategyKind::Single,
+                    model: (*model).into(),
+                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    fallback: None,
+                    config: config.clone(),
+                    subgraph: None,
+                })
+                .collect(),
+            edges: node_ids.windows(2).map(|w| ExecutionEdge { from: w[0], to: w[1], condition: None }).collect(),
+            metadata: GraphMetadata {
+                estimated_cost: 0.01,
+                estimated_tokens: 200,
+                max_depth: node_ids.len() as u32,
+                node_count: node_ids.len() as u32,
+            },
+            total_tokens: 200,
+            total_cost: 10,
+            primitive_graph_hash: 0,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_tight_quota_fails_mid_run() {
+        use fusion_kernel::resource::{ResourceManager, StubResourceManager};
+
+        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(1.0, 100));
+        let provider: Arc<dyn ChatProvider> = Arc::new(MockProvider::default_response());
+        let engine = RuntimeEngine::new(provider).with_resource_manager(rm.clone());
+        // Each node estimates 75 tokens; the stub records 75 actual tokens.
+        // Node 1 passes (0+75 <= 100), node 2 busts the quota (75+75 > 100).
+        let graph = make_chain_graph(
+            &["n1", "n2"],
+            HashMap::from([("budget_estimated_tokens".to_string(), serde_json::json!(75))]),
+        );
+        let outcome = engine.run(graph).await.expect("run");
+        assert!(!outcome.success, "tight quota must fail the run");
+        assert_eq!(outcome.outputs.len(), 1, "only n1 must succeed");
+        assert_eq!(rm.spent_tokens(), 75, "only n1's tokens recorded");
+    }
+
+    #[tokio::test]
+    async fn test_generous_quota_allows_run() {
+        use fusion_kernel::resource::{ResourceManager, StubResourceManager};
+
+        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(1.0, 10_000));
+        let provider: Arc<dyn ChatProvider> = Arc::new(MockProvider::default_response());
+        let engine = RuntimeEngine::new(provider).with_resource_manager(rm.clone());
+        let graph = make_chain_graph(
+            &["n1", "n2"],
+            HashMap::from([("budget_estimated_tokens".to_string(), serde_json::json!(75))]),
+        );
+        let outcome = engine.run(graph).await.expect("run");
+        assert!(outcome.success);
+        assert_eq!(outcome.outputs.len(), 2);
+        assert_eq!(rm.spent_tokens(), 150, "both nodes' usage recorded");
+    }
+
+    #[tokio::test]
+    async fn test_budget_error_reports_node_and_quota() {
+        use fusion_kernel::resource::{ResourceManager, StubResourceManager};
+
+        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(1.0, 100));
+        let executor = ProviderExecutor::new(Arc::new(MockProvider::default_response()))
+            .with_resource_manager(rm);
+        let node = ExecutionNode {
+            id: uuid::Uuid::new_v4(),
+            kind: ExecutionNodeKind::LLMGenerate,
+            strategy: StrategyKind::Single,
+            model: "n".into(),
+            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            fallback: None,
+            config: HashMap::from([("budget_estimated_tokens".to_string(), serde_json::json!(101))]),
+            subgraph: None,
+        };
+        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        assert!(
+            matches!(&result.state, NodeState::Failed(msg) if msg.contains("budget exceeded")),
+            "quota miss must fail the node with a clear message, got {:?}",
+            result.state
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4.7: E2E golden extensions (engine-level)
+    // -----------------------------------------------------------------------
+
+    /// Provider that records every request it receives.
+    struct RecordingProvider {
+        requests: std::sync::Mutex<Vec<ChatRequest>>,
+    }
+
+    impl RecordingProvider {
+        fn new() -> Self {
+            Self { requests: std::sync::Mutex::new(Vec::new()) }
+        }
+
+        fn requests(&self) -> Vec<ChatRequest> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl ChatProvider for RecordingProvider {
+        async fn chat_completion(&self, request: &ChatRequest) -> Result<ChatResponse, String> {
+            self.requests.lock().unwrap().push(request.clone());
+            Ok(ChatResponse {
+                content: format!("mock response for model {}", request.model),
+                usage: Some(Usage { prompt_tokens: 50, completion_tokens: 25, total_tokens: 75 }),
+                tool_calls: vec![],
+            })
+        }
+    }
+
+    /// Golden 4.7.1: a balanced chain — every node after the first must see
+    /// prior outputs in its request messages (parent propagation E2E).
+    #[tokio::test]
+    async fn test_golden_parent_chain_context_propagation() {
+        let provider = Arc::new(RecordingProvider::new());
+        let engine = RuntimeEngine::new(provider.clone());
+        let graph = make_chain_graph(&["n1", "n2", "n3"], HashMap::new());
+        let outcome = engine.run(graph).await.expect("run");
+        assert!(outcome.success);
+        assert_eq!(outcome.outputs.len(), 3);
+
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 3, "each of 3 nodes calls the provider once");
+        let n2 = requests.iter().find(|r| r.model == "n2").expect("n2 request");
+        let n3 = requests.iter().find(|r| r.model == "n3").expect("n3 request");
+        assert!(
+            n2.messages.iter().any(|m| m.content.contains("mock response for model n1")),
+            "n2 must see n1's output, got {:?}",
+            n2.messages
+        );
+        assert!(
+            n3.messages.iter().any(|m| m.content.contains("mock response for model n2")),
+            "n3 must see n2's output, got {:?}",
+            n3.messages
+        );
+    }
+
+    /// Golden 4.7.2: flaky mock — run succeeds through retries.
+    #[tokio::test]
+    async fn test_golden_retry_recovers_mid_run() {
+        let provider = Arc::new(FlakyProvider::new(2));
+        let engine = RuntimeEngine::new(provider.clone());
+        let n1 = uuid::Uuid::new_v4();
+        let graph = Arc::new(ExecutionGraph {
+            graph_id: uuid::Uuid::new_v4(),
+            nodes: vec![ExecutionNode {
+                id: n1,
+                kind: ExecutionNodeKind::LLMGenerate,
+                strategy: StrategyKind::Single,
+                model: "flaky".into(),
+                retry_policy: RetryPolicy { max_retries: 3, backoff_ms: 0 },
+                fallback: None,
+                config: HashMap::new(),
+                subgraph: None,
+            }],
+            edges: vec![],
+            metadata: GraphMetadata {
+                estimated_cost: 0.01,
+                estimated_tokens: 100,
+                max_depth: 1,
+                node_count: 1,
+            },
+            total_tokens: 100,
+            total_cost: 10,
+            primitive_graph_hash: 0,
+        });
+        let outcome = engine.run(graph).await.expect("run");
+        assert!(outcome.success, "retries must recover from flaky provider");
+        assert_eq!(provider.attempt_count(), 3, "2 failures + 1 success");
+    }
+
+    /// Golden 4.7.3: approval Gate in the path — run succeeds without an LLM
+    /// call on the gate node.
+    #[tokio::test]
+    async fn test_golden_gate_path_runs_without_llm_on_gate() {
+        let provider = Arc::new(SpyProvider::new());
+        let engine = RuntimeEngine::new(provider.clone());
+        let n1 = uuid::Uuid::new_v4();
+        let n2 = uuid::Uuid::new_v4();
+        let graph = Arc::new(ExecutionGraph {
+            graph_id: uuid::Uuid::new_v4(),
+            nodes: vec![
+                ExecutionNode {
+                    id: n1,
+                    kind: ExecutionNodeKind::LLMGenerate,
+                    strategy: StrategyKind::Single,
+                    model: "gen".into(),
+                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    fallback: None,
+                    config: HashMap::new(),
+                    subgraph: None,
+                },
+                ExecutionNode {
+                    id: n2,
+                    kind: ExecutionNodeKind::Gate,
+                    strategy: StrategyKind::Single,
+                    model: "policy.approval_gate".into(),
+                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    fallback: None,
+                    config: HashMap::from([(
+                        "approval_policy".to_string(),
+                        serde_json::json!("requires_review"),
+                    )]),
+                    subgraph: None,
+                },
+            ],
+            edges: vec![ExecutionEdge { from: n1, to: n2, condition: None }],
+            metadata: GraphMetadata {
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+                max_depth: 2,
+                node_count: 2,
+            },
+            total_tokens: 0,
+            total_cost: 0,
+            primitive_graph_hash: 0,
+        });
+        let outcome = engine.run(graph).await.expect("run");
+        assert!(outcome.success, "gate must not fail the run");
+        let last = provider.last_request().expect("generation node must call provider");
+        assert_eq!(last.model, "gen", "gate must NOT call the LLM provider");
+    }
+
+    /// Golden 4.7.4: hand-built multi-member subgraph — judge output present
+    /// in the final node output.
+    #[tokio::test]
+    async fn test_golden_subgraph_judge_output_present() {
+        let provider = Arc::new(RecordingProvider::new());
+        let engine = RuntimeEngine::new(provider.clone());
+        let (node, _) = make_consensus_subgraph();
+        let graph = Arc::new(ExecutionGraph {
+            graph_id: uuid::Uuid::new_v4(),
+            nodes: vec![node],
+            edges: vec![],
+            metadata: GraphMetadata {
+                estimated_cost: 0.0,
+                estimated_tokens: 0,
+                max_depth: 1,
+                node_count: 1,
+            },
+            total_tokens: 0,
+            total_cost: 0,
+            primitive_graph_hash: 0,
+        });
+        let outcome = engine.run(graph).await.expect("run");
+        assert!(outcome.success);
+        let output = outcome.outputs.values().next().expect("one node output");
+        assert_eq!(output.get("subgraph").and_then(|v| v.as_bool()), Some(true));
+        let exit_node_id = output.get("exit_node_id").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(!exit_node_id.is_empty(), "judge (exit node) id must be present");
+    }
+
+    /// Golden 4.7.5: tool deny-by-default — a tool call is never executed when
+    /// auto-exec is off, even if allowlisted.
+    #[tokio::test]
+    async fn test_golden_tool_deny_by_default() {
+        let provider: Arc<dyn ChatProvider> = Arc::new(ToolingProvider::new());
+        let engine = RuntimeEngine::new(provider); // auto_exec off (default)
+        let graph = make_chain_graph(
+            &["tool-node"],
+            HashMap::from([("tool_allowlist".to_string(), serde_json::json!(["echo"]))]),
+        );
+        let outcome = engine.run(graph).await.expect("run");
+        assert!(!outcome.success, "tool call must fail closed when auto-exec off");
     }
 }
 
