@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod passes;
 pub mod policy;
+pub mod score;
+pub mod strategy_expansion;
 
 /// Weights for sub-scores in the route scoring formula.
 const WEIGHT_CAPABILITY: f64 = 0.3;
@@ -327,7 +329,7 @@ pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
     let mut exec_edges = Vec::new();
 
     for ir_node in &ir.nodes {
-        exec_nodes.push(ExecutionNode {
+        let mut node = ExecutionNode {
             id: ir_node.id,
             kind: match ir_node.kind {
                 IRNodeKind::Generate => ExecutionNodeKind::LLMGenerate,
@@ -350,7 +352,11 @@ pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
             fallback: None,
             config: ir_node.config.clone(),
             subgraph: None,
-        });
+        };
+        // Phase 3.5: attach prebuilt subgraph for non-Single strategies so the
+        // Phase 4 runtime subgraph path is the production path for Consensus.
+        node.subgraph = strategy_expansion::expanded_subgraph(&node);
+        exec_nodes.push(node);
     }
 
     for ir_edge in &ir.edges {
@@ -387,6 +393,7 @@ pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
 pub struct CompilerEngine {
     passes: Vec<Box<dyn CompilerPass>>,
     resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>,
+    score_sources: score::ScoreSources,
 }
 
 impl CompilerEngine {
@@ -402,7 +409,7 @@ impl CompilerEngine {
             Box::new(ModelResolutionPass::new(ModelCatalog::default())),
             Box::new(BudgetOptimisationPass { resource_manager: resource_manager.clone() }),
         ];
-        Self { passes, resource_manager }
+        Self { passes, resource_manager, score_sources: score::ScoreSources::default() }
     }
 
     pub fn with_model_catalog(model_catalog: ModelCatalog) -> Self {
@@ -414,12 +421,18 @@ impl CompilerEngine {
             Box::new(ModelResolutionPass::new(model_catalog)),
             Box::new(BudgetOptimisationPass { resource_manager: rm.clone() }),
         ];
-        Self { passes, resource_manager: rm }
+        Self { passes, resource_manager: rm, score_sources: score::ScoreSources::default() }
     }
 
     /// Creates an engine with an empty pass list and the given resource manager.
     pub fn with_resource_manager_custom(resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>) -> Self {
-        Self { passes: Vec::new(), resource_manager }
+        Self { passes: Vec::new(), resource_manager, score_sources: score::ScoreSources::default() }
+    }
+
+    /// Replaces the pluggable route scorers (defaults are static/offline).
+    pub fn with_score_sources(mut self, score_sources: score::ScoreSources) -> Self {
+        self.score_sources = score_sources;
+        self
     }
 
     /// Appends a pass to the pipeline.
@@ -469,9 +482,9 @@ impl CompilerEngine {
         let compilation_time_ms = compile_start.elapsed().as_millis() as u64;
 
         let route_scores = vec![
-            self.explain_route("openrouter"),
-            self.explain_route("zen"),
-            self.explain_route("ollama"),
+            self.explain_route("openrouter", intent, &current_ir).await,
+            self.explain_route("zen", intent, &current_ir).await,
+            self.explain_route("ollama", intent, &current_ir).await,
         ];
 
         let provider_comparison = Self::build_provider_comparison(&route_scores);
@@ -535,9 +548,9 @@ impl CompilerEngine {
         let compilation_time_ms = compile_start.elapsed().as_millis() as u64;
 
         let route_scores = vec![
-            self.explain_route("openrouter"),
-            self.explain_route("zen"),
-            self.explain_route("ollama"),
+            self.explain_route("openrouter", intent, &current_ir).await,
+            self.explain_route("zen", intent, &current_ir).await,
+            self.explain_route("ollama", intent, &current_ir).await,
         ];
 
         let provider_comparison = Self::build_provider_comparison(&route_scores);
@@ -559,12 +572,39 @@ impl CompilerEngine {
         }, graph))
     }
 
-    pub fn explain_route(&self, provider_name: &str) -> ExplainRouteScore {
-        let capability_score: Option<f64> = None;
-        let budget_score: Option<f64> = Some(1.0);
-        let latency_score: Option<f64> = None;
-        let health_score: Option<f64> = None;
-        let policy_score: Option<f64> = None;
+    /// Computes the multi-dimensional route score for a provider.
+    ///
+    /// Each sub-score comes from the pluggable `ScoreSources` (static and
+    /// offline by default); a missing scorer contributes `None` and
+    /// `compute_total_score` renormalizes over the available weights. The
+    /// budget score is `1.0` when the resource manager can afford the IR.
+    pub async fn explain_route(
+        &self,
+        provider_name: &str,
+        intent: &str,
+        ir: &WorkflowIR,
+    ) -> ExplainRouteScore {
+        let capability_score = match &self.score_sources.capability {
+            Some(scorer) => scorer.score(provider_name, intent).await,
+            None => None,
+        };
+        let health_score = match &self.score_sources.health {
+            Some(scorer) => scorer.score(provider_name).await,
+            None => None,
+        };
+        let latency_score = match &self.score_sources.latency {
+            Some(scorer) => scorer.score(provider_name).await,
+            None => None,
+        };
+        let policy_score = match &self.score_sources.policy {
+            Some(scorer) => scorer.score(provider_name, ir).await,
+            None => None,
+        };
+        let budget_score = if self.resource_manager.can_afford(ir.metadata.estimated_cost, ir.metadata.estimated_tokens).await {
+            Some(1.0)
+        } else {
+            Some(0.0)
+        };
 
         let total_score = compute_total_score(
             capability_score, WEIGHT_CAPABILITY,
@@ -1075,13 +1115,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_total_score_computed_from_available_scores() {
+    #[tokio::test]
+    async fn test_total_score_computed_from_available_scores() {
         let engine = CompilerEngine::new();
-        let score = engine.explain_route("openrouter");
+        let score = engine.explain_route("openrouter", "general question", &test_ir()).await;
         assert_eq!(score.provider_name, "openrouter");
         assert_eq!(score.budget_score, Some(1.0));
-        assert_eq!(score.total_score, 1.0);
+        assert!(score.capability_score.is_some(), "default engine must produce a capability score");
+        assert!(score.health_score.is_some(), "default engine must produce a health score");
+        // cap 0.9*0.3 + bud 1.0*0.25 + lat 0.6*0.2 + hea 1.0*0.15 + pol 1.0*0.1
+        assert!((score.total_score - 0.89).abs() < 1e-9, "total was {}", score.total_score);
+        assert!(score.total_score < 1.0, "multi-dimensional score must not tie at 1.0");
     }
 
     #[test]
@@ -1096,18 +1140,27 @@ mod tests {
         assert!((total - 0.72).abs() < 1e-10);
     }
 
-    #[test]
-    fn test_provider_comparison_sorted_by_score() {
+    #[tokio::test]
+    async fn test_provider_comparison_sorted_by_score() {
         let engine = CompilerEngine::new();
+        let ir = test_ir();
         let scores = vec![
-            engine.explain_route("ollama"),
-            engine.explain_route("openrouter"),
-            engine.explain_route("zen"),
+            engine.explain_route("ollama", "general question", &ir).await,
+            engine.explain_route("openrouter", "general question", &ir).await,
+            engine.explain_route("zen", "general question", &ir).await,
         ];
         let comparison = CompilerEngine::build_provider_comparison(&scores);
         assert_eq!(comparison.len(), 3);
-        assert_eq!(comparison[0].status, "Alternative");
-        assert!(comparison[0].reason.contains("Tied with 2 other provider(s) at 1.00"));
+        // Default static tables differentiate: zen > openrouter > ollama
+        assert_eq!(comparison[0].provider_name, "zen");
+        assert_eq!(comparison[0].status, "Selected");
+        assert_eq!(comparison[1].status, "Alternative");
+        assert_eq!(comparison[2].status, "Filtered");
+        assert!(
+            comparison[0].total_score > comparison[1].total_score
+                && comparison[1].total_score > comparison[2].total_score,
+            "totals must be differentiated, not all tied at 1.0"
+        );
     }
 
     #[test]
@@ -1446,5 +1499,66 @@ mod tests {
         };
         let result = engine.compile("test", &ir).await;
         assert!(result.is_err(), "deny policy should block compilation through factory");
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 5: route scoring
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_default_engine_scores_not_all_tied() {
+        let engine = CompilerEngine::new();
+        let ir = test_ir();
+        let scores: Vec<ExplainRouteScore> = vec![
+            engine.explain_route("openrouter", "general question", &ir).await,
+            engine.explain_route("zen", "general question", &ir).await,
+            engine.explain_route("ollama", "general question", &ir).await,
+        ];
+        let totals: Vec<f64> = scores.iter().map(|s| s.total_score).collect();
+        assert!(totals.iter().any(|t| *t < 1.0), "no provider may tie at 1.0 by default");
+        assert!(
+            scores.iter().all(|s| s.capability_score.is_some() && s.health_score.is_some()),
+            "default engine must produce ≥1 non-budget score for every provider"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_missing_scorer_renormalizes_weights() {
+        let engine = CompilerEngine::new().with_score_sources(score::ScoreSources {
+            latency: None,
+            ..score::ScoreSources::default()
+        });
+        let score = engine.explain_route("openrouter", "general question", &test_ir()).await;
+        assert_eq!(score.latency_score, None, "removed scorer must yield None");
+        // cap 0.9*0.3 + bud 1.0*0.25 + hea 1.0*0.15 + pol 1.0*0.1 over 0.8 weight
+        assert!((score.total_score - 0.9625).abs() < 1e-9, "total was {}", score.total_score);
+    }
+
+    #[tokio::test]
+    async fn test_policy_deny_scorer_zeroes_provider_total() {
+        let engine = CompilerEngine::new().with_score_sources(score::ScoreSources {
+            policy: Some(Arc::new(score::StaticPolicyScorer::deny(&["openrouter"]))),
+            ..score::ScoreSources::default()
+        });
+        let ir = test_ir();
+        let denied = engine.explain_route("openrouter", "general question", &ir).await;
+        let allowed = engine.explain_route("zen", "general question", &ir).await;
+        assert_eq!(denied.policy_score, Some(0.0));
+        assert_eq!(allowed.policy_score, Some(1.0));
+        assert!(denied.total_score < allowed.total_score);
+    }
+
+    #[tokio::test]
+    async fn test_report_route_scores_carry_capability() {
+        let engine = CompilerEngine::new();
+        let report = engine.compile("Code Generation", &test_ir()).await.expect("Compile");
+        assert_eq!(report.route_scores.len(), 3);
+        for score in &report.route_scores {
+            assert!(score.capability_score.is_some(), "report must carry capability scores");
+        }
+        // "Code Generation" intent boosts openrouter capability
+        let openrouter = report.route_scores.iter().find(|s| s.provider_name == "openrouter").unwrap();
+        let cap = openrouter.capability_score.expect("capability score");
+        assert!((cap - 0.95).abs() < 1e-9, "expected 0.95, got {cap}");
     }
 }
