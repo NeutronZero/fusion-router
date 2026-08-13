@@ -11,21 +11,21 @@ pub struct ConnectorMetrics {
 
 fn safe_gauge_vec(name: &str, help: &str, labels: &[&str]) -> GaugeVec {
     let opts = prometheus::Opts::new(name, help);
-    let gauge = GaugeVec::new(opts, labels).unwrap();
+    let gauge = GaugeVec::new(opts, labels).expect("valid static gauge vec opts");
     let _ = prometheus::default_registry().register(Box::new(gauge.clone()));
     gauge
 }
 
 fn safe_histogram_vec(name: &str, help: &str, labels: &[&str]) -> HistogramVec {
     let opts = prometheus::HistogramOpts::new(name, help);
-    let hist = HistogramVec::new(opts, labels).unwrap();
+    let hist = HistogramVec::new(opts, labels).expect("valid static histogram vec opts");
     let _ = prometheus::default_registry().register(Box::new(hist.clone()));
     hist
 }
 
 fn safe_int_counter_vec(name: &str, help: &str, labels: &[&str]) -> IntCounterVec {
     let opts = prometheus::Opts::new(name, help);
-    let counter = IntCounterVec::new(opts, labels).unwrap();
+    let counter = IntCounterVec::new(opts, labels).expect("valid static counter vec opts");
     let _ = prometheus::default_registry().register(Box::new(counter.clone()));
     counter
 }

@@ -455,15 +455,14 @@ fn score_output(task: &TaskDef, output: &str, judge_provider: Option<&dyn ChatPr
             }
         }
         ScoringMethod::NumericTolerance => {
-            let gt = task
-                .ground_truth
-                .as_ref()
-                .expect("numeric_tolerance requires ground_truth");
-            let expected_val: f64 = gt
-                .value()
-                .as_ref()
-                .and_then(|v| v.parse().ok())
-                .expect("ground_truth.value must be a number");
+            let gt = match task.ground_truth.as_ref() {
+                Some(gt) => gt,
+                None => return (0.0, RunStatus::ScoreError),
+            };
+            let expected_val: f64 = match gt.value().as_ref().and_then(|v| v.parse().ok()) {
+                Some(v) => v,
+                None => return (0.0, RunStatus::ScoreError),
+            };
             let tolerance = gt.tolerance();
             let parsed: Option<f64> = trimmed.parse().ok();
             match parsed {
@@ -472,10 +471,10 @@ fn score_output(task: &TaskDef, output: &str, judge_provider: Option<&dyn ChatPr
             }
         }
         ScoringMethod::ContainsCheck => {
-            let gt = task
-                .ground_truth
-                .as_ref()
-                .expect("contains_check requires ground_truth");
+            let gt = match task.ground_truth.as_ref() {
+                Some(gt) => gt,
+                None => return (0.0, RunStatus::ScoreError),
+            };
             let mut score = 1.0;
             if let Some(must) = gt.must_contain() {
                 for s in must {
@@ -1584,13 +1583,14 @@ async fn main() -> Result<()> {
     print_report(&reports);
 
     // Write raw results to JSON
-    let output_path = cli.suite.parent().unwrap().join("results.json");
+    let output_dir = cli.suite.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let output_path = output_dir.join("results.json");
     let results_json = serde_json::to_string_pretty(&all_results)?;
     std::fs::write(&output_path, &results_json)?;
     println!("Raw results written to: {}", output_path.display());
 
     // Write report to JSON
-    let report_path = cli.suite.parent().unwrap().join("report.json");
+    let report_path = output_dir.join("report.json");
     let report_json = serde_json::to_string_pretty(&reports)?;
     std::fs::write(&report_path, &report_json)?;
     println!("Report written to: {}", report_path.display());

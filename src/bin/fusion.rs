@@ -155,9 +155,10 @@ async fn main() {
             }
             GatesCmd::Explain { id } => {
                 let gate_id = GateId::from_str(&id).unwrap_or_else(|| {
-                    panic!(
+                    eprintln!(
                         "Invalid gate ID: {id}. Valid IDs: SDK-1, RPL-1, UPG-1, DET-1, PLG-1, STR-1, PRV-1, CON-1"
-                    )
+                    );
+                    std::process::exit(1);
                 });
                 let output = commands::gates::explain_gate(&runner, gate_id);
                 println!("{output}");
@@ -168,11 +169,17 @@ async fn main() {
                     baseline_version: None,
                 };
                 let policy_def = match policy {
-                    Some(p) => load_policy_from_yaml(&p).unwrap_or_else(|e| panic!("{e}")),
+                    Some(p) => load_policy_from_yaml(&p).unwrap_or_else(|e| {
+                        eprintln!("Failed to load policy: {e}");
+                        std::process::exit(1);
+                    }),
                     None => PolicyDefinition::default_policy(),
                 };
                 let waiver_set = match waivers {
-                    Some(w) => load_waivers_from_yaml(&w).unwrap_or_else(|e| panic!("{e}")),
+                    Some(w) => load_waivers_from_yaml(&w).unwrap_or_else(|e| {
+                        eprintln!("Failed to load waivers: {e}");
+                        std::process::exit(1);
+                    }),
                     None => WaiverSet::default(),
                 };
 

@@ -18,21 +18,21 @@ pub struct FusionMetrics {
 
 fn safe_int_counter(name: &str, help: &str) -> IntCounter {
     let opts = prometheus::Opts::new(name, help);
-    let counter = IntCounter::with_opts(opts).unwrap();
+    let counter = IntCounter::with_opts(opts).expect("valid static counter opts");
     let _ = prometheus::default_registry().register(Box::new(counter.clone()));
     counter
 }
 
 fn safe_int_counter_vec(name: &str, help: &str, labels: &[&str]) -> IntCounterVec {
     let opts = prometheus::Opts::new(name, help);
-    let counter = IntCounterVec::new(opts, labels).unwrap();
+    let counter = IntCounterVec::new(opts, labels).expect("valid static counter vec opts");
     let _ = prometheus::default_registry().register(Box::new(counter.clone()));
     counter
 }
 
 fn safe_histogram_vec(name: &str, help: &str, labels: &[&str]) -> HistogramVec {
     let opts = prometheus::HistogramOpts::new(name, help);
-    let hist = HistogramVec::new(opts, labels).unwrap();
+    let hist = HistogramVec::new(opts, labels).expect("valid static histogram vec opts");
     let _ = prometheus::default_registry().register(Box::new(hist.clone()));
     hist
 }
@@ -90,7 +90,7 @@ pub fn render_metrics() -> String {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
     let mut buffer = Vec::new();
-    encoder.encode(&metric_families, &mut buffer).unwrap();
+    let _ = encoder.encode(&metric_families, &mut buffer);
     String::from_utf8(buffer).unwrap_or_default()
 }
 

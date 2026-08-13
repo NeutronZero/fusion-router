@@ -68,7 +68,7 @@ pub fn execute_build(project_dir: &Path, output_dir: &Path) -> Result<PathBuf, S
         .map_err(|e| format!("Failed to add manifest: {e}"))?;
 
     let mut wasm_header = tar::Header::new_gnu();
-    wasm_header.set_path("module.wasm").unwrap();
+    wasm_header.set_path("module.wasm").map_err(|e| format!("Failed to set header path: {e}"))?;
     wasm_header.set_size(wasm_bytes.len() as u64);
     wasm_header.set_mode(0o444);
     wasm_header.set_cksum();
@@ -77,7 +77,7 @@ pub fn execute_build(project_dir: &Path, output_dir: &Path) -> Result<PathBuf, S
         .map_err(|e| format!("Failed to add module: {e}"))?;
 
     let mut attestation_header = tar::Header::new_gnu();
-    attestation_header.set_path("attestation.json").unwrap();
+    attestation_header.set_path("attestation.json").map_err(|e| format!("Failed to set header path: {e}"))?;
     attestation_header.set_size(attestation.len() as u64);
     attestation_header.set_mode(0o444);
     attestation_header.set_cksum();
@@ -95,7 +95,7 @@ pub fn execute_build(project_dir: &Path, output_dir: &Path) -> Result<PathBuf, S
 fn try_strip_wasm(path: &Path) -> PathBuf {
     let tmp = path.with_extension("stripped.wasm");
     let status = Command::new("wasm-strip")
-        .args([path.to_str().unwrap(), tmp.to_str().unwrap()])
+        .args([path.to_string_lossy().as_ref(), tmp.to_string_lossy().as_ref()])
         .status();
     match status {
         Ok(s) if s.success() => tmp,
@@ -106,7 +106,7 @@ fn try_strip_wasm(path: &Path) -> PathBuf {
 fn try_wasm_opt(path: &Path, project_dir: &Path) -> PathBuf {
     let tmp = project_dir.join("target/optimized.wasm");
     let status = Command::new("wasm-opt")
-        .args(["-O2", path.to_str().unwrap(), "-o", tmp.to_str().unwrap()])
+        .args(["-O2", path.to_string_lossy().as_ref(), "-o", tmp.to_string_lossy().as_ref()])
         .status();
     match status {
         Ok(s) if s.success() => tmp,

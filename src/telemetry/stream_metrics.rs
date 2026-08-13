@@ -15,14 +15,14 @@ pub struct StreamMetrics {
 
 fn safe_int_counter(name: &str, help: &str) -> IntCounter {
     let opts = prometheus::Opts::new(name, help);
-    let counter = IntCounter::with_opts(opts).unwrap();
+    let counter = IntCounter::with_opts(opts).expect("valid static counter opts");
     let _ = prometheus::default_registry().register(Box::new(counter.clone()));
     counter
 }
 
 fn safe_histogram(name: &str, help: &str, buckets: Vec<f64>) -> Histogram {
     let opts = prometheus::HistogramOpts::new(name, help).buckets(buckets);
-    let hist = Histogram::with_opts(opts).unwrap();
+    let hist = Histogram::with_opts(opts).expect("valid static histogram opts");
     let _ = prometheus::default_registry().register(Box::new(hist.clone()));
     hist
 }
