@@ -36,16 +36,6 @@ impl Executor for MockExecutor {
             output: Some(serde_json::Value::String(text)),
         }
     }
-
-    async fn resolve_strategy(&self, _node: &ExecutionNode) -> ExecutionSubgraph {
-        let dummy_id = Uuid::new_v4();
-        ExecutionSubgraph {
-            nodes: vec![],
-            edges: vec![],
-            entry_node_id: dummy_id,
-            exit_node_id: dummy_id,
-        }
-    }
 }
 
 #[tokio::test]

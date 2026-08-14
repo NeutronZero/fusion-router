@@ -3,13 +3,12 @@ use async_trait::async_trait;
 pub mod capability_executor;
 mod fusion_bridge;
 mod node_exec;
-mod strategy_resolver;
 mod tool_loop;
 
 pub use fusion_bridge::{connect_tools, FusionChatProvider, FusionTool};
 pub use node_exec::DefaultExecutor;
 
-use crate::types::{ExecutionNode, ExecutionSubgraph, NodeExecContext, NodeExecutionResult};
+use crate::types::{ExecutionNode, NodeExecContext, NodeExecutionResult};
 
 #[async_trait]
 pub trait Executor: Send + Sync {
@@ -18,7 +17,6 @@ pub trait Executor: Send + Sync {
         node: &ExecutionNode,
         ctx: &NodeExecContext,
     ) -> NodeExecutionResult;
-    async fn resolve_strategy(&self, node: &ExecutionNode) -> ExecutionSubgraph;
 }
 
 #[cfg(test)]
@@ -121,6 +119,13 @@ mod tests {
         }
     }
 
+    fn make_llm_node_with_subgraph(strategy: StrategyKind) -> ExecutionNode {
+        use fusion_compiler::strategy_expansion::expanded_subgraph;
+        let mut node = make_llm_node(strategy.clone());
+        node.subgraph = expanded_subgraph(&node);
+        node
+    }
+
     fn make_judge_node(strategy: StrategyKind) -> ExecutionNode {
         ExecutionNode {
             id: Uuid::new_v4(),
@@ -137,50 +142,46 @@ mod tests {
         }
     }
 
+    fn make_judge_node_with_subgraph(strategy: StrategyKind) -> ExecutionNode {
+        use fusion_compiler::strategy_expansion::expanded_subgraph;
+        let mut node = make_judge_node(strategy.clone());
+        node.subgraph = expanded_subgraph(&node);
+        node
+    }
+
     #[tokio::test]
     async fn test_debate_string_roles_lower_to_real_subgraph() {
-        let provider = Arc::new(MockChatProvider);
-        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-        strategies.insert(
-            StrategyKind::Debate,
-            Box::new(crate::strategies::debate::DebateStrategy {
-                debaters: vec![Box::new(SingleStrategy), Box::new(SingleStrategy)],
-                judge: Box::new(SingleStrategy),
-            }),
-        );
-        let executor = DefaultExecutor::new(provider, strategies);
-        let mut node = make_llm_node(StrategyKind::Debate);
-        node.config.insert(
-            "roles".into(),
-            serde_json::json!(["Engineer A", "Engineer B"]),
-        );
+        use fusion_compiler::strategy_expansion::expanded_subgraph;
 
-        let subgraph = executor.resolve_strategy(&node).await;
+        let node = make_llm_node(StrategyKind::Debate);
+        let subgraph = expanded_subgraph(&node).expect("Debate must expand");
 
         assert_eq!(
             subgraph.nodes.len(),
             3,
-            "2 string roles + judge must lower to 3 nodes, not passthrough"
+            "Debate must produce proposer + opposer + judge"
         );
-        assert!(
-            subgraph.nodes.iter().all(|n| n.model == "gpt-4"),
-            "string roles must inherit the workflow node's model"
-        );
+        assert!(matches!(
+            subgraph.nodes[0].kind,
+            ExecutionNodeKind::LLMGenerate
+        ));
+        assert!(matches!(
+            subgraph.nodes[1].kind,
+            ExecutionNodeKind::LLMGenerate
+        ));
+        assert!(matches!(
+            subgraph.nodes.last().unwrap().kind,
+            ExecutionNodeKind::LLMJudge
+        ));
     }
 
     #[tokio::test]
-    async fn test_resolve_strategy_consensus_subgraph_inherits_node_model() {
-        let provider = Arc::new(MockChatProvider);
-        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-        strategies.insert(
-            StrategyKind::Consensus,
-            Box::new(ConsensusStrategy::default()),
-        );
-        let executor = DefaultExecutor::new(provider, strategies);
+    async fn test_prebuilt_consensus_subgraph_inherits_node_model() {
+        use fusion_compiler::strategy_expansion::expanded_subgraph;
+
         let mut node = make_llm_node(StrategyKind::Consensus);
         node.model = "gpt-4-turbo".into();
-
-        let subgraph = executor.resolve_strategy(&node).await;
+        let subgraph = expanded_subgraph(&node).expect("Consensus must expand");
 
         assert_eq!(subgraph.nodes.len(), 4);
         assert!(
@@ -191,21 +192,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_strategy_propagates_parent_messages_to_subnodes() {
-        let provider = Arc::new(MockChatProvider);
-        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-        strategies.insert(
-            StrategyKind::Consensus,
-            Box::new(ConsensusStrategy::default()),
-        );
-        let executor = DefaultExecutor::new(provider, strategies);
+    async fn test_propagate_parent_messages_to_subnodes() {
+        use super::node_exec::propagate_parent_messages;
+
         let mut node = make_llm_node(StrategyKind::Consensus);
         node.config.insert(
             "messages".into(),
             serde_json::json!([{ "role": "user", "content": "analyze the repo" }]),
         );
 
-        let subgraph = executor.resolve_strategy(&node).await;
+        let mut subgraph = fusion_compiler::strategy_expansion::expanded_subgraph(&node)
+            .expect("Consensus must expand");
+        propagate_parent_messages(&node, &mut subgraph);
 
         assert_eq!(subgraph.nodes.len(), 4);
         for sub_node in &subgraph.nodes {
@@ -258,34 +256,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_strategy_single() {
-        let provider = Arc::new(MockChatProvider);
-        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-        strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
-        let executor = DefaultExecutor::new(provider, strategies);
+    async fn test_single_strategy_has_no_subgraph() {
+        use fusion_compiler::strategy_expansion::expanded_subgraph;
+
         let node = make_llm_node(StrategyKind::Single);
-
-        let subgraph = executor.resolve_strategy(&node).await;
-
-        assert_eq!(subgraph.nodes.len(), 1);
-        assert!(matches!(
-            subgraph.nodes[0].kind,
-            ExecutionNodeKind::LLMGenerate
-        ));
+        assert!(
+            expanded_subgraph(&node).is_none(),
+            "Single strategy must not produce a subgraph"
+        );
     }
 
     #[tokio::test]
-    async fn test_resolve_strategy_consensus() {
-        let provider = Arc::new(MockChatProvider);
-        let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-        strategies.insert(
-            StrategyKind::Consensus,
-            Box::new(ConsensusStrategy::default()),
-        );
-        let executor = DefaultExecutor::new(provider, strategies);
-        let node = make_llm_node(StrategyKind::Consensus);
+    async fn test_prebuilt_consensus_produces_judge_as_exit() {
+        use fusion_compiler::strategy_expansion::expanded_subgraph;
 
-        let subgraph = executor.resolve_strategy(&node).await;
+        let node = make_llm_node(StrategyKind::Consensus);
+        let subgraph = expanded_subgraph(&node).expect("Consensus must expand");
 
         assert_eq!(subgraph.nodes.len(), 4);
         assert!(matches!(

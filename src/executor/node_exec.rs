@@ -287,14 +287,31 @@ impl DefaultExecutor {
         }
     }
 
-    /// The pre-6.4 strategy execution body: resolve (prebuilt or runtime)
-    /// subgraph, run members topologically with the Law 7 tool loop,
-    /// accumulate usage, surface the exit output.
+    /// The strategy execution body: use the prebuilt subgraph (compiled at
+    /// compile time by `fusion_compiler::strategy_expansion`), run members
+    /// topologically with the Law 7 tool loop, accumulate usage, surface the
+    /// exit output.
     #[tracing::instrument(skip(self, node), fields(node_id = %node.id, model = %node.model, kind = ?node.kind, strategy = ?node.strategy))]
     async fn execute_legacy(&self, node: &ExecutionNode) -> NodeExecutionResult {
         let start = std::time::Instant::now();
         let strategy_label = node.strategy.as_label();
-        let subgraph = self.resolve_strategy(node).await;
+        let subgraph = match &node.subgraph {
+            Some(sg) => sg.clone(),
+            None => {
+                // Phase D: expand on-the-fly if no prebuilt subgraph exists.
+                // Phase C guarantees this never happens in production.
+                fusion_compiler::strategy_expansion::expanded_subgraph(node).unwrap_or_else(|| {
+                    crate::types::ExecutionSubgraph {
+                        nodes: vec![node.clone()],
+                        edges: vec![],
+                        entry_node_id: node.id,
+                        exit_node_id: node.id,
+                    }
+                })
+            }
+        };
+        let mut subgraph = subgraph;
+        propagate_parent_messages(node, &mut subgraph);
         let mut accumulated_usage: Option<Usage> = None;
         let mut output_value: Option<serde_json::Value> = None;
 
@@ -561,8 +578,46 @@ impl Executor for DefaultExecutor {
             self.execute_legacy_with_retry(node).await
         }
     }
+}
 
-    async fn resolve_strategy(&self, node: &ExecutionNode) -> ExecutionSubgraph {
-        self.resolve_strategy_impl(node).await
+/// Copies the parent node's messages and tool allowlist into any LLM sub-node
+/// that lacks them, ensuring requests never go out with empty `messages` arrays.
+pub(crate) fn propagate_parent_messages(node: &ExecutionNode, subgraph: &mut ExecutionSubgraph) {
+    let Some(messages) = node
+        .config
+        .get("messages")
+        .filter(|v| v.as_array().map(|a| !a.is_empty()).unwrap_or(false))
+        .cloned()
+    else {
+        return;
+    };
+    let tool_allowlist = node.config.get("tool_allowlist").cloned();
+    for sub_node in &mut subgraph.nodes {
+        if !matches!(
+            sub_node.kind,
+            ExecutionNodeKind::LLMGenerate
+                | ExecutionNodeKind::LLMReview
+                | ExecutionNodeKind::LLMJudge
+        ) {
+            continue;
+        }
+        let has_messages = sub_node
+            .config
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        if !has_messages {
+            sub_node
+                .config
+                .insert("messages".to_string(), messages.clone());
+        }
+        if sub_node.config.get("tool_allowlist").is_none() {
+            if let Some(ref allowlist) = tool_allowlist {
+                sub_node
+                    .config
+                    .insert("tool_allowlist".to_string(), allowlist.clone());
+            }
+        }
     }
 }

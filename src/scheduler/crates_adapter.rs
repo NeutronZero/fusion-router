@@ -125,10 +125,6 @@ mod tests {
                 ))),
             }
         }
-
-        async fn resolve_strategy(&self, _node: &ExecutionNode) -> crate::types::ExecutionSubgraph {
-            unimplemented!()
-        }
     }
 
     #[tokio::test]
@@ -187,13 +183,6 @@ mod tests {
                     latency_ms: 1,
                     output: None,
                 }
-            }
-
-            async fn resolve_strategy(
-                &self,
-                _node: &ExecutionNode,
-            ) -> crate::types::ExecutionSubgraph {
-                unimplemented!()
             }
         }
 
