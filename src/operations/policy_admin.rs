@@ -145,6 +145,14 @@ mod tests {
     }
 
     #[test]
+    fn test_admin_keeps_authoritative_registry_instance() {
+        let registry = Arc::new(PolicyRegistry::new());
+        let audit = Arc::new(AuditLog::new(100));
+        let admin = PolicyAdmin::new(registry.clone(), audit);
+        assert!(Arc::ptr_eq(&admin.registry, &registry));
+    }
+
+    #[test]
     fn test_create_and_list_policies() {
         let admin = test_admin();
         admin.create_policy(test_decl("test-policy")).unwrap();

@@ -11,10 +11,10 @@ This document specifies the immutable architectural invariants for FusionRouter 
 `ExecutionGraph` is immutable after compilation. Execution state (node progress, results, retries) is maintained in `ExecutionContext` rather than mutating the underlying graph DAG topology.
 
 ### Invariant 3: Deterministic Compiler Passes
-Compiler passes are 100% deterministic. Given the identical input `WorkflowIR` and compiler configuration, compilation must produce an identical `ExecutionGraph`.
+Compiler passes are 100% deterministic. Given identical input `WorkflowIR` and compiler configuration, compilation must produce byte-identical canonical `ExecutionGraph` output.
 
 ### Invariant 4: Isolated Planner
-The Planner never invokes external providers or tools directly. The Planner's sole responsibility is resolving intent into a `WorkflowIR` DAG over the `CapabilitySystem`.
+The Planner never invokes external providers or tools directly. The Planner is a snapshot-driven deterministic planner with catalog selection: it resolves intent into a `WorkflowIR` DAG over control-plane capability, model, policy, and telemetry snapshots. It does not claim adaptive runtime routing.
 
 ### Invariant 5: Worker Boundary
 Workers execute `Execution ABI v1` tasks assigned by the Coordinator. Workers never perform workflow planning or DAG optimization.
@@ -45,3 +45,12 @@ Every `ExecutionGraph` node is leased by at most one worker at any instant. Work
 
 ### Invariant 14: Deterministic Placement Engine
 Given identical `PlacementPolicy`, `ClusterState`, and `ExecutionGraph`, the Placement Engine produces an identical `PlacementGraph` and `PlacementReport`. Placement decisions are 100% deterministic to guarantee side-effect-free offline replay.
+
+### Invariant 15: Semantic Adapter Annotation
+The execution ABI may use a smaller operational node-kind vocabulary than the planning IR. When lowering collapses planning kinds, the adapter must preserve the original planning meaning in the explicit `semantic_kind` annotation field; this is metadata preservation, not native typed execution-kind preservation.
+
+### Invariant 16: Canonical Monetary Accounting
+All internal monetary accounting and pricing rates use `NanoUSD`. Decimal USD values are accepted only at configuration or external presentation boundaries and are converted before runtime accounting.
+
+### Invariant 17: Control-Plane Authority
+The running application has one `PolicyRegistry` and one frozen `CapabilityRegistry`. `AppState`, operations, planning, and runtime consumers receive those same instances rather than constructing parallel registries.

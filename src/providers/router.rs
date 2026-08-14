@@ -372,7 +372,7 @@ mod tests {
                 supports_audio: false, supports_pdf: false, supports_json_mode: true,
                 supports_thinking: false, supports_parallel_tools: false, supports_structured_output: false,
             },
-            crate::providers::ModelPricing { input_cost_per_1k: 0.15, output_cost_per_1k: 0.60 },
+            crate::providers::ModelPricing { input_cost_per_1k: crate::types::NanoUSD::from_nanos(150_000_000), output_cost_per_1k: crate::types::NanoUSD::from_nanos(600_000_000) },
         );
 
         let reqs = crate::providers::ModelRequirements {

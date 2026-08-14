@@ -132,10 +132,10 @@ impl ProviderRegistry {
         candidates.sort_by(|a, b| {
             let cost_a = pricing_map.get(&a.name)
                 .map(|p| p.input_cost_per_1k + p.output_cost_per_1k)
-                .unwrap_or(f64::MAX);
+                .unwrap_or(crate::types::NanoUSD::from_nanos(u64::MAX));
             let cost_b = pricing_map.get(&b.name)
                 .map(|p| p.input_cost_per_1k + p.output_cost_per_1k)
-                .unwrap_or(f64::MAX);
+                .unwrap_or(crate::types::NanoUSD::from_nanos(u64::MAX));
             cost_a.partial_cmp(&cost_b).unwrap_or(std::cmp::Ordering::Equal)
         });
 
@@ -271,7 +271,8 @@ impl ConfigSubscriber for ProviderRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+use super::*;
+use crate::types::NanoUSD;
     use super::super::circuit_breaker::CircuitBreaker;
     use super::super::{ChatProvider, ModelCapabilities, ModelPricing, ModelRequirements};
     use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice};
@@ -322,11 +323,11 @@ mod tests {
     }
 
     fn cheap_pricing() -> ModelPricing {
-        ModelPricing { input_cost_per_1k: 0.15, output_cost_per_1k: 0.60 }
+        ModelPricing { input_cost_per_1k: NanoUSD::from_nanos(150_000_000), output_cost_per_1k: NanoUSD::from_nanos(600_000_000) }
     }
 
     fn premium_pricing() -> ModelPricing {
-        ModelPricing { input_cost_per_1k: 10.0, output_cost_per_1k: 30.0 }
+        ModelPricing { input_cost_per_1k: NanoUSD::from_nanos(10_000_000_000), output_cost_per_1k: NanoUSD::from_nanos(30_000_000_000) }
     }
 
     #[test]
@@ -373,7 +374,7 @@ mod tests {
         let registry = ProviderRegistry::new(dummy_target("default"));
         registry.register_target_with_capabilities(vec!["basic/".into()], dummy_target("basic-model"), cheap_caps(), cheap_pricing());
 
-        let req = ModelRequirements { max_cost_per_1k_tokens: Some(0.01), ..Default::default() };
+        let req = ModelRequirements { max_cost_per_1k_tokens: Some(NanoUSD::from_nanos(10_000_000)), ..Default::default() };
         let matching = registry.select_targets(&req);
         assert!(matching.is_empty());
     }

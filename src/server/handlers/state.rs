@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use parking_lot::RwLock;
 
 use crate::compiler::DefaultCompiler;
 use crate::config::manager::ConfigManager;
@@ -45,6 +46,7 @@ pub struct AppState {
     pub connector_resolver: Arc<ConnectorResolver>,
     pub policy_registry: Arc<crate::policy::PolicyRegistry>,
     pub capability_registry: Arc<dyn CapabilityRegistry>,
+    planner_capability_snapshot: Arc<RwLock<fusion_kernel::CapabilityCatalog>>,
 }
 
 impl AppState {
@@ -63,14 +65,9 @@ impl AppState {
         let _ = workflow_registry.load_dir("workflows");
         let workflow_registry = Arc::new(workflow_registry);
 
-        let capability_catalog =
-            crate::providers::capability_catalog::CapabilityCatalog::from_config(&config);
-        let planner: Arc<dyn Planner + Send + Sync> = Arc::new(
-            crate::planner::IntentPlanner::with_capability_catalog(
-                config.model_catalog.clone(),
-                capability_catalog,
-            ),
-        );
+        let intent_planner = crate::planner::IntentPlanner::new(config.model_catalog.clone());
+        let planner_capability_snapshot = intent_planner.capability_snapshot.clone();
+        let planner: Arc<dyn Planner + Send + Sync> = Arc::new(intent_planner);
 
         let resource_manager = Arc::new(resource_manager);
 
@@ -167,6 +164,7 @@ impl AppState {
             connector_resolver,
             policy_registry,
             capability_registry: Arc::new(crate::capability::InMemoryCapabilityRegistry::new()),
+            planner_capability_snapshot,
         }
     }
 
@@ -176,6 +174,11 @@ impl AppState {
     }
 
     pub fn with_capability_registry(mut self, registry: Arc<dyn CapabilityRegistry>) -> Self {
+        let mut catalog = std::collections::HashMap::new();
+        for contract in registry.list() {
+            catalog.insert(contract.id.as_str().to_string(), Vec::new());
+        }
+        *self.planner_capability_snapshot.write() = fusion_kernel::CapabilityCatalog { catalog };
         self.capability_registry = registry;
         self
     }

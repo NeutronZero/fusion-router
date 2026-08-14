@@ -21,7 +21,7 @@ pub mod capability_catalog;
 #[allow(unused_imports)]
 pub use registry::ProviderRegistry;
 
-use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk};
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk, NanoUSD};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCapabilities {
@@ -62,8 +62,8 @@ impl Default for ModelCapabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelPricing {
-    pub input_cost_per_1k: f64,
-    pub output_cost_per_1k: f64,
+    pub input_cost_per_1k: NanoUSD,
+    pub output_cost_per_1k: NanoUSD,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -74,7 +74,7 @@ pub struct ModelRequirements {
     pub requires_tools: bool,
     pub requires_streaming: bool,
     pub requires_vision: bool,
-    pub max_cost_per_1k_tokens: Option<f64>,
+    pub max_cost_per_1k_tokens: Option<NanoUSD>,
     pub preferred_provider: Option<String>,
 }
 
@@ -327,8 +327,8 @@ mod tests {
 
     fn base_pricing() -> ModelPricing {
         ModelPricing {
-            input_cost_per_1k: 3.0,
-            output_cost_per_1k: 15.0,
+            input_cost_per_1k: NanoUSD::from_nanos(3_000_000_000),
+            output_cost_per_1k: NanoUSD::from_nanos(15_000_000_000),
         }
     }
 
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn test_matches_cost_ceiling_fails_when_exceeded() {
         let req = ModelRequirements {
-            max_cost_per_1k_tokens: Some(10.0),
+            max_cost_per_1k_tokens: Some(NanoUSD::from_nanos(10_000_000_000)),
             ..Default::default()
         };
         assert!(!req.matches(&base_caps(), &base_pricing()));
@@ -370,7 +370,7 @@ mod tests {
             requires_streaming: true,
             min_context_tokens: Some(32_000),
             min_coding_score: Some(0.7),
-            max_cost_per_1k_tokens: Some(50.0),
+            max_cost_per_1k_tokens: Some(NanoUSD::from_nanos(50_000_000_000)),
             ..Default::default()
         };
         assert!(req.matches(&base_caps(), &base_pricing()));

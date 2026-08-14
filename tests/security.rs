@@ -145,7 +145,8 @@ async fn test_v1_operations_auth_enforcement() {
     use fusion_router::telemetry::audit::AuditLog;
     use std::sync::Arc;
 
-    let ops_registry = Arc::new(parking_lot::RwLock::new(InMemoryCapabilityRegistry::new()));
+    let ops_registry: Arc<dyn fusion_router::capability::CapabilityRegistry> =
+        Arc::new(InMemoryCapabilityRegistry::new());
     let ops_cache = Arc::new(RuntimeModuleCache::new());
     let ops_dashboard = Arc::new(DefaultDashboardDataProvider::new(
         ops_registry.clone(),

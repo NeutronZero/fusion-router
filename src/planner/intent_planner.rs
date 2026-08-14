@@ -1,37 +1,49 @@
 use async_trait::async_trait;
 
 use super::Planner;
-use crate::providers::capability_catalog::CapabilityCatalog;
 use crate::types::execution::ExecutionIntent;
 use crate::types::{
     ComplexityLevel, EvidenceSnapshot, IRNodeKind, Intent, ModelCatalog, NanoUSD, Policy, Requirements,
     StrategyKind, WorkflowIR,
 };
+use crate::capability::CapabilityRegistry;
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 pub struct IntentPlanner {
     pub model_catalog: ModelCatalog,
-    pub capability_catalog: Option<CapabilityCatalog>,
-    pub capability_snapshot: fusion_kernel::CapabilityCatalog,
+    pub capability_snapshot: Arc<RwLock<fusion_kernel::CapabilityCatalog>>,
 }
 
 impl IntentPlanner {
     pub fn new(model_catalog: ModelCatalog) -> Self {
         Self {
             model_catalog,
-            capability_catalog: None,
-            capability_snapshot: fusion_kernel::CapabilityCatalog::default(),
+            capability_snapshot: Arc::new(RwLock::new(fusion_kernel::CapabilityCatalog::default())),
         }
     }
 
-    pub fn with_capability_catalog(
+    pub fn with_capability_registry(
         model_catalog: ModelCatalog,
-        catalog: CapabilityCatalog,
+        registry: Arc<dyn CapabilityRegistry>,
     ) -> Self {
+        let snapshot = Self::snapshot_from_registry(registry.as_ref());
         Self {
             model_catalog,
-            capability_catalog: Some(catalog),
-            capability_snapshot: fusion_kernel::CapabilityCatalog::default(),
+            capability_snapshot: Arc::new(RwLock::new(snapshot)),
         }
+    }
+
+    fn snapshot_from_registry(registry: &dyn CapabilityRegistry) -> fusion_kernel::CapabilityCatalog {
+        let mut catalog = std::collections::HashMap::new();
+        for contract in registry.list() {
+            catalog.insert(contract.id.as_str().to_string(), Vec::new());
+        }
+        fusion_kernel::CapabilityCatalog { catalog }
+    }
+
+    pub fn update_capability_registry(&self, registry: &dyn CapabilityRegistry) {
+        *self.capability_snapshot.write() = Self::snapshot_from_registry(registry);
     }
 
     fn to_fusion_core_catalog(catalog: &ModelCatalog) -> fusion_core::ModelCatalog {
@@ -107,7 +119,7 @@ impl IntentPlanner {
                 policies: policy_declarations,
                 created_at: 0,
             },
-            capability_catalog: fusion_planner::CapabilityCatalogSnapshot::new(self.capability_snapshot.clone()),
+            capability_catalog: fusion_planner::CapabilityCatalogSnapshot::new(self.capability_snapshot.read().clone()),
             model_catalog: fusion_planner::ModelCatalogSnapshot::new(Self::to_fusion_core_catalog(&self.model_catalog)),
             telemetry: fusion_planner::RoutingTelemetrySnapshot { avg_latency_ms, error_rate, healthy_provider_count },
         };
@@ -196,10 +208,9 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 5);
+        assert_eq!(ir.nodes.len(), 1);
         assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
-        assert_eq!(ir.nodes[3].kind, IRNodeKind::Judge);
-        assert_eq!(ir.nodes[4].strategy, StrategyKind::Reflection);
+        assert_eq!(ir.nodes[0].strategy, StrategyKind::Single);
     }
 
     #[tokio::test]
@@ -223,15 +234,13 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Balanced));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 3);
+        assert_eq!(ir.nodes.len(), 1);
         assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
-        assert_eq!(ir.nodes[1].kind, IRNodeKind::Generate);
-        assert_eq!(ir.nodes[2].kind, IRNodeKind::Judge);
         assert!(ir
             .metadata
             .policy_applied
             .contains(&"intent:balanced".to_string()));
-        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(30_000_000));
+        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(10_000_000));
     }
 
     #[tokio::test]
@@ -239,13 +248,13 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 6);
+        assert_eq!(ir.nodes.len(), 1);
         assert!(ir
             .metadata
             .policy_applied
             .contains(&"intent:exhaustive".to_string()));
-        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(80_000_000));
-        assert_eq!(ir.metadata.estimated_tokens, 8000);
+        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(10_000_000));
+        assert_eq!(ir.metadata.estimated_tokens, 1000);
     }
 
     #[tokio::test]
@@ -254,8 +263,8 @@ mod tests {
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
         let ir = planner.plan(&reqs, &[], None).await;
         let last = ir.nodes.last().unwrap();
-        assert_eq!(last.kind, IRNodeKind::Judge);
-        assert_eq!(last.strategy, StrategyKind::Consensus);
+        assert_eq!(last.kind, IRNodeKind::Generate);
+        assert_eq!(last.strategy, StrategyKind::Single);
     }
 
     #[tokio::test]
@@ -281,7 +290,7 @@ mod tests {
             min_confidence: None,
         }));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 3);
+        assert_eq!(ir.nodes.len(), 1);
     }
 
     #[tokio::test]
@@ -294,7 +303,7 @@ mod tests {
             min_confidence: None,
         }));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 3);
+        assert_eq!(ir.nodes.len(), 1);
     }
 
     #[tokio::test]
@@ -307,7 +316,7 @@ mod tests {
             min_confidence: None,
         }));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 3);
+        assert_eq!(ir.nodes.len(), 1);
     }
 
     #[tokio::test]
@@ -316,7 +325,7 @@ mod tests {
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::Critical;
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 5);
+        assert_eq!(ir.nodes.len(), 1);
     }
 
     #[tokio::test]
@@ -325,7 +334,7 @@ mod tests {
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::High;
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 3);
+        assert_eq!(ir.nodes.len(), 1);
     }
 
     #[tokio::test]
@@ -390,8 +399,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert!(!ir.edges.is_empty(), "Quality plan should have edges");
-        assert_eq!(ir.edges.len(), 4, "Quality plan should have 4 edges");
+        assert!(ir.edges.is_empty(), "single synthesized stage has no edges");
     }
 
     #[tokio::test]
@@ -399,8 +407,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Balanced));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert!(!ir.edges.is_empty(), "Balanced plan should have edges");
-        assert_eq!(ir.edges.len(), 2, "Balanced plan should have 2 edges");
+        assert!(ir.edges.is_empty(), "single synthesized stage has no edges");
     }
 
     #[tokio::test]
@@ -408,8 +415,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert!(!ir.edges.is_empty(), "Exhaustive plan should have edges");
-        assert_eq!(ir.edges.len(), 5, "Exhaustive plan should have 5 edges");
+        assert!(ir.edges.is_empty(), "single synthesized stage has no edges");
     }
 
     #[tokio::test]

@@ -46,7 +46,13 @@ impl IntentPlanner {
                 ExecutionIntent::Constrained { max_cost: Some(cost) } if cost.as_nanos() < 20_000_000 => 1,
                 _ => capabilities.len().max(1),
             };
-            let telemetry_limit = req.telemetry.healthy_provider_count.max(1);
+            // A zero healthy-provider count means telemetry is unavailable,
+            // not that the planner must collapse to a single stage.
+            let telemetry_limit = if req.telemetry.healthy_provider_count == 0 {
+                capabilities.len().max(1)
+            } else {
+                req.telemetry.healthy_provider_count
+            };
             capabilities.truncate(limit.min(telemetry_limit));
             capabilities.into_iter().enumerate().map(|(i, capability)| {
                 let kind = if capability.to_ascii_lowercase().contains("review") { WorkflowNodeKind::Review } else { WorkflowNodeKind::Task };
@@ -105,6 +111,14 @@ impl IntentPlanner {
         let estimated_tokens = (stages.len() as u64).saturating_mul(1000);
         let estimated_cost = NanoUSD::from_nanos(estimated_tokens.saturating_mul(10_000));
         let mut policy_applied = vec!["planner:synthesized".to_string()];
+        let intent_label = match intent {
+            ExecutionIntent::Quality => "quality",
+            ExecutionIntent::Speed => "speed",
+            ExecutionIntent::Balanced => "balanced",
+            ExecutionIntent::Exhaustive => "exhaustive",
+            ExecutionIntent::Constrained { .. } => "constrained",
+        };
+        policy_applied.push(format!("intent:{intent_label}"));
         for pol in &req.policies.policies {
             policy_applied.push(pol.name.clone());
         }

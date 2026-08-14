@@ -192,7 +192,7 @@ mod tests {
     }
 
     fn sample_pricing() -> ModelPricing {
-        ModelPricing { input_cost_per_1k: 1.0, output_cost_per_1k: 2.0 }
+        ModelPricing { input_cost_per_1k: NanoUSD::from_nanos(1_000_000_000), output_cost_per_1k: NanoUSD::from_nanos(2_000_000_000) }
     }
 
     async fn record_executions(repo: &SqliteEvidenceRepository, model: &str, total: u64, successes: u64) {

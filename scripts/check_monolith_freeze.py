@@ -117,6 +117,19 @@ def check_gate_06_policy_authority():
     content = policy_reg.read_text(encoding="utf-8")
     if "pub struct PolicyRegistry" not in content:
         return False, "PolicyRegistry struct not found"
+    constructor_sites = []
+    for rs_file in (ROOT / "src").rglob("*.rs"):
+        production = rs_file.read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]
+        if "PolicyRegistry::new()" in production:
+            constructor_sites.append(rs_file.relative_to(ROOT))
+    if constructor_sites != [Path("src/server/handlers/state.rs")]:
+        return False, f"production PolicyRegistry constructors are not singleton-owned: {constructor_sites}"
+    main_content = (ROOT / "src" / "main.rs").read_text(encoding="utf-8")
+    chat_content = (ROOT / "src" / "server" / "handlers" / "chat.rs").read_text(encoding="utf-8")
+    if "state.policy_registry.clone()" not in main_content:
+        return False, "main.rs does not pass the AppState policy registry to operations"
+    if "state.policy_registry.current_snapshot()" not in chat_content:
+        return False, "chat handler does not consume AppState policy registry"
     return True, "PolicyRegistry is single authoritative policy source"
 
 
@@ -134,6 +147,10 @@ def check_gate_07_capability_authority():
         main_content = main_rs.read_text(encoding="utf-8")
         if "load_manifests(" not in main_content or "freeze_capability_registry(" not in main_content:
             return False, "PluginManager startup lifecycle not executed in main.rs"
+        if "InMemoryCapabilityRegistry::new()" in main_content:
+            return False, "main.rs creates a second in-memory capability registry"
+        if "with_capability_registry(" not in main_content:
+            return False, "frozen capability registry is not wired into AppState"
     return True, "PluginManager authority with executed startup lifecycle"
 
 
@@ -169,7 +186,11 @@ def check_gate_09_monetary_authority():
             rel_path = rs_file.relative_to(ROOT)
             return False, f"Legacy field 'cost_millicosts' found in {rel_path}"
 
-    monetary_fields = ["max_daily_cost", "total_cost_usd", "cost_usd", "avg_cost", "avg_cost_nanos", "estimated_cost_usd"]
+    monetary_fields = [
+        "max_daily_cost", "total_cost_usd", "cost_usd", "avg_cost", "avg_cost_nanos",
+        "estimated_cost_usd", "input_cost_per_1k", "output_cost_per_1k",
+        "max_cost_per_1k_tokens", "cost_per_1k",
+    ]
     presentation_only = {Path("src/bin/eval_runner.rs")}
     for rs_file in ROOT.rglob("*.rs"):
         rel_path = rs_file.relative_to(ROOT)
@@ -252,7 +273,14 @@ def check_gate_11_deterministic_compilation():
                         rel_path = rs_file.relative_to(ROOT)
                         return False, f"{desc} in non-test compilation code at {rel_path}:{line_num}"
 
-    return True, "Deterministic planning and compilation with child_id v5"
+    determinism_test = ROOT / "tests" / "contract_wiring.rs"
+    if not determinism_test.exists():
+        return False, "byte-for-byte determinism test is missing"
+    test_content = determinism_test.read_text(encoding="utf-8")
+    if "byte-for-byte determinism" not in test_content or "canonical_json" not in test_content or "assert_eq!(canonical_json(&graph_a), canonical_json(&graph_b))" not in test_content:
+        return False, "determinism test does not compare canonical IR and graph bytes"
+
+    return True, "Deterministic planning and byte-identical canonical compilation with child_id v5"
 
 
 GATES = [

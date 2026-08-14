@@ -42,8 +42,8 @@ impl GenericOpenAIModel {
             supports_structured_output: model_cfg.supports_structured_output.unwrap_or(false),
         };
         let pricing = ModelPricing {
-            input_cost_per_1k: model_cfg.input_cost_per_1k.unwrap_or(0.0),
-            output_cost_per_1k: model_cfg.output_cost_per_1k.unwrap_or(0.0),
+            input_cost_per_1k: model_cfg.input_cost_per_1k.unwrap_or(crate::types::NanoUSD::ZERO),
+            output_cost_per_1k: model_cfg.output_cost_per_1k.unwrap_or(crate::types::NanoUSD::ZERO),
         };
         Self { model_id, provider_name, base_url, caps, pricing, prefix }
     }
@@ -164,8 +164,8 @@ mod tests {
             supports_streaming: Some(true),
             supports_vision: Some(false),
             supports_json_mode: Some(true),
-            input_cost_per_1k: Some(0.001),
-            output_cost_per_1k: Some(0.002),
+            input_cost_per_1k: Some(crate::types::NanoUSD::from_nanos(1_000_000)),
+            output_cost_per_1k: Some(crate::types::NanoUSD::from_nanos(2_000_000)),
             ..Default::default()
         }
     }
@@ -184,8 +184,8 @@ mod tests {
         assert!(!caps.supports_vision);
         assert!(caps.supports_tools);
         let pricing = model.pricing();
-        assert_eq!(pricing.input_cost_per_1k, 0.001);
-        assert_eq!(pricing.output_cost_per_1k, 0.002);
+        assert_eq!(pricing.input_cost_per_1k, crate::types::NanoUSD::from_nanos(1_000_000));
+        assert_eq!(pricing.output_cost_per_1k, crate::types::NanoUSD::from_nanos(2_000_000));
     }
 
     #[test]

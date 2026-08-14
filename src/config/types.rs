@@ -160,6 +160,22 @@ where D: serde::Deserializer<'de> {
     NanoUSD::checked_from_decimal_usd(&text).map_err(serde::de::Error::custom)
 }
 
+fn deserialize_usd_opt<'de, D>(deserializer: D) -> Result<Option<NanoUSD>, D::Error>
+where D: serde::Deserializer<'de> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Money { Integer(u64), Decimal(f64), Text(String) }
+    let value = Option::<Money>::deserialize(deserializer)?;
+    value.map(|money| {
+        let text = match money {
+            Money::Integer(value) => value.to_string(),
+            Money::Decimal(value) => value.to_string(),
+            Money::Text(value) => value,
+        };
+        NanoUSD::checked_from_decimal_usd(&text).map_err(serde::de::Error::custom)
+    }).transpose()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyConfig {
     pub name: String,
@@ -237,8 +253,10 @@ pub struct CapabilityDescriptor {
     pub supports_thinking: Option<bool>,
     pub supports_parallel_tools: Option<bool>,
     pub supports_structured_output: Option<bool>,
-    pub input_cost_per_1k: Option<f64>,
-    pub output_cost_per_1k: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_usd_opt")]
+    pub input_cost_per_1k: Option<NanoUSD>,
+    #[serde(default, deserialize_with = "deserialize_usd_opt")]
+    pub output_cost_per_1k: Option<NanoUSD>,
     pub latency_ms: Option<u64>,
     pub availability: Option<f32>,
     pub reliability: Option<f32>,

@@ -205,7 +205,7 @@ mod tests {
         #[derive(Debug, Clone, Serialize, Deserialize)]
         struct ModelCost {
             model: String,
-            cost: f64,
+            cost: crate::types::NanoUSD,
             tokens: u64,
         }
 
@@ -238,7 +238,7 @@ mod tests {
             },
             costs: vec![ModelCost {
                 model: "claude-sonnet".to_string(),
-                cost: 0.05,
+                cost: crate::types::NanoUSD::from_nanos(50_000_000),
                 tokens: 5000,
             }],
             timing: TimingInfo {

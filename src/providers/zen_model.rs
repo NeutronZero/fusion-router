@@ -48,8 +48,8 @@ impl Model for ZenModel {
 
     fn pricing(&self) -> ModelPricing {
         ModelPricing {
-            input_cost_per_1k: 0.0,
-            output_cost_per_1k: 0.0,
+            input_cost_per_1k: crate::types::NanoUSD::ZERO,
+            output_cost_per_1k: crate::types::NanoUSD::ZERO,
         }
     }
 

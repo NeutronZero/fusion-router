@@ -27,6 +27,25 @@ use fusion_router::types::{
 };
 use uuid::Uuid;
 
+fn canonical_json<T: serde::Serialize>(value: &T) -> String {
+    fn normalize(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut ordered = std::collections::BTreeMap::new();
+                for (key, value) in map {
+                    ordered.insert(key, normalize(value));
+                }
+                serde_json::Value::Object(ordered.into_iter().collect())
+            }
+            serde_json::Value::Array(values) => {
+                serde_json::Value::Array(values.into_iter().map(normalize).collect())
+            }
+            value => value,
+        }
+    }
+    serde_json::to_string(&normalize(serde_json::to_value(value).unwrap())).unwrap()
+}
+
 struct MockChatProvider;
 
 #[async_trait]
@@ -143,34 +162,23 @@ async fn intent_to_abi_to_runtime_is_wired() {
 
 #[tokio::test]
 async fn intent_to_runtime_is_deterministic() {
+    // byte-for-byte determinism (canonical IR and ExecutionGraph)
     let workflow = fusion_router::intent::lowering::intent_to_workflow(&intent()).unwrap();
-    let a = abi_from_graph(
-        &build_compiler(
-            ModelCatalog::default(),
-            Arc::new(fusion_router::resource::DefaultResourceManager::new(
-                permissive_quota(),
-            )),
-            None,
-        )
-        .compile(workflow_to_types(&workflow).unwrap())
-        .await
-        .unwrap(),
+    let types_ir = workflow_to_types(&workflow).unwrap();
+    let ir_bytes_a = canonical_json(&types_ir);
+    let ir_bytes_b = canonical_json(&types_ir.clone());
+    let compiler = build_compiler(
+        ModelCatalog::default(),
+        Arc::new(fusion_router::resource::DefaultResourceManager::new(
+            permissive_quota(),
+        )),
+        None,
     );
-    let workflow2 = fusion_router::intent::lowering::intent_to_workflow(&intent()).unwrap();
-    let b = abi_from_graph(
-        &build_compiler(
-            ModelCatalog::default(),
-            Arc::new(fusion_router::resource::DefaultResourceManager::new(
-                permissive_quota(),
-            )),
-            None,
-        )
-        .compile(workflow_to_types(&workflow2).unwrap())
-        .await
-        .unwrap(),
-    );
-    assert_eq!(a.nodes.len(), b.nodes.len());
-    assert_eq!(a.edges.len(), b.edges.len());
-    assert_eq!(a.nodes[0].node_id, b.nodes[0].node_id);
-    assert_eq!(a.nodes[0].capability, b.nodes[0].capability);
+    let graph_a = compiler.compile(types_ir.clone()).await.unwrap();
+    let graph_b = compiler.compile(types_ir).await.unwrap();
+    let abi_a = abi_from_graph(&graph_a);
+    let abi_b = abi_from_graph(&graph_b);
+    assert_eq!(ir_bytes_a, ir_bytes_b);
+    assert_eq!(canonical_json(&graph_a), canonical_json(&graph_b));
+    assert_eq!(canonical_json(&abi_a), canonical_json(&abi_b));
 }

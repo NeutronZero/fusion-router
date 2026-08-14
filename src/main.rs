@@ -218,19 +218,7 @@ async fn main() {
         hc_checker.run(hc_resolver).await;
     });
 
-    let ops_registry = Arc::new(parking_lot::RwLock::new(crate::capability::InMemoryCapabilityRegistry::new()));
-    let ops_cache = Arc::new(crate::operations::RuntimeModuleCache::new());
-    let ops_dashboard = Arc::new(crate::operations::dashboard::DefaultDashboardDataProvider::new(
-        ops_registry.clone(),
-        ops_cache.clone(),
-    ));
-    let ops_inspector = Arc::new(crate::operations::runtime_inspector::RuntimeInspector::new(ops_cache.clone()));
     let ops_audit = Arc::new(crate::telemetry::audit::AuditLog::new(1000));
-    let ops_policy_admin = Arc::new(crate::operations::policy_admin::PolicyAdmin::new(
-        state.policy_registry.clone(),
-        ops_audit.clone(),
-    ));
-
     let archive_path = std::path::PathBuf::from("release_archive");
     let archive_backend = crate::release::archive::FilesystemArchiveBackend::new(archive_path);
     let signing_key = std::env::var("FUSION_SIGNING_KEY").ok();
@@ -252,7 +240,7 @@ async fn main() {
             verifier_type
         );
     }
-    let ops_attestation_viewer = Arc::new(crate::operations::attestation_viewer::AttestationViewer::new(ops_verifier, ops_audit));
+    let ops_attestation_viewer = Arc::new(crate::operations::attestation_viewer::AttestationViewer::new(ops_verifier, ops_audit.clone()));
 
     // Wire PluginManager startup lifecycle: Discover -> Load -> Validate -> Initialize -> Register -> Activate
     let mut plugin_manager = crate::plugin::PluginManager::new();
@@ -267,6 +255,16 @@ async fn main() {
     );
     let _plugin_manager = plugin_manager;
     let state = state.with_capability_registry(frozen_capability_registry);
+    let ops_cache = Arc::new(crate::operations::RuntimeModuleCache::new());
+    let ops_dashboard = Arc::new(crate::operations::dashboard::DefaultDashboardDataProvider::new(
+        state.capability_registry.clone(),
+        ops_cache.clone(),
+    ));
+    let ops_inspector = Arc::new(crate::operations::runtime_inspector::RuntimeInspector::new(ops_cache));
+    let ops_policy_admin = Arc::new(crate::operations::policy_admin::PolicyAdmin::new(
+        state.policy_registry.clone(),
+        ops_audit.clone(),
+    ));
     let ops_state = crate::operations::handlers::OperationsState {
         dashboard: ops_dashboard,
         inspector: ops_inspector,

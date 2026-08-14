@@ -1,6 +1,5 @@
 use std::sync::Arc;
-use parking_lot::RwLock;
-use crate::capability::{InMemoryCapabilityRegistry, CapabilityRegistry};
+use crate::capability::CapabilityRegistry;
 use crate::operations::{OperationError, RegistrySummary, RuntimeSummary, InvocationMetric, TimeWindow, RuntimeModuleCache};
 
 pub trait DashboardDataProvider: Send + Sync {
@@ -10,13 +9,13 @@ pub trait DashboardDataProvider: Send + Sync {
 }
 
 pub struct DefaultDashboardDataProvider {
-    registry: Arc<RwLock<InMemoryCapabilityRegistry>>,
+    registry: Arc<dyn CapabilityRegistry>,
     module_cache: Arc<RuntimeModuleCache>,
 }
 
 impl DefaultDashboardDataProvider {
     pub fn new(
-        registry: Arc<RwLock<InMemoryCapabilityRegistry>>,
+        registry: Arc<dyn CapabilityRegistry>,
         module_cache: Arc<RuntimeModuleCache>,
     ) -> Self {
         Self { registry, module_cache }
@@ -25,8 +24,7 @@ impl DefaultDashboardDataProvider {
 
 impl DashboardDataProvider for DefaultDashboardDataProvider {
     fn registry_summary(&self) -> Result<RegistrySummary, OperationError> {
-        let reg = self.registry.read();
-        let contracts = reg.list();
+        let contracts = self.registry.list();
         let mut by_source = std::collections::HashMap::new();
         by_source.insert("builtin".into(), 0);
         by_source.insert("package".into(), 0);
@@ -37,7 +35,7 @@ impl DashboardDataProvider for DefaultDashboardDataProvider {
         Ok(RegistrySummary {
             total_capabilities: total,
             by_source,
-            frozen: reg.is_frozen(),
+            frozen: self.registry.is_frozen(),
         })
     }
 
@@ -86,7 +84,7 @@ mod tests {
 
     #[test]
     fn test_registry_summary_returns_data() {
-        let registry = Arc::new(RwLock::new(populated_registry()));
+        let registry: Arc<dyn CapabilityRegistry> = Arc::new(populated_registry());
         let provider = DefaultDashboardDataProvider::new(
             registry.clone(),
             Arc::new(RuntimeModuleCache::new()),
@@ -98,12 +96,22 @@ mod tests {
 
     #[test]
     fn test_runtime_summary_returns_zero_when_empty() {
-        let registry = Arc::new(RwLock::new(InMemoryCapabilityRegistry::new()));
+        let registry: Arc<dyn CapabilityRegistry> = Arc::new(InMemoryCapabilityRegistry::new());
         let provider = DefaultDashboardDataProvider::new(
             registry.clone(),
             Arc::new(RuntimeModuleCache::new()),
         );
         let summary = provider.runtime_summary().unwrap();
         assert_eq!(summary.loaded_instances, 0);
+    }
+
+    #[test]
+    fn test_dashboard_keeps_frozen_registry_instance() {
+        let registry: Arc<dyn CapabilityRegistry> = Arc::new(populated_registry());
+        let provider = DefaultDashboardDataProvider::new(
+            registry.clone(),
+            Arc::new(RuntimeModuleCache::new()),
+        );
+        assert!(Arc::ptr_eq(&provider.registry, &registry));
     }
 }

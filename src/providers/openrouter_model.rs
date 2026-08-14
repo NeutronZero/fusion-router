@@ -48,8 +48,8 @@ impl Model for OpenRouterModel {
 
     fn pricing(&self) -> ModelPricing {
         ModelPricing {
-            input_cost_per_1k: 0.003,
-            output_cost_per_1k: 0.015,
+            input_cost_per_1k: crate::types::NanoUSD::from_nanos(3_000_000),
+            output_cost_per_1k: crate::types::NanoUSD::from_nanos(15_000_000),
         }
     }
 

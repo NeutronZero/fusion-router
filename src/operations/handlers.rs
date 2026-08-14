@@ -11,8 +11,7 @@ use super::attestation_viewer::AttestationViewer;
 
 #[cfg(test)]
 use {
-    parking_lot::RwLock,
-    crate::capability::InMemoryCapabilityRegistry,
+     crate::capability::InMemoryCapabilityRegistry,
     super::dashboard::DefaultDashboardDataProvider,
     super::MockPackageVerifier,
     super::RuntimeModuleCache,
@@ -32,7 +31,8 @@ impl OperationsState {
     pub fn new_mock() -> Self {
         use crate::telemetry::audit::AuditLog;
 
-        let registry = Arc::new(RwLock::new(InMemoryCapabilityRegistry::new()));
+        let registry: Arc<dyn crate::capability::CapabilityRegistry> =
+            Arc::new(InMemoryCapabilityRegistry::new());
         let cache = Arc::new(RuntimeModuleCache::new());
         let dashboard = Arc::new(DefaultDashboardDataProvider::new(registry, cache));
         let inspector = Arc::new(RuntimeInspector::new(Arc::new(RuntimeModuleCache::new())));

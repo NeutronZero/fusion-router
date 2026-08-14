@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::config::{AppConfig, CapabilityDescriptor};
+use crate::types::NanoUSD;
 use super::{ModelCapabilities, ModelPricing, ModelRequirements};
 
 /// Step-type to capability requirements mapping.
@@ -32,11 +33,11 @@ fn step_requirements() -> &'static HashMap<&'static str, ModelRequirements> {
             ..Default::default()
         });
         m.insert("fast", ModelRequirements {
-            max_cost_per_1k_tokens: Some(0.01),
+            max_cost_per_1k_tokens: Some(NanoUSD::from_nanos(10_000_000)),
             ..Default::default()
         });
         m.insert("cheap", ModelRequirements {
-            max_cost_per_1k_tokens: Some(0.005),
+            max_cost_per_1k_tokens: Some(NanoUSD::from_nanos(5_000_000)),
             ..Default::default()
         });
         m
@@ -135,8 +136,8 @@ fn descriptor_to_capabilities(desc: &CapabilityDescriptor) -> ModelCapabilities 
 
 fn descriptor_to_pricing(desc: &CapabilityDescriptor) -> ModelPricing {
     ModelPricing {
-        input_cost_per_1k: desc.input_cost_per_1k.unwrap_or(0.0),
-        output_cost_per_1k: desc.output_cost_per_1k.unwrap_or(0.0),
+        input_cost_per_1k: desc.input_cost_per_1k.unwrap_or(NanoUSD::ZERO),
+        output_cost_per_1k: desc.output_cost_per_1k.unwrap_or(NanoUSD::ZERO),
     }
 }
 
@@ -158,8 +159,8 @@ mod tests {
             supports_tools: Some(true),
             supports_streaming: Some(true),
             supports_vision: Some(false),
-            input_cost_per_1k: Some(0.00014),
-            output_cost_per_1k: Some(0.00028),
+            input_cost_per_1k: Some(NanoUSD::from_nanos(140_000)),
+            output_cost_per_1k: Some(NanoUSD::from_nanos(280_000)),
             ..Default::default()
         });
         providers.insert("deepseek".into(), ProviderConfig {
@@ -178,8 +179,8 @@ mod tests {
             supports_tools: Some(true),
             supports_streaming: Some(true),
             supports_vision: Some(true),
-            input_cost_per_1k: Some(0.005),
-            output_cost_per_1k: Some(0.015),
+            input_cost_per_1k: Some(NanoUSD::from_nanos(5_000_000)),
+            output_cost_per_1k: Some(NanoUSD::from_nanos(15_000_000)),
             ..Default::default()
         });
         providers.insert("openai".into(), ProviderConfig {
@@ -248,7 +249,7 @@ mod tests {
     fn test_resolve_filters_by_cost() {
         let catalog = CapabilityCatalog::from_config(&test_config());
         let reqs = ModelRequirements {
-            max_cost_per_1k_tokens: Some(0.001),
+            max_cost_per_1k_tokens: Some(NanoUSD::from_nanos(1_000_000)),
             ..Default::default()
         };
         let candidates = catalog.resolve(&reqs);

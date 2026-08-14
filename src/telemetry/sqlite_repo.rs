@@ -192,7 +192,7 @@ impl EvidenceRepository for SqliteEvidenceRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Intent;
+    use crate::types::{Intent, NanoUSD};
 
     fn make_record(
         model: &str,
@@ -200,7 +200,7 @@ mod tests {
         intent: Intent,
         latency_ms: u64,
         tokens: u32,
-        cost_usd: f64,
+        cost: crate::types::NanoUSD,
         success: bool,
     ) -> ExecutionRecord {
         ExecutionRecord {
@@ -212,7 +212,7 @@ mod tests {
             intent,
             latency_ms,
             tokens,
-            cost: crate::types::NanoUSD::from_nanos((cost_usd * 1_000_000_000.0) as u64),
+            cost,
             success,
             timestamp: 1000000,
         }
@@ -242,16 +242,16 @@ mod tests {
 
         let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
 
-        repo.record(make_record("gpt-4", "openai", Intent::Code, 100, 50, 0.01, true))
+        repo.record(make_record("gpt-4", "openai", Intent::Code, 100, 50, NanoUSD::from_nanos(10_000_000), true))
             .await
             .unwrap();
-        repo.record(make_record("gpt-4", "openai", Intent::Code, 200, 100, 0.02, false))
+        repo.record(make_record("gpt-4", "openai", Intent::Code, 200, 100, NanoUSD::from_nanos(20_000_000), false))
             .await
             .unwrap();
-        repo.record(make_record("claude-3", "anthropic", Intent::Debug, 150, 75, 0.015, true))
+        repo.record(make_record("claude-3", "anthropic", Intent::Debug, 150, 75, NanoUSD::from_nanos(15_000_000), true))
             .await
             .unwrap();
-        repo.record(make_record("claude-3", "anthropic", Intent::Debug, 50, 25, 0.005, true))
+        repo.record(make_record("claude-3", "anthropic", Intent::Debug, 50, 25, NanoUSD::from_nanos(5_000_000), true))
             .await
             .unwrap();
 
@@ -300,7 +300,7 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
 
         let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
-        let rec = make_record("gpt-4", "openai", Intent::General, 100, 50, 0.01, true);
+        let rec = make_record("gpt-4", "openai", Intent::General, 100, 50, NanoUSD::from_nanos(10_000_000), true);
         repo.record(rec).await.unwrap();
 
         let snap = repo.snapshot().await.unwrap();
@@ -319,13 +319,13 @@ mod tests {
 
         let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
 
-        repo.record(make_record("gpt-4", "openai", Intent::Code, 100, 50, 0.01, true))
+        repo.record(make_record("gpt-4", "openai", Intent::Code, 100, 50, NanoUSD::from_nanos(10_000_000), true))
             .await
             .unwrap();
-        repo.record(make_record("gpt-4", "openai", Intent::Debug, 200, 100, 0.02, false))
+        repo.record(make_record("gpt-4", "openai", Intent::Debug, 200, 100, NanoUSD::from_nanos(20_000_000), false))
             .await
             .unwrap();
-        repo.record(make_record("claude-3", "anthropic", Intent::Code, 150, 75, 0.015, true))
+        repo.record(make_record("claude-3", "anthropic", Intent::Code, 150, 75, NanoUSD::from_nanos(15_000_000), true))
             .await
             .unwrap();
 

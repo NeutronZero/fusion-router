@@ -95,10 +95,9 @@ impl StreamMeter {
     }
 }
 
-fn nanos_for_tokens(tokens: u64, usd_per_1k_tokens: f64) -> u64 {
-    if !usd_per_1k_tokens.is_finite() || usd_per_1k_tokens <= 0.0 { return 0; }
-    let nanos_per_token = usd_per_1k_tokens * 1_000_000.0;
-    (tokens as f64 * nanos_per_token).round().max(0.0) as u64
+fn nanos_for_tokens(tokens: u64, nanos_per_1k_tokens: NanoUSD) -> u64 {
+    let product = (tokens as u128) * (nanos_per_1k_tokens.as_nanos() as u128);
+    ((product + 500) / 1_000).min(u64::MAX as u128) as u64
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -193,8 +192,8 @@ mod tests {
             usage: None,
         };
         let pricing = ModelPricing {
-            input_cost_per_1k: 500.0,
-            output_cost_per_1k: 500.0,
+            input_cost_per_1k: NanoUSD::from_nanos(500_000_000_000),
+            output_cost_per_1k: NanoUSD::from_nanos(500_000_000_000),
         };
         meter.record_chunk(&chunk, Some(&pricing));
         let report = meter.finalize(Some(&pricing));
@@ -245,8 +244,8 @@ mod tests {
             usage: None,
         };
         let pricing = ModelPricing {
-            input_cost_per_1k: 500.0,
-            output_cost_per_1k: 500.0,
+            input_cost_per_1k: NanoUSD::from_nanos(500_000_000_000),
+            output_cost_per_1k: NanoUSD::from_nanos(500_000_000_000),
         };
         meter.record_chunk(&chunk, Some(&pricing));
         let report1 = meter.finalize(Some(&pricing));

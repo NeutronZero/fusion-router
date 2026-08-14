@@ -486,13 +486,11 @@ async fn test_executions_and_operations_auth_enforcement() {
         Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()),
     );
 
-    let ops_registry = Arc::new(parking_lot::RwLock::new(InMemoryCapabilityRegistry::new()));
     let ops_cache = Arc::new(RuntimeModuleCache::new());
-    let ops_dashboard = Arc::new(DefaultDashboardDataProvider::new(ops_registry, ops_cache.clone()));
+    let ops_dashboard = Arc::new(DefaultDashboardDataProvider::new(state.capability_registry.clone(), ops_cache.clone()));
     let ops_inspector = Arc::new(RuntimeInspector::new(ops_cache));
-    let ops_policy_registry = Arc::new(fusion_router::policy::PolicyRegistry::new());
     let ops_audit = Arc::new(AuditLog::new(1000));
-    let ops_policy_admin = Arc::new(PolicyAdmin::new(ops_policy_registry, ops_audit.clone()));
+    let ops_policy_admin = Arc::new(PolicyAdmin::new(state.policy_registry.clone(), ops_audit.clone()));
     let ops_verifier = Arc::new(MockPackageVerifier);
     let ops_attestation_viewer = Arc::new(AttestationViewer::new(ops_verifier, ops_audit));
 
