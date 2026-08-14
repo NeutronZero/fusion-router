@@ -41,7 +41,7 @@ async fn execute_canonical_pipeline(entry_point: &str, prompt: &str) -> Executio
         provider_id: ProviderId("openrouter".to_string()),
         passes_count: report.passes_executed.len(),
         execution_time_ms: 62,
-        estimated_cost: 0.0012,
+        estimated_cost: fusion_core::NanoUSD::from_nanos(1_200_000),
         compiler_invoked: true,
         created_at_rfc3339: Utc::now().to_rfc3339(),
     }

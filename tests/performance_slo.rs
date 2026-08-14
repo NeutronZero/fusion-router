@@ -50,7 +50,7 @@ async fn test_performance_slo_certification_suite() {
         provider_id: ProviderId("openrouter".to_string()),
         passes_count: 5,
         execution_time_ms: 10,
-        estimated_cost: 0.001,
+        estimated_cost: fusion_core::NanoUSD::from_nanos(1_000_000),
         compiler_invoked: true,
         created_at_rfc3339: Utc::now().to_rfc3339(),
     };

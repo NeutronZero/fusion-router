@@ -32,7 +32,7 @@ fn test_workflow_ir_v1_deserialization_compatibility() {
 fn test_metadata_forward_compatibility() {
     let metadata_json = json!({
         "policy_applied": ["StrictSecurityPolicy"],
-        "estimated_cost": 0.005,
+        "estimated_cost": 5000000,
         "estimated_tokens": 120
     });
 

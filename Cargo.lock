@@ -1075,6 +1075,7 @@ name = "fusion-capability-sdk"
 version = "0.14.5"
 dependencies = [
  "fusion-capability-macros",
+ "fusion-core",
  "fusion-plugin-api",
  "schemars",
  "semver",
@@ -1132,6 +1133,7 @@ dependencies = [
 name = "fusion-ir"
 version = "0.14.5"
 dependencies = [
+ "fusion-core",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

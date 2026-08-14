@@ -20,7 +20,7 @@ async fn test_beta_execution_intelligence_and_replay_journey() {
         provider_id: ProviderId("openrouter".to_string()),
         passes_count: 11,
         execution_time_ms: 62,
-        estimated_cost: 0.0012,
+        estimated_cost: fusion_core::NanoUSD::from_nanos(1_200_000),
         compiler_invoked: true,
         created_at_rfc3339: Utc::now().to_rfc3339(),
     };
@@ -61,7 +61,7 @@ async fn test_beta_execution_intelligence_and_replay_journey() {
     record2.execution_id = exec_id_2;
     record2.provider_id = ProviderId("zen".to_string());
     record2.execution_time_ms = 84;
-    record2.estimated_cost = 0.0018;
+    record2.estimated_cost = fusion_core::NanoUSD::from_nanos(1_800_000);
 
     let diff = replay_engine.compare(&record1, &record2);
     assert!(diff.provider_changed);

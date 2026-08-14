@@ -401,7 +401,7 @@ pub struct CompilerEngine {
 
 impl CompilerEngine {
     pub fn new() -> Self {
-        Self::with_resource_manager(Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: f64::INFINITY, max_daily_tokens: u64::MAX })))
+        Self::with_resource_manager(Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: fusion_core::NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX })))
     }
 
     pub fn with_resource_manager(resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>) -> Self {
@@ -416,7 +416,7 @@ impl CompilerEngine {
     }
 
     pub fn with_model_catalog(model_catalog: ModelCatalog) -> Self {
-        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: f64::INFINITY, max_daily_tokens: u64::MAX }));
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: fusion_core::NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
         let passes: Vec<Box<dyn CompilerPass>> = vec![
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
@@ -1210,7 +1210,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_budget_pass_under_quota() {
-        let rm = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: f64::INFINITY, max_daily_tokens: u64::MAX }));
+        let rm = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
         let pass = BudgetOptimisationPass { resource_manager: rm };
         let ir = test_ir();
         assert!(pass.apply(ir).await.is_ok());
@@ -1218,7 +1218,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_budget_pass_over_quota() {
-        let rm = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: 0.0, max_daily_tokens: 0 }));
+        let rm = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::ZERO, max_daily_tokens: 0 }));
         let pass = BudgetOptimisationPass { resource_manager: rm };
         let ir = test_ir();
         let result = pass.apply(ir).await;
@@ -1465,7 +1465,7 @@ mod tests {
 
     #[test]
     fn test_build_compiler_pass_order_without_policy() {
-        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: f64::INFINITY, max_daily_tokens: u64::MAX }));
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
         let engine = build_compiler(ModelCatalog::default(), rm, None);
         let names: Vec<&str> = engine.passes.iter().map(|p| p.name()).collect();
         assert_eq!(names, vec![
@@ -1480,7 +1480,7 @@ mod tests {
 
     #[test]
     fn test_build_compiler_appends_policy_when_provided() {
-        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: f64::INFINITY, max_daily_tokens: u64::MAX }));
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
         let policy = policy_ir_with_deny("shell.exec");
         let engine = build_compiler(ModelCatalog::default(), rm, Some(policy));
         let names: Vec<&str> = engine.passes.iter().map(|p| p.name()).collect();
@@ -1490,7 +1490,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_compiler_deny_blocks_through_factory() {
-        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: f64::INFINITY, max_daily_tokens: u64::MAX }));
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
         let engine = build_compiler(ModelCatalog::default(), rm, Some(policy_ir_with_deny("shell.exec")));
         let mut config = HashMap::new();
         config.insert("capability".into(), serde_json::json!("shell.exec"));

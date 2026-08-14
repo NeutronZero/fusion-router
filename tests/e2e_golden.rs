@@ -163,7 +163,7 @@ async fn test_e2e_policy_deny_blocks_compilation() {
     };
 
     let rm: Arc<dyn fusion_kernel::resource::ResourceManager> =
-        Arc::new(fusion_kernel::resource::StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: f64::INFINITY, max_daily_tokens: u64::MAX }));
+        Arc::new(fusion_kernel::resource::StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: fusion_core::NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
     let engine = fusion_compiler::build_compiler(
         fusion_types::ModelCatalog::default(),
         rm,

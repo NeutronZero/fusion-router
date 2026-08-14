@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Budget quota — daily cost and token limits.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quota {
-    pub max_daily_cost: f64,
+    pub max_daily_cost: NanoUSD,
     pub max_daily_tokens: u64,
 }
 
@@ -74,7 +74,7 @@ impl StubResourceManager {
 
 impl Default for StubResourceManager {
     fn default() -> Self {
-        Self::new(Quota { max_daily_cost: 0.0, max_daily_tokens: 0 })
+        Self::new(Quota { max_daily_cost: NanoUSD::ZERO, max_daily_tokens: 0 })
     }
 }
 
@@ -84,14 +84,14 @@ impl ResourceManager for StubResourceManager {
         let cost_nanos = estimated_cost.as_nanos();
         let current_cost = self.cost.load(Ordering::Acquire);
         let current_tokens = self.tokens.load(Ordering::Acquire);
-        let max_cost = (self.quota.max_daily_cost * 1_000_000_000.0) as u64;
+        let max_cost = self.quota.max_daily_cost.as_nanos();
         let max_tokens = self.quota.max_daily_tokens;
         (current_cost + cost_nanos <= max_cost) && (current_tokens + estimated_tokens <= max_tokens)
     }
 
     async fn try_reserve(&self, estimated_cost: NanoUSD, estimated_tokens: u64) -> bool {
         let cost_nanos = estimated_cost.as_nanos();
-        let max_cost = (self.quota.max_daily_cost * 1_000_000_000.0) as u64;
+        let max_cost = self.quota.max_daily_cost.as_nanos();
         let max_tokens = self.quota.max_daily_tokens;
 
         let current_cost = self.cost.load(Ordering::Relaxed);
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn stub_tracks_spend() {
-        let stub = StubResourceManager::new(Quota { max_daily_cost: 100.0, max_daily_tokens: 1_000_000 });
+        let stub = StubResourceManager::new(Quota { max_daily_cost: NanoUSD::from_nanos(100_000_000_000), max_daily_tokens: 1_000_000 });
         assert_eq!(stub.spent_cost(), 0.0);
         assert_eq!(stub.spent_tokens(), 0);
 
@@ -148,7 +148,7 @@ mod tests {
 
     #[tokio::test]
     async fn stub_can_afford_checks_quota() {
-        let stub = StubResourceManager::new(Quota { max_daily_cost: 1.0, max_daily_tokens: 1000 }); // $1, 1000 tokens
+        let stub = StubResourceManager::new(Quota { max_daily_cost: NanoUSD::ONE_DOLLAR, max_daily_tokens: 1000 }); // $1, 1000 tokens
         assert!(stub.can_afford(NanoUSD::from_nanos(500_000_000), 500).await); // Under quota
         assert!(!stub.can_afford(NanoUSD::from_nanos(1_100_000_000), 500).await); // Over cost quota
         assert!(!stub.can_afford(NanoUSD::from_nanos(500_000_000), 1100).await); // Over token quota

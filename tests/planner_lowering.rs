@@ -32,7 +32,7 @@ fn intent_lowers_to_canonical_workflow() {
     );
     assert_eq!(ir.edges().len(), 1);
     assert_eq!(ir.edges()[0].kind(), WorkflowEdgeKind::Sequential);
-    assert_eq!(ir.metadata().estimated_cost, 0.05);
+    assert_eq!(ir.metadata().estimated_cost, fusion_core::NanoUSD::from_nanos(50_000_000));
     assert_eq!(ir.metadata().estimated_tokens, 4096);
     assert!(ir.validate().is_empty());
 }

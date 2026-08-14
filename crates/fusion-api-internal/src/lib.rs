@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use fusion_core::{ExecutionId, PlatformError, ProviderId};
+use fusion_core::{ExecutionId, NanoUSD, PlatformError, ProviderId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +25,7 @@ pub struct ExecutionRecord {
     pub provider_id: ProviderId,
     pub passes_count: usize,
     pub execution_time_ms: u64,
-    pub estimated_cost: f64,
+    pub estimated_cost: fusion_core::NanoUSD,
     pub compiler_invoked: bool,
     pub created_at_rfc3339: String,
 }
@@ -81,7 +81,7 @@ pub struct ExecutionDiff {
     pub record_id_b: String,
     pub provider_changed: bool,
     pub latency_delta_ms: i64,
-    pub cost_delta: f64,
+    pub cost_delta: fusion_core::NanoUSD,
     pub pass_count_delta: i32,
 }
 
@@ -178,7 +178,7 @@ mod tests {
             provider_id: ProviderId("openrouter".to_string()),
             passes_count: 11,
             execution_time_ms: 62,
-            estimated_cost: 0.0012,
+            estimated_cost: NanoUSD::from_nanos(1_200_000),
             compiler_invoked: true,
             created_at_rfc3339: Utc::now().to_rfc3339(),
         };

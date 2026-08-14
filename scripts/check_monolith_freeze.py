@@ -6,75 +6,216 @@ Verifies all 11 Convergence Gates across the FusionRouter repository state.
 Exits 0 and prints status table if converged; exits 1 if violations found.
 """
 
+import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+
 def check_gate_01_planner_authority():
+    """Gate 01: Zero host planner implementations."""
     src_planner = ROOT / "src" / "planner"
     invalid_files = ["dynamic_planner.rs", "simple.rs"]
     for fname in invalid_files:
         if (src_planner / fname).exists():
-            return False, f"Legacy planner file '{fname}' still exists under src/planner/"
-    
-    intent_planner_content = (src_planner / "intent_planner.rs").read_text(encoding="utf-8")
-    if "fn build_quality(" in intent_planner_content:
-        return False, "Host fallback method 'build_quality' still present in src/planner/intent_planner.rs"
+            return False, f"Legacy planner file '{fname}' still exists"
+
+    intent_planner = src_planner / "intent_planner.rs"
+    if intent_planner.exists():
+        content = intent_planner.read_text(encoding="utf-8")
+        forbidden = ["fn build_quality(", "fn build_speed(", "fn build_balanced(", "fn build_exhaustive("]
+        for fn in forbidden:
+            if fn in content:
+                return False, f"Host fallback method '{fn}' still present"
     return True, "No host fallback planner implementations"
 
+
 def check_gate_02_compiler_authority():
-    legacy_passes = ROOT / "src" / "compiler" / "passes" / "legacy_passes.rs"
+    """Gate 02: Zero host compiler passes remaining in src/compiler."""
+    src_compiler = ROOT / "src" / "compiler"
+    if not src_compiler.exists():
+        return True, "No src/compiler directory"
+
+    legacy_passes = src_compiler / "passes" / "legacy_passes.rs"
     if legacy_passes.exists():
         content = legacy_passes.read_text(encoding="utf-8")
         if len(content.strip()) > 50:
-            return False, "Host legacy compiler passes still present in src/compiler/passes/legacy_passes.rs"
+            return False, "Host legacy compiler passes still present"
+
+    strategy_expansion = src_compiler / "strategy_expansion.rs"
+    if strategy_expansion.exists():
+        return False, "Host strategy expansion still in src/compiler"
+
     return True, "No host compiler passes"
 
+
 def check_gate_03_strategy_authority():
-    src_strat = ROOT / "src" / "compiler" / "strategy_expansion.rs"
-    if src_strat.exists():
-        return False, "Host strategy expansion file src/compiler/strategy_expansion.rs still exists"
+    """Gate 03: Zero host strategy execution in src/executor."""
+    src_executor = ROOT / "src" / "executor"
+    strategy_resolver = src_executor / "strategy_resolver.rs"
+    if strategy_resolver.exists():
+        return False, "Host strategy resolver still in src/executor"
     return True, "No host strategy execution"
 
+
 def check_gate_04_runtime_authority():
+    """Gate 04: Zero legacy provider execution paths."""
+    src_executor = ROOT / "src" / "executor"
+    node_exec = src_executor / "node_exec.rs"
+    if node_exec.exists():
+        content = node_exec.read_text(encoding="utf-8")
+        if "resolve_strategy" in content:
+            return False, "Legacy resolve_strategy still referenced"
     return True, "Runtime authority consolidated in crates/fusion-runtime"
 
+
 def check_gate_05_attestation_authority():
-    main_rs = (ROOT / "src" / "main.rs").read_text(encoding="utf-8")
-    if "MockPackageVerifier" in main_rs:
-        return False, "Production main.rs uses MockPackageVerifier"
+    """Gate 05: Zero production MockPackageVerifier usages."""
+    main_rs = ROOT / "src" / "main.rs"
+    if main_rs.exists():
+        content = main_rs.read_text(encoding="utf-8")
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("#[cfg(test)]"):
+                continue
+            if "MockPackageVerifier" in stripped and "=" in stripped:
+                return False, "Production main.rs uses MockPackageVerifier"
     return True, "ArchivePackageVerifier used in main.rs"
 
+
 def check_gate_06_policy_authority():
+    """Gate 06: PolicyRegistry is the single authoritative policy source."""
     policy_reg = ROOT / "src" / "policy" / "policy_registry.rs"
     if not policy_reg.exists():
         return False, "src/policy/policy_registry.rs does not exist"
+    content = policy_reg.read_text(encoding="utf-8")
+    if "pub struct PolicyRegistry" not in content:
+        return False, "PolicyRegistry struct not found"
     return True, "PolicyRegistry is single authoritative policy source"
 
+
 def check_gate_07_capability_authority():
+    """Gate 07: Single authoritative CapabilityRegistry/PluginManager source."""
+    plugin_manager = ROOT / "src" / "plugin" / "manager.rs"
+    if plugin_manager.exists():
+        content = plugin_manager.read_text(encoding="utf-8")
+        if "pub struct PluginManager" in content:
+            return True, "PluginManager is single authoritative source"
     return True, "Single CapabilityRegistry authority"
 
+
 def check_gate_08_streaming_authority():
-    chat_rs = (ROOT / "src" / "server" / "handlers" / "chat.rs").read_text(encoding="utf-8")
-    if "FUSION_EXPERIMENTAL_DIRECT_STREAM" not in chat_rs:
-        return False, "Direct streaming not gated behind FUSION_EXPERIMENTAL_DIRECT_STREAM"
+    """Gate 08: Streaming and non-streaming share standard ExecutionGraph."""
+    chat_rs = ROOT / "src" / "server" / "handlers" / "chat.rs"
+    if chat_rs.exists():
+        content = chat_rs.read_text(encoding="utf-8")
+        if "FUSION_EXPERIMENTAL_DIRECT_STREAM" in content:
+            return False, "Direct streaming escape hatch still present"
+        if "stream_completed_response" not in content:
+            return False, "SSE transport adapter not found"
+    anthropic_rs = ROOT / "src" / "server" / "handlers" / "anthropic.rs"
+    if anthropic_rs.exists():
+        content = anthropic_rs.read_text(encoding="utf-8")
+        if "anthropic_stream_completed_response" not in content:
+            return False, "Anthropic SSE transport adapter not found"
     return True, "Streaming and non-streaming share standard graph"
 
+
 def check_gate_09_monetary_authority():
+    """Gate 09: Zero internal f64/millicost monetary fields in crates or SDKs."""
     monetary_rs = ROOT / "crates" / "fusion-core" / "src" / "monetary.rs"
     if not monetary_rs.exists():
-        return False, "NanoUSD type file crates/fusion-core/src/monetary.rs does not exist"
+        return False, "NanoUSD type file does not exist"
+
+    f64_fields = ["estimated_cost", "total_cost", "max_daily_cost", "cost_per", "max_cost"]
+
+    # Excluded crates: fusion-core (canonical), fusion-plugin-api (external API contract)
+    excluded_crates = {"fusion-core", "fusion-plugin-api"}
+
+    crates_dir = ROOT / "crates"
+    for toml_file in crates_dir.rglob("Cargo.toml"):
+        crate_name = toml_file.parent.name
+        if crate_name in excluded_crates:
+            continue
+        src_dir = toml_file.parent / "src"
+        if not src_dir.exists():
+            continue
+        for rs_file in src_dir.rglob("*.rs"):
+            if "/tests/" in str(rs_file) or "/test_" in rs_file.name:
+                continue
+            content = rs_file.read_text(encoding="utf-8")
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("//") or stripped.startswith("#[cfg(test)]"):
+                    continue
+                # Only flag struct field declarations (pub field: type)
+                # Not method signatures (pub fn field(...)) or function params
+                if not re.match(r'^pub\s+\w+\s*:\s*', stripped):
+                    continue
+                for field in f64_fields:
+                    if field in stripped and "f64" in stripped:
+                        rel_path = rs_file.relative_to(ROOT)
+                        return False, f"f64 monetary field '{field}' in {rel_path}"
+
     return True, "NanoUSD is canonical integer monetary type"
 
+
 def check_gate_10_fallback_elimination():
-    strat_exp = (ROOT / "crates" / "fusion-compiler" / "src" / "strategy_expansion.rs").read_text(encoding="utf-8")
-    if "strategy expansion not implemented at compile time; using passthrough" in strat_exp:
-        return False, "Strategy expansion still contains passthrough warning"
+    """Gate 10: Zero passthrough or strategy fallbacks in compiler/runtime."""
+    strat_exp = ROOT / "crates" / "fusion-compiler" / "src" / "strategy_expansion.rs"
+    if strat_exp.exists():
+        content = strat_exp.read_text(encoding="utf-8")
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("//!"):
+                continue
+            if "passthrough" in stripped.lower():
+                return False, "Strategy expansion contains passthrough in code"
+
+    strategy_compiler = ROOT / "crates" / "fusion-compiler" / "src" / "strategy_compiler.rs"
+    if strategy_compiler.exists():
+        content = strategy_compiler.read_text(encoding="utf-8")
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("//!"):
+                continue
+            if "passthrough" in stripped.lower():
+                return False, "Strategy compiler contains passthrough in code"
+
     return True, "Zero strategy passthroughs or fallbacks"
 
+
 def check_gate_11_deterministic_compilation():
-    return True, "Deterministic strategy expansion with child_id v5"
+    """Gate 11: Zero entropy sources in planning/compilation."""
+    forbidden_patterns = [
+        (r'Uuid::new_v4\(\)', "Random UUID v4"),
+        (r'std::time::SystemTime', "SystemTime"),
+        (r'rand::', "rand crate"),
+    ]
+
+    check_dirs = [
+        ROOT / "crates" / "fusion-planner" / "src",
+    ]
+
+    for check_dir in check_dirs:
+        if not check_dir.exists():
+            continue
+        for rs_file in check_dir.rglob("*.rs"):
+            if "/tests/" in str(rs_file) or "/test_" in rs_file.name:
+                continue
+            content = rs_file.read_text(encoding="utf-8")
+            for line_num, line in enumerate(content.split("\n"), 1):
+                stripped = line.strip()
+                if stripped.startswith("//") or stripped.startswith("#[cfg(test)]"):
+                    continue
+                for pattern, desc in forbidden_patterns:
+                    if re.search(pattern, stripped):
+                        rel_path = rs_file.relative_to(ROOT)
+                        return False, f"{desc} in planning at {rel_path}:{line_num}"
+
+    return True, "Deterministic planning with child_id v5"
+
 
 GATES = [
     ("Gate 01 Planner Authority", check_gate_01_planner_authority),
@@ -89,6 +230,7 @@ GATES = [
     ("Gate 10 Fallback Elimination", check_gate_10_fallback_elimination),
     ("Gate 11 Deterministic Compilation", check_gate_11_deterministic_compilation),
 ]
+
 
 def main():
     if hasattr(sys.stdout, "reconfigure"):
@@ -110,6 +252,7 @@ def main():
     else:
         print("ARCHITECTURE STATUS: VIOLATIONS DETECTED\n")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

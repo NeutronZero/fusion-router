@@ -78,7 +78,7 @@ pub fn workflow_to_types(ir: &WorkflowIR) -> Result<TypesWorkflowIR, String> {
         edges,
         metadata: crate::types::IRMetadata {
             policy_applied: metadata.policy_applied.clone(),
-            estimated_cost: crate::types::NanoUSD::from_nanos((metadata.estimated_cost * 1_000_000_000.0) as u64),
+            estimated_cost: metadata.estimated_cost,
             estimated_tokens: metadata.estimated_tokens,
         },
     })
@@ -97,7 +97,7 @@ mod tests {
         WorkflowBuilder::new()
             .metadata(WorkflowMetadata {
                 policy_applied: vec!["pol".into()],
-                estimated_cost: 1.5,
+                estimated_cost: fusion_core::NanoUSD::from_nanos(1_500_000_000),
                 estimated_tokens: 100,
             })
             .add_node("n1", WorkflowNodeKind::Task, Some("CodeGeneration"))

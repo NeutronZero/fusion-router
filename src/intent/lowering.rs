@@ -1,5 +1,6 @@
 use crate::intent::NormalizedIntent;
 use fusion_ir::{WorkflowBuilder, WorkflowIR, WorkflowMetadata, ValidationError};
+use fusion_core::NanoUSD;
 
 pub fn intent_to_workflow(intent: &NormalizedIntent) -> Result<WorkflowIR, ValidationError> {
     let mut config = std::collections::BTreeMap::new();
@@ -12,8 +13,12 @@ pub fn intent_to_workflow(intent: &NormalizedIntent) -> Result<WorkflowIR, Valid
         config.insert("max_tokens".into(), serde_json::Value::Number(tokens.into()));
     }
 
+    let estimated_cost = intent.budget.max_cost_usd
+        .map(|usd| NanoUSD::from_nanos((usd * 1_000_000_000.0) as u64))
+        .unwrap_or(NanoUSD::ZERO);
+
     let metadata = WorkflowMetadata {
-        estimated_cost: intent.budget.max_cost_usd.unwrap_or(0.0),
+        estimated_cost,
         estimated_tokens: intent.budget.max_tokens.unwrap_or(0),
         ..WorkflowMetadata::default()
     };
@@ -148,7 +153,7 @@ mod tests {
         ))
         .unwrap();
 
-        assert_eq!(ir.metadata().estimated_cost, 1.5);
+        assert_eq!(ir.metadata().estimated_cost, NanoUSD::from_nanos(1_500_000_000));
         assert_eq!(ir.metadata().estimated_tokens, 8000);
     }
 }

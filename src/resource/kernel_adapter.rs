@@ -25,7 +25,7 @@ impl KernelResourceManager {
         Self {
             inner,
             quota: fusion_kernel::resource::Quota {
-                max_daily_cost: max_daily_cost.to_usd_f64(),
+                max_daily_cost,
                 max_daily_tokens,
             },
         }
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn quota_projects_two_field_view() {
         let rm = manager();
-        assert_eq!(rm.quota().max_daily_cost, 1.0);
+        assert_eq!(rm.quota().max_daily_cost, fusion_core::NanoUSD::ONE_DOLLAR);
         assert_eq!(rm.quota().max_daily_tokens, 1000);
     }
 

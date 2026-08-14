@@ -1303,7 +1303,7 @@ mod tests {
     async fn test_tight_quota_fails_mid_run() {
         use fusion_kernel::resource::{ResourceManager, StubResourceManager};
 
-        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: 1.0, max_daily_tokens: 100 }));
+        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::ONE_DOLLAR, max_daily_tokens: 100 }));
         let provider: Arc<dyn ChatProvider> = Arc::new(MockProvider::default_response());
         let engine = RuntimeEngine::new(provider).with_resource_manager(rm.clone());
         // Each node estimates 75 tokens; the stub records 75 actual tokens.
@@ -1322,7 +1322,7 @@ mod tests {
     async fn test_generous_quota_allows_run() {
         use fusion_kernel::resource::{ResourceManager, StubResourceManager};
 
-        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: 1.0, max_daily_tokens: 10_000 }));
+        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::ONE_DOLLAR, max_daily_tokens: 10_000 }));
         let provider: Arc<dyn ChatProvider> = Arc::new(MockProvider::default_response());
         let engine = RuntimeEngine::new(provider).with_resource_manager(rm.clone());
         let graph = make_chain_graph(
@@ -1339,7 +1339,7 @@ mod tests {
     async fn test_budget_error_reports_node_and_quota() {
         use fusion_kernel::resource::{ResourceManager, StubResourceManager};
 
-        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: 1.0, max_daily_tokens: 100 }));
+        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::ONE_DOLLAR, max_daily_tokens: 100 }));
         let executor = ProviderExecutor::new(Arc::new(MockProvider::default_response()))
             .with_resource_manager(rm);
         let node = ExecutionNode {

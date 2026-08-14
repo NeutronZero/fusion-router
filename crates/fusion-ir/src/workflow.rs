@@ -18,7 +18,7 @@ pub struct WorkflowIR {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkflowMetadata {
     pub policy_applied: Vec<String>,
-    pub estimated_cost: f64,
+    pub estimated_cost: fusion_core::NanoUSD,
     pub estimated_tokens: u64,
 }
 

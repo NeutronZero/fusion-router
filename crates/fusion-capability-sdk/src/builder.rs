@@ -1,4 +1,5 @@
 use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityTrait, Permission};
+use fusion_core::NanoUSD;
 use semver::Version;
 use serde_json::Value;
 
@@ -11,7 +12,7 @@ pub struct CapabilityBuilder {
     outputs_schema: Option<Value>,
     permissions: Vec<Permission>,
     dependencies: Vec<CapabilityId>,
-    estimated_cost_usd: f64,
+    estimated_cost: NanoUSD,
     estimated_latency_ms: u64,
     reliability_score: f32,
     supports_streaming: bool,
@@ -28,7 +29,7 @@ impl CapabilityBuilder {
             outputs_schema: None,
             permissions: Vec::new(),
             dependencies: Vec::new(),
-            estimated_cost_usd: 0.0,
+            estimated_cost: NanoUSD::ZERO,
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
@@ -61,8 +62,13 @@ impl CapabilityBuilder {
         self
     }
 
+    pub fn estimated_cost(mut self, cost: NanoUSD) -> Self {
+        self.estimated_cost = cost;
+        self
+    }
+
     pub fn estimated_cost_usd(mut self, cost: f64) -> Self {
-        self.estimated_cost_usd = cost;
+        self.estimated_cost = NanoUSD::from_nanos((cost * 1_000_000_000.0) as u64);
         self
     }
 
@@ -95,7 +101,7 @@ impl CapabilityBuilder {
             outputs_schema: self.outputs_schema.unwrap_or(Value::Object(Default::default())),
             permissions: self.permissions,
             dependencies: self.dependencies,
-            estimated_cost_usd: self.estimated_cost_usd,
+            estimated_cost_usd: self.estimated_cost.to_usd_f64(),
             estimated_latency_ms: self.estimated_latency_ms,
             reliability_score: self.reliability_score,
             supports_streaming: self.supports_streaming,
@@ -130,7 +136,7 @@ mod tests {
             .finish();
         assert_eq!(contract.description, "A full test capability");
         assert_eq!(contract.permissions, vec![Permission::Network]);
-        assert_eq!(contract.estimated_cost_usd, 0.01);
+        assert!((contract.estimated_cost_usd - 0.01).abs() < 1e-9);
         assert!(contract.supports_streaming);
     }
 

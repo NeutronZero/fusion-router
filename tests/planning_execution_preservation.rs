@@ -1,3 +1,4 @@
+use fusion_core::NanoUSD;
 use fusion_ir::{WorkflowBuilder, WorkflowMetadata, WorkflowNodeKind};
 use fusion_router::ir::adapter::{uuid_for, workflow_to_types};
 use fusion_router::types::{IRNodeKind, WorkflowIR as TypesWorkflowIR};
@@ -10,7 +11,7 @@ fn build_full_ir() -> fusion_ir::WorkflowIR {
     let mut builder = WorkflowBuilder::new();
     builder = builder.metadata(WorkflowMetadata {
         policy_applied: vec!["policy_v1".into(), "policy_v2".into()],
-        estimated_cost: 0.123,
+        estimated_cost: NanoUSD::from_nanos(123_000_000),
         estimated_tokens: 5000,
     });
 
