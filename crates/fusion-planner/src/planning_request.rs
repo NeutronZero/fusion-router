@@ -40,6 +40,14 @@ pub struct RequirementsSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCatalogSnapshot {
+    pub catalog: ModelCatalog,
+}
+
+pub struct CapabilityCatalogSnapshot {
+    pub catalog: CapabilityCatalog,
+}
+
 pub struct PlanningRequest {
     pub intent: ExecutionIntent,
     pub user_prompt: String,
@@ -49,4 +57,16 @@ pub struct PlanningRequest {
     pub capability_catalog: CapabilityCatalog,
     pub model_catalog: ModelCatalog,
     pub telemetry: RoutingTelemetrySnapshot,
+}
+
+impl ModelCatalogSnapshot {
+    pub fn new(catalog: ModelCatalog) -> Self {
+        Self { catalog }
+    }
+}
+
+impl CapabilityCatalogSnapshot {
+    pub fn new(catalog: CapabilityCatalog) -> Self {
+        Self { catalog }
+    }
 }

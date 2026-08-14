@@ -5,6 +5,7 @@
 //! will implement this trait (with extra inherent methods) at production cutover.
 
 use async_trait::async_trait;
+use fusion_core::NanoUSD;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -124,8 +125,8 @@ impl ResourceManager for StubResourceManager {
         self.tokens.load(Ordering::Acquire)
     }
 
-    async fn record_usage(&self, cost_millicosts: u64, tokens: u64) {
-        self.cost.fetch_add(cost_millicosts, Ordering::Relaxed);
+    async fn record_usage(&self, cost_nanos: NanoUSD, tokens: u64) {
+        self.cost.fetch_add(cost_nanos.as_nanos(), Ordering::Relaxed);
         self.tokens.fetch_add(tokens, Ordering::Relaxed);
     }
 }
@@ -136,7 +137,7 @@ mod tests {
 
     #[test]
     fn stub_tracks_spend() {
-        let stub = StubResourceManager::new(100.0, 1_000_000);
+        let stub = StubResourceManager::new(Quota { max_daily_cost: 100.0, max_daily_tokens: 1_000_000 });
         assert_eq!(stub.spent_cost(), 0.0);
         assert_eq!(stub.spent_tokens(), 0);
 
@@ -147,9 +148,9 @@ mod tests {
 
     #[tokio::test]
     async fn stub_can_afford_checks_quota() {
-        let stub = StubResourceManager::new(1.0, 1000); // $1, 1000 tokens
-        assert!(stub.can_afford(0.5, 500).await); // Under quota
-        assert!(!stub.can_afford(1.1, 500).await); // Over cost quota
-        assert!(!stub.can_afford(0.5, 1100).await); // Over token quota
+        let stub = StubResourceManager::new(Quota { max_daily_cost: 1.0, max_daily_tokens: 1000 }); // $1, 1000 tokens
+        assert!(stub.can_afford(NanoUSD::from_nanos(500_000_000), 500).await); // Under quota
+        assert!(!stub.can_afford(NanoUSD::from_nanos(1_100_000_000), 500).await); // Over cost quota
+        assert!(!stub.can_afford(NanoUSD::from_nanos(500_000_000), 1100).await); // Over token quota
     }
 }

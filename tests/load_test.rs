@@ -492,8 +492,7 @@ async fn test_loop_iteration_stress() {
 
 #[tokio::test]
 async fn test_compilation_throughput() {
-    use fusion_router::compiler::passes::*;
-    use fusion_router::compiler::{Compiler, DefaultCompiler};
+    use fusion_router::compiler::{build_compiler, Compiler};
     use fusion_router::resource::DefaultResourceManager;
     use fusion_router::types::{
         IRMetadata, IRNode, IRNodeKind, IREdge, Quota, StrategyKind, WorkflowIR,
@@ -509,14 +508,11 @@ async fn test_compilation_throughput() {
         provider_limits: Default::default(),
     };
     let resource_manager = Arc::new(DefaultResourceManager::new(quota));
-    let compiler = DefaultCompiler {
-        passes: vec![
-            Box::new(ConstraintValidationPass),
-            Box::new(ControlFlowValidationPass),
-            Box::new(BudgetOptimisationPass { resource_manager }),
-            Box::new(ModelResolutionPass { model_catalog: Default::default(), model_requirements: None }),
-        ],
-    };
+    let compiler = build_compiler(
+        Default::default(),
+        resource_manager,
+        None,
+    );
 
     let nodes: Vec<IRNode> = (0..50)
         .map(|_i| {

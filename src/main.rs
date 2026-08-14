@@ -1,4 +1,4 @@
-#![allow(dead_code)] // Intentional: binary crate exposes no public API; pub items in module tree are stubs for future production wiring (CircuitBreakingProvider, WorkflowPlanner, DynamicPlanner)
+#![allow(dead_code)] // Intentional: binary crate exposes no public API; pub items in module tree are stubs for future production wiring
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -235,10 +235,10 @@ async fn main() {
     ));
 
     let archive_path = std::path::PathBuf::from("release_archive");
-    let archive_backend = crate::release::archive::FilesystemArchiveBackend::new(&archive_path);
+    let archive_backend = crate::release::archive::FilesystemArchiveBackend::new(archive_path);
     let signing_key = std::env::var("FUSION_SIGNING_KEY").ok();
     let signer: Option<Arc<dyn crate::release::signing::Signer>> = signing_key.map(|key| {
-        Arc::new(crate::release::signing::HmacSigner::new(&key)) as Arc<dyn crate::release::signing::Signer>
+        Arc::new(crate::release::signing::HmacSha256Signer::new("signing-key", key.as_bytes())) as Arc<dyn crate::release::signing::Signer>
     });
     let ops_verifier: Arc<dyn crate::operations::PackageVerifier> = Arc::new(
         crate::operations::ArchivePackageVerifier::new(archive_backend, signer),

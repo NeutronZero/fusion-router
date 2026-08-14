@@ -252,7 +252,7 @@ pub fn expand_react(node: &ExecutionNode) -> ExecutionSubgraph {
 
     let tool_node = ExecutionNode {
         id: tool_id,
-        kind: ExecutionNodeKind::ToolExecute,
+        kind: ExecutionNodeKind::Transform,
         strategy: StrategyKind::Single,
         model: node.model.clone(),
         retry_policy: node.retry_policy.clone(),

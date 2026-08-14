@@ -23,7 +23,7 @@ fn test_preservation_conformance_all_9_kinds() {
     ];
 
     for (id, kind, cap) in kinds.iter() {
-        builder = builder.add_node(*id, kind.clone(), cap.map(|s| s.to_string())).expect("Add node");
+        builder = builder.add_node(*id, kind.clone(), *cap).expect("Add node");
     }
 
     let ir = builder.build().expect("Build WorkflowIR");

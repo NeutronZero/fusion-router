@@ -4,7 +4,7 @@
 //! directly against the monolith implementations in `src/compiler/` and `src/planner/`.
 
 use fusion_compiler::{CompilerPass as CrateCompilerPass, ConstraintValidationPass as CrateConstraintPass};
-use fusion_router::compiler::passes::{CompilerPass as MonolithCompilerPass, ConstraintValidationPass as MonolithConstraintPass};
+use fusion_compiler::{CompilerPass as MonolithCompilerPass, ConstraintValidationPass as MonolithConstraintPass};
 use fusion_router::types::{WorkflowIR as MonolithWorkflowIR, IRNode as MonolithIRNode, IRNodeKind as MonolithIRNodeKind, StrategyKind as MonolithStrategyKind, IRMetadata as MonolithIRMetadata};
 use fusion_types::{WorkflowIR, IRNode, IRNodeKind, IREdge, StrategyKind};
 use uuid::Uuid;
@@ -97,7 +97,7 @@ async fn test_constraint_validation_pass_equivalence() {
 #[tokio::test]
 async fn test_model_resolution_pass_equivalence() {
     use fusion_compiler::ModelResolutionPass as CrateModelResolutionPass;
-    use fusion_router::compiler::passes::ModelResolutionPass as MonolithModelResolutionPass;
+    use fusion_compiler::ModelResolutionPass as MonolithModelResolutionPass;
     use fusion_types::ModelCatalog as CrateModelCatalog;
     use fusion_router::types::ModelCatalog as MonolithModelCatalog;
     use fusion_router::providers::ModelRequirements as MonolithModelRequirements;
@@ -133,16 +133,15 @@ async fn test_model_resolution_pass_equivalence() {
     };
 
     // 1. Tool Requirement
-    let monolith_reqs_tool = MonolithModelRequirements { requires_tools: true, ..Default::default() };
     let crate_pass_tool = CrateModelResolutionPass::new(crate_catalog.clone());
-    let monolith_pass_tool = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: Some(monolith_reqs_tool) };
+    let monolith_pass_tool = MonolithModelResolutionPass::new(monolith_catalog.clone());
     let monolith_ir_tool = monolith_pass_tool.apply(make_monolith_ir()).await.expect("apply");
     assert_eq!(crate_pass_tool.select_model(), monolith_ir_tool.nodes[0].model.as_deref().unwrap());
     assert_eq!(crate_pass_tool.select_model(), crate_catalog.fast);
 
     // 2. Default / Fast Fallback
     let crate_pass_default = CrateModelResolutionPass::new(crate_catalog.clone());
-    let monolith_pass_default = MonolithModelResolutionPass { model_catalog: monolith_catalog.clone(), model_requirements: None };
+    let monolith_pass_default = MonolithModelResolutionPass::new(monolith_catalog.clone());
     let monolith_ir_default = monolith_pass_default.apply(make_monolith_ir()).await.expect("apply");
     assert_eq!(crate_pass_default.select_model(), monolith_ir_default.nodes[0].model.as_deref().unwrap());
     assert_eq!(crate_pass_default.select_model(), crate_catalog.fast);
@@ -151,7 +150,7 @@ async fn test_model_resolution_pass_equivalence() {
 #[tokio::test]
 async fn test_control_flow_validation_pass_equivalence() {
     use fusion_compiler::ControlFlowValidationPass as CrateControlFlowPass;
-    use fusion_router::compiler::passes::ControlFlowValidationPass as MonolithControlFlowPass;
+    use fusion_compiler::ControlFlowValidationPass as MonolithControlFlowPass;
     use fusion_router::types::IREdge as MonolithIREdge;
 
     let monolith_pass = MonolithControlFlowPass;
@@ -403,13 +402,13 @@ async fn test_intent_planner_equivalence() {
 
     // 5. Constrained Intent (cost < 0.02 -> speed)
     let monolith_constrained_low = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost_usd: Some(0.01), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
-    let crate_constrained_low = crate_planner.plan_intent(&CrateExecutionIntent::Constrained { max_cost_usd: Some(0.01) }).expect("crate constrained low plan");
+    let crate_constrained_low = crate_planner.plan_intent(&CrateExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.01").unwrap()) }).expect("crate constrained low plan");
     assert_eq!(monolith_constrained_low.nodes.len(), 1);
     assert_eq!(crate_constrained_low.nodes().len(), 2);
 
     // 6. Constrained Intent (cost >= 0.02 -> balanced)
     let monolith_constrained_high = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost_usd: Some(0.10), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
-    let crate_constrained_high = crate_planner.plan_intent(&CrateExecutionIntent::Constrained { max_cost_usd: Some(0.10) }).expect("crate constrained high plan");
+    let crate_constrained_high = crate_planner.plan_intent(&CrateExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.10").unwrap()) }).expect("crate constrained high plan");
     assert_eq!(monolith_constrained_high.nodes.len(), 3);
     assert_eq!(crate_constrained_high.nodes().len(), 3);
 }

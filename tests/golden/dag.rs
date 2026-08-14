@@ -2,16 +2,29 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use fusion_router::compiler::Compiler;
-use fusion_router::compiler::passes::{ControlFlowValidationPass, ConstraintValidationPass, ModelResolutionPass};
-use fusion_router::compiler::CompilerPass;
+use fusion_router::compiler::build_compiler;
+use fusion_router::resource::DefaultResourceManager;
 use fusion_router::types::{
-    IRMetadata, IRNode, IRNodeKind, IREdge, StrategyKind, WorkflowIR,
+    IRMetadata, IRNode, IRNodeKind, IREdge, Quota, StrategyKind, WorkflowIR,
 };
-use fusion_router::compiler::DefaultCompiler;
+use fusion_compiler::CompilerPass;
+
+fn permissive_compiler() -> fusion_router::compiler::DefaultCompiler {
+    build_compiler(
+        Default::default(),
+        std::sync::Arc::new(DefaultResourceManager::new(Quota {
+            max_daily_cost: 1_000_000.0,
+            max_daily_tokens: 1_000_000_000,
+            max_concurrent: 100,
+            provider_limits: Default::default(),
+        })),
+        None,
+    )
+}
 
 #[tokio::test]
 async fn test_control_flow_conditional_valid() {
-    let pass = ControlFlowValidationPass;
+    let pass = fusion_compiler::ControlFlowValidationPass;
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();
     let c = Uuid::new_v4();
@@ -45,7 +58,7 @@ async fn test_control_flow_conditional_valid() {
 
 #[tokio::test]
 async fn test_control_flow_conditional_no_condition_edge() {
-    let pass = ControlFlowValidationPass;
+    let pass = fusion_compiler::ControlFlowValidationPass;
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();
 
@@ -71,7 +84,7 @@ async fn test_control_flow_conditional_no_condition_edge() {
 
 #[tokio::test]
 async fn test_control_flow_loop_valid() {
-    let pass = ControlFlowValidationPass;
+    let pass = fusion_compiler::ControlFlowValidationPass;
     let loop_node = Uuid::new_v4();
     let body = Uuid::new_v4();
     let exit = Uuid::new_v4();
@@ -104,7 +117,7 @@ async fn test_control_flow_loop_valid() {
 
 #[tokio::test]
 async fn test_control_flow_split_join_valid() {
-    let pass = ControlFlowValidationPass;
+    let pass = fusion_compiler::ControlFlowValidationPass;
     let split = Uuid::new_v4();
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();
@@ -137,7 +150,7 @@ async fn test_control_flow_split_join_valid() {
 
 #[tokio::test]
 async fn test_control_flow_split_no_outgoing() {
-    let pass = ControlFlowValidationPass;
+    let pass = fusion_compiler::ControlFlowValidationPass;
     let split = Uuid::new_v4();
 
     let ir = WorkflowIR {
@@ -159,7 +172,7 @@ async fn test_control_flow_split_no_outgoing() {
 
 #[tokio::test]
 async fn test_control_flow_loop_no_max_iterations() {
-    let pass = ControlFlowValidationPass;
+    let pass = fusion_compiler::ControlFlowValidationPass;
     let loop_node = Uuid::new_v4();
 
     let ir = WorkflowIR {
@@ -181,7 +194,7 @@ async fn test_control_flow_loop_no_max_iterations() {
 
 #[tokio::test]
 async fn test_control_flow_barrier_valid() {
-    let pass = ControlFlowValidationPass;
+    let pass = fusion_compiler::ControlFlowValidationPass;
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();
     let barrier = Uuid::new_v4();
@@ -213,13 +226,7 @@ async fn test_control_flow_barrier_valid() {
 
 #[tokio::test]
 async fn test_compiler_passes_handle_all_node_kinds() {
-    let compiler = DefaultCompiler {
-        passes: vec![
-            Box::new(ConstraintValidationPass),
-            Box::new(ControlFlowValidationPass),
-            Box::new(ModelResolutionPass { model_catalog: Default::default(), model_requirements: None }),
-        ],
-    };
+    let compiler = permissive_compiler();
 
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();
@@ -257,7 +264,7 @@ async fn test_compiler_passes_handle_all_node_kinds() {
 
 #[tokio::test]
 async fn detect_cycle_disconnected_subgraph() {
-    let pass = ControlFlowValidationPass;
+    let pass = fusion_compiler::ControlFlowValidationPass;
 
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();

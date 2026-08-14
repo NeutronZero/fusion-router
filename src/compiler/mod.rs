@@ -5,6 +5,7 @@ pub mod passes;
 pub mod registry;
 pub mod optimization;
 pub mod pipeline;
+pub mod strategy_expansion;
 
 use async_trait::async_trait;
 use std::sync::Arc;

@@ -56,8 +56,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_compiler_pipeline_execution() {
+        use fusion_compiler::CompilerPass as _;
+
+        struct PassAdapter(fusion_compiler::ConstraintValidationPass);
+
+        #[async_trait::async_trait]
+        impl CompilerPass for PassAdapter {
+            fn name(&self) -> &str { self.0.name() }
+            async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
+                self.0.apply(ir).await
+            }
+        }
+
         let mut pipeline = CompilerPipeline::new();
-        pipeline.add_pass(Box::new(crate::compiler::passes::ConstraintValidationPass));
+        pipeline.add_pass(Box::new(PassAdapter(fusion_compiler::ConstraintValidationPass)));
 
         let input_ir = WorkflowIR {
             plan_id: Uuid::new_v4(),

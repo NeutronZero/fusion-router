@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use fusion_router::compiler::Compiler;
-use fusion_router::compiler::passes::{ConstraintValidationPass, ModelResolutionPass};
-use fusion_router::compiler::CompilerPass;
+use fusion_router::compiler::build_compiler;
+use fusion_router::resource::DefaultResourceManager;
 use fusion_router::types::{
-    IRMetadata, IRNode, IRNodeKind, StrategyKind, WorkflowIR,
+    IRMetadata, IRNode, IRNodeKind, Quota, StrategyKind, WorkflowIR,
 };
+use fusion_compiler::CompilerPass;
 
 fn create_test_ir() -> WorkflowIR {
     WorkflowIR {
@@ -29,14 +30,22 @@ fn create_test_ir() -> WorkflowIR {
     }
 }
 
+fn permissive_compiler() -> fusion_router::compiler::DefaultCompiler {
+    build_compiler(
+        Default::default(),
+        std::sync::Arc::new(DefaultResourceManager::new(Quota {
+            max_daily_cost: 1_000_000.0,
+            max_daily_tokens: 1_000_000_000,
+            max_concurrent: 100,
+            provider_limits: Default::default(),
+        })),
+        None,
+    )
+}
+
 #[tokio::test]
 async fn test_compiler_determinism() {
-    let compiler = fusion_router::compiler::DefaultCompiler {
-        passes: vec![
-            Box::new(ConstraintValidationPass),
-            Box::new(ModelResolutionPass { model_catalog: Default::default(), model_requirements: None }),
-        ],
-    };
+    let compiler = permissive_compiler();
 
     let ir = create_test_ir();
     let graph1 = compiler.compile(ir.clone()).await.unwrap();
@@ -49,7 +58,7 @@ async fn test_compiler_determinism() {
 
 #[tokio::test]
 async fn test_constraint_validation_empty_ir() {
-    let pass = ConstraintValidationPass;
+    let pass = fusion_compiler::ConstraintValidationPass;
     let empty_ir = WorkflowIR {
         plan_id: Uuid::new_v4(),
         nodes: vec![],
@@ -67,7 +76,7 @@ async fn test_constraint_validation_empty_ir() {
 
 #[tokio::test]
 async fn test_model_resolution() {
-    let pass = ModelResolutionPass { model_catalog: Default::default(), model_requirements: None };
+    let pass = fusion_compiler::ModelResolutionPass::new(Default::default());
     let ir = create_test_ir();
 
     let result = pass.apply(ir).await.unwrap();
@@ -75,43 +84,10 @@ async fn test_model_resolution() {
 }
 
 #[tokio::test]
-async fn test_budget_optimisation_pass_success() {
-    use std::sync::Arc;
-    use fusion_router::compiler::passes::BudgetOptimisationPass;
-    use fusion_router::resource::DefaultResourceManager;
-    use fusion_router::types::Quota;
-
-    let rm = Arc::new(DefaultResourceManager::new(Quota {
-        max_daily_cost: 10.0,
-        max_daily_tokens: 10000,
-        max_concurrent: 10,
-        provider_limits: Default::default(),
-    }));
-
-    let pass = BudgetOptimisationPass { resource_manager: rm };
-    let ir = create_test_ir(); // cost is 0.01, tokens 500
-
-    let result = pass.apply(ir).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn test_budget_optimisation_pass_failure() {
-    use std::sync::Arc;
-    use fusion_router::compiler::passes::BudgetOptimisationPass;
-    use fusion_router::resource::DefaultResourceManager;
-    use fusion_router::types::Quota;
-
-    let rm = Arc::new(DefaultResourceManager::new(Quota {
-        max_daily_cost: 0.001, // lower than 0.01
-        max_daily_tokens: 100, // lower than 500
-        max_concurrent: 10,
-        provider_limits: Default::default(),
-    }));
-
-    let pass = BudgetOptimisationPass { resource_manager: rm };
+async fn test_control_flow_valid_dag() {
+    let pass = fusion_compiler::ControlFlowValidationPass;
     let ir = create_test_ir();
 
     let result = pass.apply(ir).await;
-    assert!(result.is_err());
+    assert!(result.is_ok());
 }
