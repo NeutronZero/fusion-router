@@ -17,6 +17,8 @@ pub mod score;
 pub mod strategy_compiler;
 pub mod strategy_expansion;
 
+use strategy_compiler::StrategyLoweringPass;
+
 /// Weights for sub-scores in the route scoring formula.
 const WEIGHT_CAPABILITY: f64 = 0.3;
 const WEIGHT_BUDGET: f64 = 0.25;
@@ -960,6 +962,7 @@ pub fn build_compiler(
     let mut engine = CompilerEngine::with_resource_manager_custom(resource_manager.clone());
     engine.add_pass(Box::new(ConstraintValidationPass));
     engine.add_pass(Box::new(ControlFlowValidationPass));
+    engine.add_pass(Box::new(StrategyLoweringPass));
     engine.add_pass(Box::new(DeadNodeEliminationPass));
     engine.add_pass(Box::new(ModelResolutionPass::new(model_catalog)));
     engine.add_pass(Box::new(BudgetOptimisationPass { resource_manager }));
@@ -1467,6 +1470,7 @@ mod tests {
         assert_eq!(names, vec![
             "constraint_validation",
             "control_flow_validation",
+            "strategy_lowering",
             "dead_node_elimination",
             "model_resolution",
             "budget_optimisation",
@@ -1479,8 +1483,8 @@ mod tests {
         let policy = policy_ir_with_deny("shell.exec");
         let engine = build_compiler(ModelCatalog::default(), rm, Some(policy));
         let names: Vec<&str> = engine.passes.iter().map(|p| p.name()).collect();
-        assert_eq!(names.len(), 6);
-        assert_eq!(names[5], "policy");
+        assert_eq!(names.len(), 7);
+        assert_eq!(names[6], "policy");
     }
 
     #[tokio::test]
