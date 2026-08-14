@@ -226,9 +226,8 @@ async fn main() {
     ));
     let ops_inspector = Arc::new(crate::operations::runtime_inspector::RuntimeInspector::new(ops_cache.clone()));
     let ops_audit = Arc::new(crate::telemetry::audit::AuditLog::new(1000));
-    let ops_policy_registry = Arc::new(crate::policy::PolicyRegistry::new());
     let ops_policy_admin = Arc::new(crate::operations::policy_admin::PolicyAdmin::new(
-        ops_policy_registry.clone(),
+        state.policy_registry.clone(),
         ops_audit.clone(),
     ));
 
@@ -267,8 +266,7 @@ async fn main() {
         "plugin manager startup lifecycle executed (Discover -> Load -> Validate -> Initialize -> Register -> Activate)"
     );
     let _plugin_manager = plugin_manager;
-    let state = state.with_policy_registry(ops_policy_registry.clone());
-
+    let state = state.with_capability_registry(frozen_capability_registry);
     let ops_state = crate::operations::handlers::OperationsState {
         dashboard: ops_dashboard,
         inspector: ops_inspector,

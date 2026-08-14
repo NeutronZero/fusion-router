@@ -816,6 +816,7 @@ fn build_single_node_ir(_task: &TaskDef, model: &str) -> WorkflowIR {
         }],
         edges: vec![],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec!["eval:single".into()],
             estimated_cost: NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 1000,

@@ -45,6 +45,7 @@ async fn test_resource_quota_exhausted_globally() {
         nodes: vec![],
         edges: vec![],
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: NanoUSD::from_nanos(500_000_000),
             estimated_tokens: 60,
             max_depth: 1,
@@ -60,6 +61,7 @@ async fn test_resource_quota_exhausted_globally() {
     let graph2 = ExecutionGraph {
         graph_id: Uuid::new_v4(),
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: NanoUSD::from_nanos(800_000_000),
             estimated_tokens: 60,
             max_depth: 1,
@@ -100,6 +102,7 @@ async fn test_panic_in_executor_releases_quota() {
         nodes: vec![],
         edges: vec![],
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: NanoUSD::from_nanos(2_000_000_000),
             estimated_tokens: 200,
             max_depth: 1,

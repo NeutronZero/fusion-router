@@ -65,6 +65,8 @@ pub struct IREdge {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IRMetadata {
     pub policy_applied: Vec<String>,
+    #[serde(default)]
+    pub policy_version: u64,
     pub estimated_cost: NanoUSD,
     pub estimated_tokens: u64,
 }
@@ -155,6 +157,8 @@ pub struct ExecutionEdge {
 pub struct GraphMetadata {
     pub estimated_cost: NanoUSD,
     pub estimated_tokens: u64,
+    #[serde(default)]
+    pub policy_version: u64,
     pub max_depth: u32,
     pub node_count: u32,
 }

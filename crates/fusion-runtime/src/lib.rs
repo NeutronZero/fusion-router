@@ -687,6 +687,7 @@ mod tests {
             ],
             edges: vec![ExecutionEdge { from: n1, to: n2, condition: None }],
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 200,
                 max_depth: 2,
@@ -1289,6 +1290,7 @@ mod tests {
                 .collect(),
             edges: node_ids.windows(2).map(|w| ExecutionEdge { from: w[0], to: w[1], condition: None }).collect(),
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 200,
                 max_depth: node_ids.len() as u32,
@@ -1439,6 +1441,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 100,
                 max_depth: 1,
@@ -1490,6 +1493,7 @@ mod tests {
             ],
             edges: vec![ExecutionEdge { from: n1, to: n2, condition: None }],
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 2,
@@ -1517,6 +1521,7 @@ mod tests {
             nodes: vec![node],
             edges: vec![],
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 1,

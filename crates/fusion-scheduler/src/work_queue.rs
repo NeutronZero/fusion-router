@@ -250,6 +250,7 @@ mod tests {
             metadata: GraphMetadata {
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
+                policy_version: 0,
                 max_depth: 1,
                 node_count: nodes.len() as u32,
             },

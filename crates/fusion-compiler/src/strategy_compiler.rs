@@ -218,6 +218,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
                 estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 100,

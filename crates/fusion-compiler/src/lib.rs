@@ -380,6 +380,7 @@ pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
         metadata: GraphMetadata {
             estimated_cost: ir.metadata.estimated_cost,
             estimated_tokens: ir.metadata.estimated_tokens,
+            policy_version: ir.metadata.policy_version,
             max_depth: 1,
             node_count: ir.nodes.len() as u32,
         },
@@ -993,6 +994,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
                 estimated_cost: NanoUSD::from_nanos(100_000_000),
                 estimated_tokens: 500,
@@ -1008,6 +1010,7 @@ mod tests {
             nodes: vec![],
             edges: vec![],
             metadata: IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
@@ -1243,6 +1246,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
                 estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 100,
@@ -1299,6 +1303,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
@@ -1328,6 +1333,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
@@ -1358,6 +1364,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
@@ -1405,6 +1412,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
@@ -1432,7 +1440,7 @@ mod tests {
                 IRNode { id: id_orphan, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
             ],
             edges: vec![IREdge { from: id_a, to: id_b, condition: None }],
-            metadata: IRMetadata { policy_applied: vec![], estimated_cost: NanoUSD::ZERO, estimated_tokens: 0 },
+            metadata: IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: NanoUSD::ZERO, estimated_tokens: 0 },
         };
         let result = pass.apply(ir).await.expect("pass should succeed");
         assert_eq!(result.nodes.len(), 2, "orphan node should be eliminated");
@@ -1452,7 +1460,7 @@ mod tests {
                 IRNode { id: id_b, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
             ],
             edges: vec![IREdge { from: id_a, to: id_b, condition: None }],
-            metadata: IRMetadata { policy_applied: vec![], estimated_cost: NanoUSD::ZERO, estimated_tokens: 0 },
+            metadata: IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: NanoUSD::ZERO, estimated_tokens: 0 },
         };
         let result = pass.apply(ir).await.expect("pass should succeed");
         assert_eq!(result.nodes.len(), 2);
@@ -1504,7 +1512,7 @@ mod tests {
                 config,
             }],
             edges: vec![],
-            metadata: IRMetadata { policy_applied: vec![], estimated_cost: NanoUSD::from_nanos(10_000_000), estimated_tokens: 100 },
+            metadata: IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: NanoUSD::from_nanos(10_000_000), estimated_tokens: 100 },
         };
         let result = engine.compile("test", &ir).await;
         assert!(result.is_err(), "deny policy should block compilation through factory");

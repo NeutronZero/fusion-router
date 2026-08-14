@@ -153,6 +153,7 @@ mod tests {
                 condition: None,
             }],
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::ONE_DOLLAR,
                 estimated_tokens: 10,
                 max_depth: 2,

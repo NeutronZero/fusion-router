@@ -11,6 +11,7 @@ use crate::types::{
 pub struct IntentPlanner {
     pub model_catalog: ModelCatalog,
     pub capability_catalog: Option<CapabilityCatalog>,
+    pub capability_snapshot: fusion_kernel::CapabilityCatalog,
 }
 
 impl IntentPlanner {
@@ -18,6 +19,7 @@ impl IntentPlanner {
         Self {
             model_catalog,
             capability_catalog: None,
+            capability_snapshot: fusion_kernel::CapabilityCatalog::default(),
         }
     }
 
@@ -28,6 +30,7 @@ impl IntentPlanner {
         Self {
             model_catalog,
             capability_catalog: Some(catalog),
+            capability_snapshot: fusion_kernel::CapabilityCatalog::default(),
         }
     }
 
@@ -50,6 +53,7 @@ impl IntentPlanner {
         requirements: &Requirements,
         policies: &[Policy],
         policy_version: u64,
+        evidence: Option<&EvidenceSnapshot>,
     ) -> Result<WorkflowIR, String> {
         let crates_intent = match intent {
             ExecutionIntent::Quality => fusion_planner::ExecutionIntent::Quality,
@@ -70,25 +74,42 @@ impl IntentPlanner {
             });
         }
 
+        let mut required_capabilities = Vec::new();
+        if let Some(model_requirements) = &requirements.model_requirements {
+            if model_requirements.requires_tools { required_capabilities.push("ToolCalling".into()); }
+            if model_requirements.requires_vision { required_capabilities.push("Vision".into()); }
+            if model_requirements.requires_streaming { required_capabilities.push("Streaming".into()); }
+        }
+        let (avg_latency_ms, error_rate, healthy_provider_count) = evidence.map(|snapshot| {
+            let avg_latency_ms = if snapshot.avg_latencies.is_empty() { 0 } else {
+                (snapshot.avg_latencies.values().sum::<f64>() / snapshot.avg_latencies.len() as f64).max(0.0) as u64
+            };
+            let healthy = snapshot.success_rates.values().filter(|rate| **rate > 0.0).count();
+            let error_rate = if snapshot.success_rates.is_empty() { 0.0 } else {
+                1.0 - snapshot.success_rates.values().sum::<f64>() / snapshot.success_rates.len() as f64
+            };
+            (avg_latency_ms, error_rate.clamp(0.0, 1.0), healthy)
+        }).unwrap_or((0, 0.0, 0));
+
         let req = fusion_planner::PlanningRequest {
-            intent: crates_intent,
+            intent: crates_intent.clone(),
             user_prompt: requirements.original_text.clone(),
             requested_model: None,
             requested_strategy: None,
             strategy_config: None,
             requirements: fusion_planner::RequirementsSnapshot {
                 complexity: format!("{:?}", requirements.complexity),
-                execution_intent: None,
-                required_capabilities: vec![],
+                execution_intent: Some(crates_intent),
+                required_capabilities,
             },
             policies: fusion_planner::PolicySnapshot {
                 version: policy_version,
                 policies: policy_declarations,
                 created_at: 0,
             },
-            capability_catalog: fusion_planner::CapabilityCatalogSnapshot::new(fusion_kernel::CapabilityCatalog::new()),
+            capability_catalog: fusion_planner::CapabilityCatalogSnapshot::new(self.capability_snapshot.clone()),
             model_catalog: fusion_planner::ModelCatalogSnapshot::new(Self::to_fusion_core_catalog(&self.model_catalog)),
-            telemetry: fusion_planner::RoutingTelemetrySnapshot::default(),
+            telemetry: fusion_planner::RoutingTelemetrySnapshot { avg_latency_ms, error_rate, healthy_provider_count },
         };
         let planner = fusion_planner::IntentPlanner::new(Self::to_fusion_core_catalog(&self.model_catalog));
         let contract = match planner.plan(&req) {
@@ -105,16 +126,16 @@ impl Planner for IntentPlanner {
         &self,
         requirements: &Requirements,
         policies: &[Policy],
-        _evidence: Option<&EvidenceSnapshot>,
+        evidence: Option<&EvidenceSnapshot>,
     ) -> WorkflowIR {
-        self.plan_with_policy_version(requirements, policies, _evidence, 0).await
+        self.plan_with_policy_version(requirements, policies, evidence, 0).await
     }
 
     async fn plan_with_policy_version(
         &self,
         requirements: &Requirements,
         policies: &[Policy],
-        _evidence: Option<&EvidenceSnapshot>,
+        evidence: Option<&EvidenceSnapshot>,
         policy_version: u64,
     ) -> WorkflowIR {
 
@@ -125,7 +146,7 @@ impl Planner for IntentPlanner {
                 ComplexityLevel::Medium | ComplexityLevel::Low => ExecutionIntent::Speed,
             }
         });
-        self.plan_from_crates(&intent, requirements, policies, policy_version)
+        self.plan_from_crates(&intent, requirements, policies, policy_version, evidence)
             .unwrap_or_else(|e| panic!("Planning failure in fusion-planner for intent {:?}: {}", intent, e))
     }
 }

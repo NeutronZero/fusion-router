@@ -93,6 +93,7 @@ pub fn workflow_to_types(ir: &WorkflowIR) -> Result<TypesWorkflowIR, String> {
         edges,
         metadata: crate::types::IRMetadata {
             policy_applied: metadata.policy_applied.clone(),
+            policy_version: metadata.policy_version,
             estimated_cost: metadata.estimated_cost,
             estimated_tokens: metadata.estimated_tokens,
         },

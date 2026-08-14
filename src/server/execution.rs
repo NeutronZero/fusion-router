@@ -412,6 +412,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
                 estimated_cost: crate::types::NanoUSD::from_nanos(100_000_000),
                 estimated_tokens: 100,
@@ -603,6 +604,7 @@ mod tests {
                 condition: None,
             }],
             metadata: crate::types::GraphMetadata {
+                policy_version: 0,
                 estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 1,

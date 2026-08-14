@@ -37,6 +37,7 @@ impl KernelResourceManager {
             nodes: vec![],
             edges: vec![],
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost,
                 estimated_tokens,
                 max_depth: 1,

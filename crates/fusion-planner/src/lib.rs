@@ -31,33 +31,13 @@ impl IntentPlanner {
     pub fn plan(&self, req: &PlanningRequest) -> Result<WorkflowIR, PlatformError> {
         // 1. Resolve effective intent and constraints
         let intent = &req.intent;
-        // 2. Select stage structure and strategies driven by intent, requirements & strategy overrides
+        // 2. Select a strategy constraint. Strategy graph expansion belongs to
+        // the compiler; the planner emits a strategy-bearing node rather than
+        // duplicating each strategy's topology here.
         let stages: Vec<(String, WorkflowNodeKind, String, String)> = if let Some(ref strat) = req.requested_strategy {
-            match strat.to_lowercase().as_str() {
-                "single" => vec![("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Single".into())],
-                "consensus" => vec![
-                    ("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Single".into()),
-                    ("n2".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Single".into()),
-                    ("n3".into(), WorkflowNodeKind::Judge, "ConsensusJudge".into(), "Consensus".into()),
-                ],
-                "reflection" => vec![
-                    ("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Single".into()),
-                    ("n2".into(), WorkflowNodeKind::Task, "Reflection".into(), "Reflection".into()),
-                ],
-                "chain" => vec![
-                    ("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Single".into()),
-                    ("n2".into(), WorkflowNodeKind::Task, "Reflection".into(), "Reflection".into()),
-                ],
-                "debate" => vec![
-                    ("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Debate".into()),
-                    ("n2".into(), WorkflowNodeKind::Judge, "OutputJudge".into(), "Single".into()),
-                ],
-                "react" => vec![("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "ReAct".into())],
-                "fusion" => vec![
-                    ("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Fusion".into()),
-                ],
-                _ => vec![("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), strat.to_string())],
-            }
+            let capability = req.requirements.required_capabilities.first()
+                .cloned().unwrap_or_else(|| "CodeGeneration".into());
+            vec![("n1".into(), WorkflowNodeKind::Task, capability, strat.clone())]
         } else {
             let mut capabilities = req.requirements.required_capabilities.clone();
             if capabilities.is_empty() { capabilities.push("CodeGeneration".to_string()); }

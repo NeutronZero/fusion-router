@@ -267,6 +267,7 @@ impl PrimitiveGraph {
             nodes: exec_nodes,
             edges: exec_edges,
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 0,

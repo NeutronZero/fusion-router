@@ -258,7 +258,7 @@ pub async fn run(args: ReviewArgs) -> anyhow::Result<()> {
         graph_id: Uuid::new_v4(),
         nodes: vec![node],
         edges: vec![],
-        metadata: GraphMetadata { estimated_cost: crate::types::NanoUSD::ZERO, estimated_tokens: 0, max_depth: 0, node_count: 1 },
+        metadata: GraphMetadata { estimated_cost: crate::types::NanoUSD::ZERO, estimated_tokens: 0, policy_version: 0, max_depth: 0, node_count: 1 },
         total_tokens: 0,
         total_cost: crate::types::NanoUSD::ZERO,
         primitive_graph_hash: 0,

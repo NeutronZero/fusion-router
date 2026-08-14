@@ -261,6 +261,7 @@ mod tests {
             nodes: vec![],
             edges: vec![],
             metadata: fusion_types::IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
 				estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,

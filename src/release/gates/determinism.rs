@@ -38,8 +38,13 @@ impl DeterminismBackend for RealDeterminismBackend {
             telemetry: Default::default(),
         };
         let ir = planner.plan(&request).map_err(|e| GateError::ExecutionFailed(format!("planning failed: {e:?}")))?;
+        let types_ir = crate::ir::adapter::workflow_to_types(&ir)
+            .map_err(GateError::ExecutionFailed)?;
+        let graph = fusion_compiler::lower_to_graph(types_ir)
+            .map_err(|e| GateError::ExecutionFailed(format!("compilation failed: {e:?}")))?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         ir.to_canonical_json().map_err(|e| GateError::ExecutionFailed(e.to_string()))?.hash(&mut hasher);
+        serde_json::to_string(&graph).map_err(|e| GateError::ExecutionFailed(e.to_string()))?.hash(&mut hasher);
         Ok(hasher.finish())
     }
 }

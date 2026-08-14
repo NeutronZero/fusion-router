@@ -198,6 +198,7 @@ mod tests {
             nodes: vec![node],
             edges: vec![],
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 1,

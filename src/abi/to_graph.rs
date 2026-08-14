@@ -90,6 +90,7 @@ pub fn graph_from_abi(abi: &ExecutionAbi, model: &str) -> Result<ExecutionGraph,
         nodes,
         edges,
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: NanoUSD::ZERO,
             estimated_tokens: 0,
             max_depth: 0,
@@ -124,6 +125,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 1,

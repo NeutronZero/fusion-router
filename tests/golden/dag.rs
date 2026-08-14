@@ -44,6 +44,7 @@ async fn test_control_flow_conditional_valid() {
             IREdge { from: a, to: c, condition: Some("false".into()) },
         ],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec!["test".into()],
             estimated_cost: fusion_router::types::NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 500,
@@ -72,6 +73,7 @@ async fn test_control_flow_conditional_no_condition_edge() {
             IREdge { from: a, to: b, condition: None },
         ],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec![],
             estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 0,
@@ -105,6 +107,7 @@ async fn test_control_flow_loop_valid() {
             IREdge { from: loop_node, to: exit, condition: Some("exit".into()) },
         ],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec!["test".into()],
             estimated_cost: fusion_router::types::NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 500,
@@ -138,6 +141,7 @@ async fn test_control_flow_split_join_valid() {
             IREdge { from: b, to: join, condition: None },
         ],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec!["test".into()],
             estimated_cost: fusion_router::types::NanoUSD::from_nanos(20_000_000),
             estimated_tokens: 1000,
@@ -160,6 +164,7 @@ async fn test_control_flow_split_no_outgoing() {
         ],
         edges: vec![],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec![],
             estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 0,
@@ -182,6 +187,7 @@ async fn test_control_flow_loop_no_max_iterations() {
         ],
         edges: vec![],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec![],
             estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 0,
@@ -214,6 +220,7 @@ async fn test_control_flow_barrier_valid() {
             IREdge { from: barrier, to: c, condition: None },
         ],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec!["test".into()],
             estimated_cost: fusion_router::types::NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 500,
@@ -248,6 +255,7 @@ async fn test_compiler_passes_handle_all_node_kinds() {
             IREdge { from: c, to: d, condition: None },
         ],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec!["test".into()],
             estimated_cost: fusion_router::types::NanoUSD::from_nanos(20_000_000),
             estimated_tokens: 1000,
@@ -286,6 +294,7 @@ async fn detect_cycle_disconnected_subgraph() {
             // d is disconnected from the a→b→c cycle
         ],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec!["test".into()],
             estimated_cost: fusion_router::types::NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 500,

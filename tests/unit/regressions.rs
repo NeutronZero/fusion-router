@@ -62,6 +62,7 @@ async fn test_scheduler_parity_and_budget_enforcement() {
         nodes: vec![node1],
         edges: vec![],
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 100,
             max_depth: 1,
@@ -144,6 +145,7 @@ async fn test_terminal_node_response_selection() {
         nodes: vec![gen_node, reflect_node, judge_node],
         edges,
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 100,
             max_depth: 3,

@@ -25,6 +25,7 @@ fn test_graph() -> ExecutionGraph {
         nodes: vec![],
         edges: vec![],
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 100,
             max_depth: 1,

@@ -34,6 +34,7 @@ impl CapabilityGraphLowerer {
                 metadata: GraphMetadata {
                     estimated_cost: NanoUSD::ZERO,
                     estimated_tokens: 0,
+                    policy_version: 0,
                     max_depth: 0,
                     node_count: 0,
                 },
@@ -112,6 +113,7 @@ impl CapabilityGraphLowerer {
             metadata: GraphMetadata {
                 estimated_cost: NanoUSD::from_nanos(total_cost_nanos),
                 estimated_tokens: 0,
+                policy_version: 0,
                 max_depth,
                 node_count: cap_graph.node_count() as u32,
             },

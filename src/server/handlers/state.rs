@@ -26,6 +26,7 @@ use crate::tools::builtin::{CalculatorTool, FileReadTool, SearchTool};
 use crate::tools::{HTTPRequestTool, ShellCommandTool, ToolRegistry};
 use crate::types::*;
 use crate::workflow::WorkflowRegistry;
+use crate::capability::CapabilityRegistry;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -43,6 +44,7 @@ pub struct AppState {
     pub tool_registry: Arc<ToolRegistry>,
     pub connector_resolver: Arc<ConnectorResolver>,
     pub policy_registry: Arc<crate::policy::PolicyRegistry>,
+    pub capability_registry: Arc<dyn CapabilityRegistry>,
 }
 
 impl AppState {
@@ -164,11 +166,17 @@ impl AppState {
             tool_registry,
             connector_resolver,
             policy_registry,
+            capability_registry: Arc::new(crate::capability::InMemoryCapabilityRegistry::new()),
         }
     }
 
     pub fn with_policy_registry(mut self, policy_registry: Arc<crate::policy::PolicyRegistry>) -> Self {
         self.policy_registry = policy_registry;
+        self
+    }
+
+    pub fn with_capability_registry(mut self, registry: Arc<dyn CapabilityRegistry>) -> Self {
+        self.capability_registry = registry;
         self
     }
 }

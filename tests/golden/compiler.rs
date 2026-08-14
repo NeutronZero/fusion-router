@@ -23,6 +23,7 @@ fn create_test_ir() -> WorkflowIR {
         ],
         edges: vec![],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec!["test".to_string()],
             estimated_cost: fusion_router::types::NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 500,
@@ -64,6 +65,7 @@ async fn test_constraint_validation_empty_ir() {
         nodes: vec![],
         edges: vec![],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec![],
             estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 0,

@@ -235,6 +235,7 @@ async fn test_dag_split_join_workflow() {
             ExecutionEdge { from: join_id, to: final_id, condition: None },
         ],
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: NanoUSD::from_nanos(30_000_000),
             estimated_tokens: 1500,
             max_depth: 3,

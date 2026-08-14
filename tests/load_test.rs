@@ -372,6 +372,7 @@ async fn test_concurrent_dag_workflows() {
             ExecutionEdge { from: b_id, to: join_id, condition: None },
         ],
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: NanoUSD::from_nanos(20_000_000), estimated_tokens: 1000, max_depth: 2, node_count: 4,
         },
         total_tokens: 1000,
@@ -471,6 +472,7 @@ async fn test_loop_iteration_stress() {
             ExecutionEdge { from: loop_id, to: exit_id, condition: Some("exit".into()) },
         ],
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: NanoUSD::from_nanos(500_000_000), estimated_tokens: 25000, max_depth: 50, node_count: 3,
         },
         total_tokens: 25000,
@@ -540,6 +542,7 @@ async fn test_compilation_throughput() {
         nodes,
         edges,
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec![],
             estimated_cost: NanoUSD::from_nanos(500_000_000),
             estimated_tokens: 5000,
@@ -676,6 +679,7 @@ async fn test_high_concurrency_scheduling() {
             nodes,
             edges,
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::from_nanos((n as f64 * 10_000_000.0) as u64),
                 estimated_tokens: n as u64 * 100,
                 max_depth: n as u32,
@@ -730,6 +734,7 @@ async fn test_budget_no_race_on_concurrent_reserve() {
         nodes: vec![],
         edges: vec![],
         metadata: GraphMetadata {
+            policy_version: 0,
             estimated_cost: NanoUSD::from_nanos(600_000_000),
             estimated_tokens: 100,
             max_depth: 0,

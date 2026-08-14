@@ -93,6 +93,7 @@ impl WorkflowDefinition {
             edges,
             metadata: crate::types::IRMetadata {
                 policy_applied: vec!["workflow_definition".to_string()],
+                policy_version: 0,
                 estimated_cost: crate::types::NanoUSD::from_nanos((base_cost * 1_000_000_000.0 * node_count as f64) as u64),
                 estimated_tokens: 1000 * node_count as u64,
             },

@@ -478,6 +478,7 @@ mod tests {
             metadata: GraphMetadata {
                 estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 150,
+                policy_version: 0,
                 max_depth: 1,
                 node_count: 1,
             },
@@ -528,6 +529,7 @@ mod tests {
             metadata: GraphMetadata {
                 estimated_cost: NanoUSD::from_nanos(20_000_000),
                 estimated_tokens: 300,
+                policy_version: 0,
                 max_depth: 2,
                 node_count: 2,
             },
@@ -601,6 +603,7 @@ mod tests {
             metadata: GraphMetadata {
                 estimated_cost: NanoUSD::from_nanos(20_000_000),
                 estimated_tokens: 300,
+                policy_version: 0,
                 max_depth: 2,
                 node_count: 2,
             },
@@ -666,6 +669,7 @@ mod tests {
             metadata: GraphMetadata {
                 estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
+                policy_version: 0,
                 max_depth: 2,
                 node_count: 2,
             },
@@ -724,6 +728,7 @@ mod tests {
                 metadata: GraphMetadata {
                     estimated_cost: NanoUSD::ZERO,
                     estimated_tokens: 0,
+                    policy_version: 0,
                     max_depth: 4,
                     node_count: 0,
                 },

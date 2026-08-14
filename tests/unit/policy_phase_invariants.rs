@@ -30,6 +30,7 @@ fn create_sample_ir() -> (WorkflowIR, Uuid) {
         }],
         edges: vec![],
         metadata: IRMetadata {
+            policy_version: 0,
             policy_applied: vec![],
             estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 100,

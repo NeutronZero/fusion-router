@@ -82,6 +82,7 @@ mod tests {
             }],
             edges: vec![],
             metadata: crate::types::IRMetadata {
+                policy_version: 0,
                 policy_applied: vec![],
                 estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 10,

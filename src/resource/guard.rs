@@ -75,6 +75,7 @@ mod tests {
             nodes: vec![],
             edges: vec![],
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::from_nanos(2_000_000_000),
                 estimated_tokens: 200,
                 max_depth: 1,
@@ -113,6 +114,7 @@ mod tests {
             nodes: vec![],
             edges: vec![],
             metadata: GraphMetadata {
+                policy_version: 0,
                 estimated_cost: NanoUSD::from_nanos(2_000_000_000),
                 estimated_tokens: 200,
                 max_depth: 1,
