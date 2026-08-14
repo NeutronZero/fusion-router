@@ -654,6 +654,7 @@ impl RuntimeEngine {
 mod tests {
     use super::*;
     use fusion_types::*;
+    use fusion_core::NanoUSD;
     use std::collections::HashMap;
 
     fn make_simple_graph() -> Arc<ExecutionGraph> {
@@ -685,13 +686,13 @@ mod tests {
             ],
             edges: vec![ExecutionEdge { from: n1, to: n2, condition: None }],
             metadata: GraphMetadata {
-                estimated_cost: 0.01,
+                estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 200,
                 max_depth: 2,
                 node_count: 2,
             },
             total_tokens: 200,
-            total_cost: 10,
+            total_cost: NanoUSD::from_nanos(10),
             primitive_graph_hash: 0,
         })
     }
@@ -1287,13 +1288,13 @@ mod tests {
                 .collect(),
             edges: node_ids.windows(2).map(|w| ExecutionEdge { from: w[0], to: w[1], condition: None }).collect(),
             metadata: GraphMetadata {
-                estimated_cost: 0.01,
+                estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 200,
                 max_depth: node_ids.len() as u32,
                 node_count: node_ids.len() as u32,
             },
             total_tokens: 200,
-            total_cost: 10,
+            total_cost: NanoUSD::from_nanos(10),
             primitive_graph_hash: 0,
         })
     }
@@ -1437,13 +1438,13 @@ mod tests {
             }],
             edges: vec![],
             metadata: GraphMetadata {
-                estimated_cost: 0.01,
+                estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 100,
                 max_depth: 1,
                 node_count: 1,
             },
             total_tokens: 100,
-            total_cost: 10,
+            total_cost: NanoUSD::from_nanos(10),
             primitive_graph_hash: 0,
         });
         let outcome = engine.run(graph).await.expect("run");
@@ -1488,13 +1489,13 @@ mod tests {
             ],
             edges: vec![ExecutionEdge { from: n1, to: n2, condition: None }],
             metadata: GraphMetadata {
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 2,
                 node_count: 2,
             },
             total_tokens: 0,
-            total_cost: 0,
+            total_cost: NanoUSD::ZERO,
             primitive_graph_hash: 0,
         });
         let outcome = engine.run(graph).await.expect("run");
@@ -1515,13 +1516,13 @@ mod tests {
             nodes: vec![node],
             edges: vec![],
             metadata: GraphMetadata {
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 1,
                 node_count: 1,
             },
             total_tokens: 0,
-            total_cost: 0,
+            total_cost: NanoUSD::ZERO,
             primitive_graph_hash: 0,
         });
         let outcome = engine.run(graph).await.expect("run");

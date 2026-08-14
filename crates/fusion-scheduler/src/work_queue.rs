@@ -248,7 +248,7 @@ mod tests {
         Arc::new(ExecutionGraph {
             graph_id: uuid::Uuid::new_v4(),
             metadata: GraphMetadata {
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 1,
                 node_count: nodes.len() as u32,
@@ -256,7 +256,7 @@ mod tests {
             nodes,
             edges,
             total_tokens: 0,
-            total_cost: 0,
+            total_cost: NanoUSD::ZERO,
             primitive_graph_hash: 0,
         })
     }

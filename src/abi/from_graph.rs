@@ -119,7 +119,7 @@ pub fn abi_from_graph(graph: &crate::types::ExecutionGraph) -> ExecutionAbi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ExecutionNode, GraphMetadata, RetryPolicy, StrategyKind};
+    use crate::types::{ExecutionNode, GraphMetadata, NanoUSD, RetryPolicy, StrategyKind};
     use uuid::Uuid;
 
     fn node(id: &str, kind: ExecutionNodeKind) -> ExecutionNode {
@@ -150,13 +150,13 @@ mod tests {
                 condition: None,
             }],
             metadata: GraphMetadata {
-                estimated_cost: 1.0,
+                estimated_cost: NanoUSD::ONE_DOLLAR,
                 estimated_tokens: 10,
                 max_depth: 2,
                 node_count: 2,
             },
             total_tokens: 10,
-            total_cost: 1,
+            total_cost: NanoUSD::ONE_DOLLAR,
             primitive_graph_hash: 0,
         }
     }

@@ -141,7 +141,7 @@ fn invariant_policy_versions_preserved() {
         "policy_applied must be preserved across compilation boundary"
     );
     assert_eq!(
-        types.metadata.estimated_cost, 0.123,
+        types.metadata.estimated_cost, fusion_router::types::NanoUSD::from_nanos(123_000_000),
         "estimated_cost must be preserved"
     );
     assert_eq!(

@@ -143,6 +143,7 @@ pub fn spawn_calibration_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::NanoUSD;
     use crate::providers::circuit_breaker::CircuitBreaker;
     use crate::providers::router::ProviderTarget;
     use crate::providers::{ChatProvider, ModelCapabilities, ModelPricing};
@@ -210,7 +211,7 @@ mod tests {
                 intent: Intent::General,
                 latency_ms: 100,
                 tokens: 50,
-                cost: 0.001,
+                cost: NanoUSD::from_nanos(1_000_000),
                 success: i < successes,
                 timestamp: now,
             };

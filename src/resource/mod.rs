@@ -47,19 +47,19 @@ impl DefaultResourceManager {
 #[async_trait]
 impl ResourceManager for DefaultResourceManager {
     async fn can_afford(&self, graph: &ExecutionGraph) -> bool {
-        let cost = (graph.metadata.estimated_cost * 1000.0) as u64;
+        let cost = graph.metadata.estimated_cost.as_nanos();
         let tokens = graph.metadata.estimated_tokens;
         let current_cost = self.used_cost.load(Ordering::Acquire);
         let current_tokens = self.used_tokens.load(Ordering::Acquire);
-        let max_cost = (self.quota.max_daily_cost * 1000.0) as u64;
+        let max_cost = self.quota.max_daily_cost.as_nanos();
         let max_tokens = self.quota.max_daily_tokens;
         (current_cost + cost <= max_cost) && (current_tokens + tokens <= max_tokens)
     }
 
     async fn try_reserve(&self, graph: &ExecutionGraph) -> bool {
-        let cost = (graph.metadata.estimated_cost * 1000.0) as u64;
+        let cost = graph.metadata.estimated_cost.as_nanos();
         let tokens = graph.metadata.estimated_tokens;
-        let max_cost = (self.quota.max_daily_cost * 1000.0) as u64;
+        let max_cost = self.quota.max_daily_cost.as_nanos();
         let max_tokens = self.quota.max_daily_tokens;
 
         let _guard = self.reserve_lock.lock();
@@ -76,7 +76,7 @@ impl ResourceManager for DefaultResourceManager {
     }
 
     async fn release(&self, graph: &ExecutionGraph) -> anyhow::Result<()> {
-        let cost = (graph.metadata.estimated_cost * 1000.0) as u64;
+        let cost = graph.metadata.estimated_cost.as_nanos();
         let tokens = graph.metadata.estimated_tokens;
         self.used_cost.fetch_sub(cost, Ordering::Relaxed);
         self.used_tokens.fetch_sub(tokens, Ordering::Relaxed);
@@ -93,7 +93,7 @@ impl ResourceManager for DefaultResourceManager {
     }
 
     fn spent_cost(&self) -> f64 {
-        self.used_cost.load(Ordering::Acquire) as f64 / 1000.0
+        self.used_cost.load(Ordering::Acquire) as f64 / 1_000_000_000.0
     }
 
     fn spent_tokens(&self) -> u64 {

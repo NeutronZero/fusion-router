@@ -25,7 +25,7 @@ pub use fusion_types::{
     NodeState, ExecutionResult, ReservationId, NodeExecutionResult, ExecutionRecord, NodeExecContext,
     // Shared value objects
     Usage, ChatMessage, ToolCall, ModelCatalog, Intent, ComplexityLevel,
-    EvidenceSnapshot, Quota, ProviderLimit,
+    EvidenceSnapshot, Quota, ProviderLimit, NanoUSD,
     // Policy
     Policy, PolicyCondition, PolicyAction,
     // Errors

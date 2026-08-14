@@ -7,7 +7,7 @@
 use crate::abi::{AbiEdgeKind, ExecutionAbi};
 use crate::ir::adapter::uuid_for;
 use crate::types::{
-    ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata, RetryPolicy,
+    ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata, NanoUSD, RetryPolicy,
     StrategyKind,
 };
 use serde_json::Value;
@@ -90,13 +90,13 @@ pub fn graph_from_abi(abi: &ExecutionAbi, model: &str) -> Result<ExecutionGraph,
         nodes,
         edges,
         metadata: GraphMetadata {
-            estimated_cost: 0.0,
+            estimated_cost: NanoUSD::ZERO,
             estimated_tokens: 0,
             max_depth: 0,
             node_count,
         },
         total_tokens: 0,
-        total_cost: 0,
+        total_cost: NanoUSD::ZERO,
         primitive_graph_hash: 0,
     })
 }
@@ -124,13 +124,13 @@ mod tests {
             }],
             edges: vec![],
             metadata: GraphMetadata {
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 1,
                 node_count: 1,
             },
             total_tokens: 0,
-            total_cost: 0,
+            total_cost: NanoUSD::ZERO,
             primitive_graph_hash: 0,
         };
         let nid = graph.nodes[0].id;

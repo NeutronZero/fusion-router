@@ -25,20 +25,20 @@ fn test_graph() -> ExecutionGraph {
         nodes: vec![],
         edges: vec![],
         metadata: GraphMetadata {
-            estimated_cost: 0.0,
+            estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 100,
             max_depth: 1,
             node_count: 0,
         },
         total_tokens: 100,
-        total_cost: 0,
+        total_cost: fusion_router::types::NanoUSD::ZERO,
         primitive_graph_hash: 0,
     }
 }
 
 fn test_quota() -> Quota {
     Quota {
-        max_daily_cost: 1_000_000.0,
+        max_daily_cost: fusion_router::types::NanoUSD::from_nanos(1_000_000_000_000),
         max_daily_tokens: 1_000_000_000,
         max_concurrent: 1000,
         provider_limits: HashMap::new(),

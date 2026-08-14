@@ -70,7 +70,7 @@ impl ChatProvider for WorkingEchoProvider {
 
 fn generous_quota() -> Quota {
     Quota {
-        max_daily_cost: 1_000_000.0,
+        max_daily_cost: fusion_router::types::NanoUSD::from_nanos(1_000_000_000_000),
         max_daily_tokens: 1_000_000_000,
         max_concurrent: 100,
         provider_limits: HashMap::new(),
@@ -79,7 +79,7 @@ fn generous_quota() -> Quota {
 
 fn small_quota() -> Quota {
     Quota {
-        max_daily_cost: 1.0,
+        max_daily_cost: fusion_router::types::NanoUSD::ONE_DOLLAR,
         max_daily_tokens: 1_000,
         max_concurrent: 1,
         provider_limits: HashMap::new(),

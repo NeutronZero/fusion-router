@@ -26,7 +26,7 @@ pub fn new(path: &str) -> anyhow::Result<Self> {
                  intent TEXT NOT NULL,
                  latency_ms INTEGER NOT NULL,
                  tokens INTEGER NOT NULL,
-                 cost REAL NOT NULL,
+                 cost INTEGER NOT NULL,
                  success INTEGER NOT NULL,
                  timestamp INTEGER NOT NULL
              )",
@@ -57,7 +57,7 @@ impl EvidenceRepository for SqliteEvidenceRepository {
                     format!("{:?}", entry.intent),
                     entry.latency_ms as i64,
                     entry.tokens as i64,
-                    entry.cost,
+                    entry.cost.as_nanos() as i64,
                     entry.success as i32,
                     entry.timestamp,
                 ],
@@ -99,7 +99,7 @@ impl EvidenceRepository for SqliteEvidenceRepository {
             }
 
             let mut avg_latencies: HashMap<String, f64> = HashMap::new();
-            let mut avg_costs: HashMap<String, f64> = HashMap::new();
+            let mut avg_costs: HashMap<String, crate::types::NanoUSD> = HashMap::new();
             let mut model_rankings: Vec<String> = Vec::new();
             {
                 let mut stmt = tx.prepare(
@@ -114,13 +114,13 @@ impl EvidenceRepository for SqliteEvidenceRepository {
                 let rows = stmt.query_map([], |row| {
                     let model: String = row.get(0)?;
                     let avg_lat: f64 = row.get(1)?;
-                    let avg_cost: f64 = row.get(2)?;
-                    Ok((model, avg_lat, avg_cost))
+                    let avg_cost_nanos: f64 = row.get(2)?;
+                    Ok((model, avg_lat, avg_cost_nanos))
                 })?;
                 for row in rows {
-                    let (model, avg_lat, avg_cost) = row?;
+                    let (model, avg_lat, avg_cost_nanos) = row?;
                     avg_latencies.insert(model.clone(), avg_lat);
-                    avg_costs.insert(model.clone(), avg_cost);
+                    avg_costs.insert(model.clone(), crate::types::NanoUSD::from_nanos(avg_cost_nanos as u64));
                     model_rankings.push(model);
                 }
             }
@@ -168,7 +168,7 @@ impl EvidenceRepository for SqliteEvidenceRepository {
                 let total_requests: i64 = row.get(1)?;
                 let success_count: i64 = row.get(2)?;
                 let avg_latency_ms: f64 = row.get::<_, Option<f64>>(3)?.unwrap_or(0.0);
-                let avg_cost: f64 = row.get::<_, Option<f64>>(4)?.unwrap_or(0.0);
+                let avg_cost: f64 = row.get::<_, Option<f64>>(4)?.unwrap_or(0.0) / 1_000_000_000.0;
 
                 Ok(ModelPerformanceStats {
                     model,
@@ -200,7 +200,7 @@ mod tests {
         intent: Intent,
         latency_ms: u64,
         tokens: u32,
-        cost: f64,
+        cost_usd: f64,
         success: bool,
     ) -> ExecutionRecord {
         ExecutionRecord {
@@ -212,7 +212,7 @@ mod tests {
             intent,
             latency_ms,
             tokens,
-            cost,
+            cost: crate::types::NanoUSD::from_nanos((cost_usd * 1_000_000_000.0) as u64),
             success,
             timestamp: 1000000,
         }
@@ -265,8 +265,8 @@ mod tests {
         assert_eq!(*snap.avg_latencies.get("gpt-4").unwrap(), 150.0);
         assert_eq!(*snap.avg_latencies.get("claude-3").unwrap(), 100.0);
 
-        assert_eq!(*snap.avg_costs.get("gpt-4").unwrap(), 0.015);
-        assert_eq!(*snap.avg_costs.get("claude-3").unwrap(), 0.01);
+        assert_eq!(snap.avg_costs.get("gpt-4").unwrap().to_usd_f64(), 0.015);
+        assert_eq!(snap.avg_costs.get("claude-3").unwrap().to_usd_f64(), 0.01);
 
         assert_eq!(snap.model_rankings.len(), 2);
         assert_eq!(snap.model_rankings[0], "claude-3");

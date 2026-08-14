@@ -148,7 +148,7 @@ mod tests {
             edges: vec![],
             metadata: crate::types::IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+                estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 100,
             },
         };
@@ -195,7 +195,7 @@ mod tests {
             edges: vec![],
             metadata: crate::types::IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+                estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 100,
             },
         };
@@ -256,7 +256,7 @@ mod tests {
             edges: vec![],
             metadata: crate::types::IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+                estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 100,
             },
         };
@@ -300,7 +300,7 @@ mod tests {
             edges: vec![],
             metadata: crate::types::IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+                estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 100,
             },
         };

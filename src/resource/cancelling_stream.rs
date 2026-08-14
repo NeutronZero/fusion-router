@@ -157,7 +157,7 @@ mod tests {
     use futures::StreamExt;
     use uuid::Uuid;
     use crate::resource::DefaultResourceManager;
-    use crate::types::{ExecutionGraph, GraphMetadata, Quota};
+    use crate::types::{ExecutionGraph, GraphMetadata, NanoUSD, Quota};
     use std::collections::HashMap;
 
     #[test]
@@ -183,7 +183,7 @@ mod tests {
 
     fn make_test_guard() -> ResourceGuard {
         let quota = Quota {
-            max_daily_cost: 100.0,
+            max_daily_cost: crate::types::NanoUSD::from_nanos(100_000_000_000),
             max_daily_tokens: 100000,
             max_concurrent: 10,
             provider_limits: HashMap::new(),
@@ -195,13 +195,13 @@ mod tests {
             nodes: vec![],
             edges: vec![],
             metadata: GraphMetadata {
-                estimated_cost: 0.0,
+                estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 0,
                 node_count: 0,
             },
             total_tokens: 0,
-            total_cost: 0,
+            total_cost: crate::types::NanoUSD::ZERO,
             primitive_graph_hash: 0,
         };
         ResourceGuard::new(Uuid::new_v4(), graph, manager)

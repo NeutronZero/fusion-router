@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub use fusion_core::NanoUSD;
+
 pub mod execution;
 
 pub use execution::{
@@ -63,7 +65,7 @@ pub struct IREdge {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IRMetadata {
     pub policy_applied: Vec<String>,
-    pub estimated_cost: f64,
+    pub estimated_cost: NanoUSD,
     pub estimated_tokens: u64,
 }
 
@@ -109,7 +111,7 @@ pub struct ExecutionGraph {
     pub edges: Vec<ExecutionEdge>,
     pub metadata: GraphMetadata,
     pub total_tokens: u64,
-    pub total_cost: u64,
+    pub total_cost: NanoUSD,
     #[serde(default)]
     pub primitive_graph_hash: u64,
 }
@@ -151,7 +153,7 @@ pub struct ExecutionEdge {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphMetadata {
-    pub estimated_cost: f64,
+    pub estimated_cost: NanoUSD,
     pub estimated_tokens: u64,
     pub max_depth: u32,
     pub node_count: u32,
@@ -196,7 +198,7 @@ pub struct ExecutionResult {
     pub success: bool,
     pub outputs: HashMap<uuid::Uuid, serde_json::Value>,
     pub total_latency_ms: u64,
-    pub total_cost: f64,
+    pub total_cost: NanoUSD,
     pub total_tokens: u64,
     pub terminal_node_id: Option<uuid::Uuid>,
     pub final_output: Option<serde_json::Value>,
@@ -248,7 +250,7 @@ pub struct ExecutionRecord {
     pub intent: Intent,
     pub latency_ms: u64,
     pub tokens: u32,
-    pub cost: f64,
+    pub cost: NanoUSD,
     pub success: bool,
     pub timestamp: i64,
 }
@@ -342,13 +344,13 @@ pub struct EvidenceSnapshot {
     pub record_count: u64,
     pub success_rates: HashMap<String, f64>,
     pub avg_latencies: HashMap<String, f64>,
-    pub avg_costs: HashMap<String, f64>,
+    pub avg_costs: HashMap<String, NanoUSD>,
     pub model_rankings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quota {
-    pub max_daily_cost: f64,
+    pub max_daily_cost: NanoUSD,
     pub max_daily_tokens: u64,
     pub max_concurrent: u32,
     pub provider_limits: HashMap<String, ProviderLimit>,
@@ -356,7 +358,7 @@ pub struct Quota {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderLimit {
-    pub max_daily_cost: f64,
+    pub max_daily_cost: NanoUSD,
     pub max_rpm: u32,
     pub max_tpm: u64,
 }
@@ -371,36 +373,36 @@ pub struct ProviderLimit {
 /// to multiple stages and observe accumulated spend.
 #[derive(Debug)]
 pub struct BudgetEnvelope {
-    pub max_cost_millicosts: u64,
+    pub max_cost: NanoUSD,
     pub max_tokens: u64,
     pub max_iterations: u32,
-    spent_cost_millicosts: Arc<AtomicU64>,
+    spent_cost: Arc<AtomicU64>,
     spent_tokens: Arc<AtomicU64>,
     current_iterations: Arc<AtomicU64>,
 }
 
 impl BudgetEnvelope {
-    pub fn new(max_cost_millicosts: u64, max_tokens: u64, max_iterations: u32) -> Self {
+    pub fn new(max_cost: NanoUSD, max_tokens: u64, max_iterations: u32) -> Self {
         Self {
-            max_cost_millicosts,
+            max_cost,
             max_tokens,
             max_iterations,
-            spent_cost_millicosts: Arc::new(AtomicU64::new(0)),
+            spent_cost: Arc::new(AtomicU64::new(0)),
             spent_tokens: Arc::new(AtomicU64::new(0)),
             current_iterations: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    pub fn record_and_check(&self, cost_millicosts: u64, tokens: u64) -> Result<(), BudgetExceededError> {
-        let prev_cost = self.spent_cost_millicosts.fetch_add(cost_millicosts, Ordering::SeqCst);
-        let new_cost = prev_cost + cost_millicosts;
+    pub fn record_and_check(&self, cost: NanoUSD, tokens: u64) -> Result<(), BudgetExceededError> {
+        let prev_cost = self.spent_cost.fetch_add(cost.as_nanos(), Ordering::SeqCst);
+        let new_cost = NanoUSD::from_nanos(prev_cost + cost.as_nanos());
         let prev_tokens = self.spent_tokens.fetch_add(tokens, Ordering::SeqCst);
         let new_tokens = prev_tokens + tokens;
 
-        if new_cost > self.max_cost_millicosts {
+        if new_cost > self.max_cost {
             return Err(BudgetExceededError::Cost {
-                spent: new_cost,
-                max: self.max_cost_millicosts,
+                spent: new_cost.as_nanos(),
+                max: self.max_cost.as_nanos(),
             });
         }
         if new_tokens > self.max_tokens {
@@ -423,8 +425,8 @@ impl BudgetEnvelope {
         Ok(iter)
     }
 
-    pub fn spent_cost_millicosts(&self) -> u64 {
-        self.spent_cost_millicosts.load(Ordering::Acquire)
+    pub fn spent_cost(&self) -> NanoUSD {
+        NanoUSD::from_nanos(self.spent_cost.load(Ordering::Acquire))
     }
 
     pub fn spent_tokens(&self) -> u64 {
@@ -439,10 +441,10 @@ impl BudgetEnvelope {
 impl Clone for BudgetEnvelope {
     fn clone(&self) -> Self {
         Self {
-            max_cost_millicosts: self.max_cost_millicosts,
+            max_cost: self.max_cost,
             max_tokens: self.max_tokens,
             max_iterations: self.max_iterations,
-            spent_cost_millicosts: self.spent_cost_millicosts.clone(),
+            spent_cost: self.spent_cost.clone(),
             spent_tokens: self.spent_tokens.clone(),
             current_iterations: self.current_iterations.clone(),
         }
@@ -562,7 +564,7 @@ mod tests {
             success: true,
             outputs: HashMap::new(),
             total_latency_ms: 100,
-            total_cost: 0.05,
+            total_cost: NanoUSD::from_nanos(50_000_000),
             total_tokens: 500,
             terminal_node_id: None,
             final_output: None,
@@ -574,17 +576,17 @@ mod tests {
 
     #[test]
     fn test_budget_record_within_and_beyond_limits() {
-        let env = BudgetEnvelope::new(1000, 100, 5);
-        assert!(env.record_and_check(500, 30).is_ok());
-        assert_eq!(env.spent_cost_millicosts(), 500);
+        let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 100, 5);
+        assert!(env.record_and_check(NanoUSD::from_nanos(500), 30).is_ok());
+        assert_eq!(env.spent_cost().as_nanos(), 500);
         assert_eq!(env.spent_tokens(), 30);
-        let err = env.record_and_check(600, 30).unwrap_err();
+        let err = env.record_and_check(NanoUSD::from_nanos(600), 30).unwrap_err();
         assert_eq!(err, BudgetExceededError::Cost { spent: 1100, max: 1000 });
     }
 
     #[test]
     fn test_budget_iteration_cap() {
-        let env = BudgetEnvelope::new(1000, 100, 2);
+        let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 100, 2);
         assert!(env.increment_iteration().is_ok());
         assert!(env.increment_iteration().is_ok());
         let err = env.increment_iteration().unwrap_err();
@@ -593,19 +595,19 @@ mod tests {
 
     #[test]
     fn test_budget_clone_shares_atomics() {
-        let env = BudgetEnvelope::new(1000, 100, 5);
+        let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 100, 5);
         let cloned = env.clone();
-        assert!(env.record_and_check(300, 50).is_ok());
-        assert_eq!(cloned.spent_cost_millicosts(), 300);
+        assert!(env.record_and_check(NanoUSD::from_nanos(300), 50).is_ok());
+        assert_eq!(cloned.spent_cost().as_nanos(), 300);
         assert_eq!(cloned.spent_tokens(), 50);
     }
 
     #[test]
     fn test_budget_failure_still_accumulates() {
-        let env = BudgetEnvelope::new(100, 50, 5);
-        assert!(env.record_and_check(60, 30).is_ok());
-        let _ = env.record_and_check(60, 30);
-        assert_eq!(env.spent_cost_millicosts(), 120);
+        let env = BudgetEnvelope::new(NanoUSD::from_nanos(100), 50, 5);
+        assert!(env.record_and_check(NanoUSD::from_nanos(60), 30).is_ok());
+        let _ = env.record_and_check(NanoUSD::from_nanos(60), 30);
+        assert_eq!(env.spent_cost().as_nanos(), 120);
         assert_eq!(env.spent_tokens(), 60);
     }
 }

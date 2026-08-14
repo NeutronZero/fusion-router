@@ -13,7 +13,7 @@ fn permissive_compiler() -> fusion_router::compiler::DefaultCompiler {
     build_compiler(
         Default::default(),
         std::sync::Arc::new(DefaultResourceManager::new(Quota {
-            max_daily_cost: 1_000_000.0,
+            max_daily_cost: fusion_router::types::NanoUSD::from_nanos(1_000_000_000_000),
             max_daily_tokens: 1_000_000_000,
             max_concurrent: 100,
             provider_limits: Default::default(),
@@ -45,7 +45,7 @@ async fn test_control_flow_conditional_valid() {
         ],
         metadata: IRMetadata {
             policy_applied: vec!["test".into()],
-            estimated_cost: 0.01,
+            estimated_cost: fusion_router::types::NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 500,
         },
     };
@@ -73,7 +73,7 @@ async fn test_control_flow_conditional_no_condition_edge() {
         ],
         metadata: IRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 0,
         },
     };
@@ -106,7 +106,7 @@ async fn test_control_flow_loop_valid() {
         ],
         metadata: IRMetadata {
             policy_applied: vec!["test".into()],
-            estimated_cost: 0.01,
+            estimated_cost: fusion_router::types::NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 500,
         },
     };
@@ -139,7 +139,7 @@ async fn test_control_flow_split_join_valid() {
         ],
         metadata: IRMetadata {
             policy_applied: vec!["test".into()],
-            estimated_cost: 0.02,
+            estimated_cost: fusion_router::types::NanoUSD::from_nanos(20_000_000),
             estimated_tokens: 1000,
         },
     };
@@ -161,7 +161,7 @@ async fn test_control_flow_split_no_outgoing() {
         edges: vec![],
         metadata: IRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 0,
         },
     };
@@ -183,7 +183,7 @@ async fn test_control_flow_loop_no_max_iterations() {
         edges: vec![],
         metadata: IRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 0,
         },
     };
@@ -215,7 +215,7 @@ async fn test_control_flow_barrier_valid() {
         ],
         metadata: IRMetadata {
             policy_applied: vec!["test".into()],
-            estimated_cost: 0.01,
+            estimated_cost: fusion_router::types::NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 500,
         },
     };
@@ -249,7 +249,7 @@ async fn test_compiler_passes_handle_all_node_kinds() {
         ],
         metadata: IRMetadata {
             policy_applied: vec!["test".into()],
-            estimated_cost: 0.02,
+            estimated_cost: fusion_router::types::NanoUSD::from_nanos(20_000_000),
             estimated_tokens: 1000,
         },
     };
@@ -287,7 +287,7 @@ async fn detect_cycle_disconnected_subgraph() {
         ],
         metadata: IRMetadata {
             policy_applied: vec!["test".into()],
-            estimated_cost: 0.01,
+            estimated_cost: fusion_router::types::NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 500,
         },
     };

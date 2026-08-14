@@ -32,7 +32,7 @@ async fn test_constraint_validation_pass_equivalence() {
         edges: vec![],
         metadata: MonolithIRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 0,
         },
     };
@@ -42,7 +42,7 @@ async fn test_constraint_validation_pass_equivalence() {
         edges: vec![],
         metadata: fusion_types::IRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_types::NanoUSD::ZERO,
             estimated_tokens: 0,
         },
     };
@@ -66,7 +66,7 @@ async fn test_constraint_validation_pass_equivalence() {
         edges: vec![],
         metadata: MonolithIRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 10,
         },
     };
@@ -82,7 +82,7 @@ async fn test_constraint_validation_pass_equivalence() {
         edges: vec![],
         metadata: fusion_types::IRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_types::NanoUSD::ZERO,
             estimated_tokens: 10,
         },
     };
@@ -127,7 +127,7 @@ async fn test_model_resolution_pass_equivalence() {
         edges: vec![],
         metadata: MonolithIRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 10,
         },
     };
@@ -177,7 +177,7 @@ async fn test_control_flow_validation_pass_equivalence() {
         }],
         metadata: MonolithIRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 0,
         },
     };
@@ -200,7 +200,7 @@ async fn test_control_flow_validation_pass_equivalence() {
         }],
         metadata: fusion_types::IRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_types::NanoUSD::ZERO,
             estimated_tokens: 0,
         },
     };
@@ -234,7 +234,7 @@ async fn test_control_flow_validation_pass_equivalence() {
         }],
         metadata: MonolithIRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 10,
         },
     };
@@ -266,7 +266,7 @@ async fn test_control_flow_validation_pass_equivalence() {
         }],
         metadata: fusion_types::IRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_types::NanoUSD::ZERO,
             estimated_tokens: 10,
         },
     };
@@ -284,7 +284,7 @@ async fn test_control_flow_validation_pass_equivalence() {
             IRNode { id: target_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
         ],
         edges: vec![IREdge { from: split_node, to: target_node, condition: None }],
-        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
+        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: fusion_types::NanoUSD::ZERO, estimated_tokens: 0 },
     };
     assert!(crate_pass.apply(crate_single_out_ir).await.is_err(), "Crate must reject split with 1 outgoing edge");
 
@@ -300,7 +300,7 @@ async fn test_control_flow_validation_pass_equivalence() {
             IRNode { id: b_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
         ],
         edges: vec![IREdge { from: split_node2, to: a_node, condition: None }, IREdge { from: split_node2, to: b_node, condition: None }],
-        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
+        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: fusion_types::NanoUSD::ZERO, estimated_tokens: 0 },
     };
     assert!(crate_pass.apply(crate_two_out_ir).await.is_ok(), "Crate must accept split with 2 outgoing edges");
 
@@ -316,7 +316,7 @@ async fn test_control_flow_validation_pass_equivalence() {
             IRNode { id: out_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
         ],
         edges: vec![IREdge { from: src_node, to: m_node, condition: None }, IREdge { from: m_node, to: out_node, condition: None }],
-        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
+        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: fusion_types::NanoUSD::ZERO, estimated_tokens: 0 },
     };
     assert!(crate_pass.apply(crate_single_merge_ir).await.is_err(), "Crate must reject merge with 1 incoming");
 
@@ -332,7 +332,7 @@ async fn test_control_flow_validation_pass_equivalence() {
             IRNode { id: j_node, kind: IRNodeKind::Join, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
         ],
         edges: vec![IREdge { from: ja_node, to: j_node, condition: None }, IREdge { from: jb_node, to: j_node, condition: None }],
-        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
+        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: fusion_types::NanoUSD::ZERO, estimated_tokens: 0 },
     };
     assert!(crate_pass.apply(crate_join_ir).await.is_ok(), "Crate must accept join with 2 incoming merges");
 
@@ -348,7 +348,7 @@ async fn test_control_flow_validation_pass_equivalence() {
             IRNode { id: b_node, kind: IRNodeKind::Barrier, strategy: StrategyKind::Single, model: None, config: HashMap::from([("control_flow".into(), serde_json::json!("barrier"))]) },
         ],
         edges: vec![IREdge { from: ba_node, to: b_node, condition: None }, IREdge { from: bb_node, to: b_node, condition: None }],
-        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
+        metadata: fusion_types::IRMetadata { policy_applied: vec![], estimated_cost: fusion_types::NanoUSD::ZERO, estimated_tokens: 0 },
     };
     assert!(crate_pass.apply(crate_barrier_no_out).await.is_err(), "Crate barrier with 0 outgoing must fail BarrierArity");
 }

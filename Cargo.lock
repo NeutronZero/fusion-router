@@ -1329,6 +1329,7 @@ name = "fusion-types"
 version = "0.14.5"
 dependencies = [
  "chrono",
+ "fusion-core",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

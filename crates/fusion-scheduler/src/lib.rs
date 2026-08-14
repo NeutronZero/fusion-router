@@ -19,14 +19,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
 use fusion_types::*;
-use fusion_core::PlatformError;
+use fusion_core::{PlatformError, NanoUSD};
 use tokio_util::sync::CancellationToken;
 
 pub mod work_queue;
 pub use work_queue::WorkQueue;
 
-const COST_PER_INPUT_TOKEN: f64 = 0.002 / 1000.0;
-const COST_PER_OUTPUT_TOKEN: f64 = 0.01 / 1000.0;
+const COST_PER_INPUT_TOKEN_NANOS: u64 = 2_000_000; // $0.002 per 1k tokens = 2M NanoUSD per 1k tokens
+const COST_PER_OUTPUT_TOKEN_NANOS: u64 = 10_000_000; // $0.01 per 1k tokens = 10M NanoUSD per 1k tokens
 
 /// Trait for executing a single node. Implementors provide the actual
 /// LLM/provider dispatch. The scheduler calls this for each ready node,
@@ -43,7 +43,7 @@ pub struct ExecutionOutcome {
     pub outputs: HashMap<uuid::Uuid, serde_json::Value>,
     pub node_states: HashMap<uuid::Uuid, NodeState>,
     pub total_latency_ms: u64,
-    pub total_cost: f64,
+    pub total_cost: NanoUSD,
     pub total_tokens: u64,
 }
 
@@ -119,7 +119,7 @@ impl DefaultScheduler {
         let mut node_states: HashMap<uuid::Uuid, NodeState> = HashMap::new();
         let mut outputs: HashMap<uuid::Uuid, serde_json::Value> = HashMap::new();
         let start = std::time::Instant::now();
-        let mut total_cost: f64 = 0.0;
+        let mut total_cost: NanoUSD = NanoUSD::ZERO;
         let mut total_tokens: u64 = 0;
         let mut loop_iterations: HashMap<uuid::Uuid, u32> = HashMap::new();
 
@@ -230,13 +230,18 @@ impl DefaultScheduler {
                 // then the budget envelope is checked after accumulation.
                 if let Some(ref usage) = result.usage {
                     total_tokens += usage.total_tokens as u64;
-                    total_cost += usage.prompt_tokens as f64 * COST_PER_INPUT_TOKEN
-                        + usage.completion_tokens as f64 * COST_PER_OUTPUT_TOKEN;
+                    // NanoUSD: cost per token in nanos = nanos_per_1k / 1000
+                    let input_cost = NanoUSD::from_nanos(
+                        (usage.prompt_tokens as u64).saturating_mul(COST_PER_INPUT_TOKEN_NANOS / 1000)
+                    );
+                    let output_cost = NanoUSD::from_nanos(
+                        (usage.completion_tokens as u64).saturating_mul(COST_PER_OUTPUT_TOKEN_NANOS / 1000)
+                    );
+                    let node_cost = input_cost.saturating_add(output_cost);
+                    total_cost = total_cost.saturating_add(node_cost);
 
                     if let Some(ref envelope) = envelope {
-                        let cost_millicosts = (usage.prompt_tokens as f64 * COST_PER_INPUT_TOKEN
-                            + usage.completion_tokens as f64 * COST_PER_OUTPUT_TOKEN) * 1000.0;
-                        if let Err(ref e) = envelope.record_and_check(cost_millicosts as u64, usage.total_tokens as u64) {
+                        if let Err(ref e) = envelope.record_and_check(node_cost, usage.total_tokens as u64) {
                             tracing::info!(node_id = ?node_id, error = %e, "Budget envelope breached; stopping further execution");
                             for node in &graph.nodes {
                                 if !node_states.contains_key(&node.id)
@@ -471,13 +476,13 @@ mod tests {
             }],
             edges: vec![],
             metadata: GraphMetadata {
-                estimated_cost: 0.01,
+                estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 150,
                 max_depth: 1,
                 node_count: 1,
             },
             total_tokens: 150,
-            total_cost: 10,
+            total_cost: NanoUSD::from_nanos(10),
             primitive_graph_hash: 0,
         });
 
@@ -521,13 +526,13 @@ mod tests {
                 condition: None,
             }],
             metadata: GraphMetadata {
-                estimated_cost: 0.02,
+                estimated_cost: NanoUSD::from_nanos(20_000_000),
                 estimated_tokens: 300,
                 max_depth: 2,
                 node_count: 2,
             },
             total_tokens: 300,
-            total_cost: 20,
+            total_cost: NanoUSD::from_nanos(20),
             primitive_graph_hash: 0,
         });
 
@@ -594,13 +599,13 @@ mod tests {
                 condition: None,
             }],
             metadata: GraphMetadata {
-                estimated_cost: 0.02,
+                estimated_cost: NanoUSD::from_nanos(20_000_000),
                 estimated_tokens: 300,
                 max_depth: 2,
                 node_count: 2,
             },
             total_tokens: 300,
-            total_cost: 20,
+            total_cost: NanoUSD::from_nanos(20),
             primitive_graph_hash: 0,
         });
 
@@ -659,13 +664,13 @@ mod tests {
             ],
             edges: vec![ExecutionEdge { from: n1, to: n2, condition: None }],
             metadata: GraphMetadata {
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 2,
                 node_count: 2,
             },
             total_tokens: 0,
-            total_cost: 0,
+            total_cost: NanoUSD::ZERO,
             primitive_graph_hash: 0,
         });
 
@@ -717,13 +722,13 @@ mod tests {
                 nodes,
                 edges,
                 metadata: GraphMetadata {
-                    estimated_cost: 0.0,
+                    estimated_cost: NanoUSD::ZERO,
                     estimated_tokens: 0,
                     max_depth: 4,
                     node_count: 0,
                 },
                 total_tokens: 0,
-                total_cost: 0,
+                total_cost: NanoUSD::ZERO,
                 primitive_graph_hash: 0,
             })
         }
@@ -1000,8 +1005,8 @@ mod tests {
 
         let scheduler = DefaultScheduler::new();
         let outcome = scheduler.run(graph, &PricingExecutor).await.unwrap();
-        let expected = 1000.0 * COST_PER_INPUT_TOKEN + 500.0 * COST_PER_OUTPUT_TOKEN;
-        assert!((outcome.total_cost - expected).abs() < 1e-12, "cost must use per-token rates: {} vs {}", outcome.total_cost, expected);
+        let expected = NanoUSD::from_nanos(1000 * COST_PER_INPUT_TOKEN_NANOS / 1000 + 500 * COST_PER_OUTPUT_TOKEN_NANOS / 1000);
+        assert_eq!(outcome.total_cost, expected, "cost must use per-token rates: {:?} vs {:?}", outcome.total_cost, expected);
         assert_eq!(outcome.total_tokens, 1500);
     }
 
@@ -1012,7 +1017,7 @@ mod tests {
             vec![RecordingExecutor::node_node(node, ExecutionNodeKind::LLMGenerate, "n")],
             vec![],
         );
-        let env = BudgetEnvelope::new(1000, 1000, 0);
+        let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 1000, 0);
 
         let scheduler = DefaultScheduler::new();
         let outcome = scheduler.run_with_budget(graph, &MockExecutor, &env).await.unwrap();
@@ -1052,14 +1057,14 @@ mod tests {
             vec![ExecutionEdge { from: n1, to: n2, condition: None }],
         );
         // Token limit 5 < 20 consumed per node: breach on the first usage.
-        let env = BudgetEnvelope::new(1000, 5, 10);
+        let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 5, 10);
 
         let scheduler = DefaultScheduler::new();
         let outcome = scheduler.run_with_budget(graph, &UsageExecutor, &env).await.unwrap();
 
         assert!(!outcome.success, "breach must complete the run unsuccessfully");
         assert_eq!(outcome.total_tokens, 20, "usage from the succeeded node must still be counted");
-        assert_eq!(outcome.total_cost, 10.0 * COST_PER_INPUT_TOKEN + 10.0 * COST_PER_OUTPUT_TOKEN);
+        assert_eq!(outcome.total_cost, NanoUSD::from_nanos(10 * COST_PER_INPUT_TOKEN_NANOS / 1000 + 10 * COST_PER_OUTPUT_TOKEN_NANOS / 1000));
         assert!(matches!(outcome.node_states.get(&n2), Some(NodeState::Skipped)), "outstanding node must be skipped");
     }
 }

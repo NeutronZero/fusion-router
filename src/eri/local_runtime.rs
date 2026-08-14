@@ -102,7 +102,7 @@ impl ExecutionRuntimeInterface for LocalEri {
             outputs,
             metrics: HashMap::from([
                 ("total_latency_ms".to_string(), result.total_latency_ms as f64),
-                ("total_cost_usd".to_string(), result.total_cost),
+                ("total_cost_usd".to_string(), result.total_cost.to_usd_f64()),
                 ("total_tokens".to_string(), result.total_tokens as f64),
             ]),
         })
@@ -198,13 +198,13 @@ mod tests {
             nodes: vec![node],
             edges: vec![],
             metadata: GraphMetadata {
-                estimated_cost: 0.0,
+                estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 1,
                 node_count: 1,
             },
             total_tokens: 0,
-            total_cost: 0,
+            total_cost: crate::types::NanoUSD::ZERO,
             primitive_graph_hash: 0,
         }
     }

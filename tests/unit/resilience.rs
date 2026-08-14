@@ -1,7 +1,7 @@
 use fusion_router::providers::circuit_breaker::{CircuitBreaker, CircuitState};
 use fusion_types::BudgetExceededError;
 use fusion_router::resource::{BudgetEnvelope, DefaultResourceManager, ResourceGuard, ResourceManager};
-use fusion_router::types::{ExecutionGraph, GraphMetadata, Quota};
+use fusion_router::types::{ExecutionGraph, GraphMetadata, NanoUSD, Quota};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -33,7 +33,7 @@ fn test_provider_circuit_breaker_fallback() {
 #[tokio::test]
 async fn test_resource_quota_exhausted_globally() {
     let quota = Quota {
-        max_daily_cost: 1.0,
+        max_daily_cost: NanoUSD::ONE_DOLLAR,
         max_daily_tokens: 100,
         max_concurrent: 5,
         provider_limits: std::collections::HashMap::new(),
@@ -45,13 +45,13 @@ async fn test_resource_quota_exhausted_globally() {
         nodes: vec![],
         edges: vec![],
         metadata: GraphMetadata {
-            estimated_cost: 0.5,
+            estimated_cost: NanoUSD::from_nanos(500_000_000),
             estimated_tokens: 60,
             max_depth: 1,
             node_count: 0,
         },
         total_tokens: 60,
-        total_cost: 500,
+        total_cost: NanoUSD::from_nanos(500_000_000),
         primitive_graph_hash: 0,
     };
 
@@ -60,7 +60,7 @@ async fn test_resource_quota_exhausted_globally() {
     let graph2 = ExecutionGraph {
         graph_id: Uuid::new_v4(),
         metadata: GraphMetadata {
-            estimated_cost: 0.8,
+            estimated_cost: NanoUSD::from_nanos(800_000_000),
             estimated_tokens: 60,
             max_depth: 1,
             node_count: 0,
@@ -73,9 +73,9 @@ async fn test_resource_quota_exhausted_globally() {
 
 #[test]
 fn test_budget_exceeded_per_request() {
-    let env = BudgetEnvelope::new(1000, 100, 5);
-    assert!(env.record_and_check(600, 30).is_ok());
-    let err = env.record_and_check(500, 30).unwrap_err();
+    let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 100, 5);
+    assert!(env.record_and_check(NanoUSD::from_nanos(600), 30).is_ok());
+    let err = env.record_and_check(NanoUSD::from_nanos(500), 30).unwrap_err();
     assert_eq!(
         err,
         BudgetExceededError::Cost {
@@ -88,7 +88,7 @@ fn test_budget_exceeded_per_request() {
 #[tokio::test]
 async fn test_panic_in_executor_releases_quota() {
     let quota = Quota {
-        max_daily_cost: 10.0,
+        max_daily_cost: NanoUSD::from_nanos(10_000_000_000),
         max_daily_tokens: 1000,
         max_concurrent: 10,
         provider_limits: std::collections::HashMap::new(),
@@ -100,13 +100,13 @@ async fn test_panic_in_executor_releases_quota() {
         nodes: vec![],
         edges: vec![],
         metadata: GraphMetadata {
-            estimated_cost: 2.0,
+            estimated_cost: NanoUSD::from_nanos(2_000_000_000),
             estimated_tokens: 200,
             max_depth: 1,
             node_count: 0,
         },
         total_tokens: 200,
-        total_cost: 2000,
+        total_cost: NanoUSD::from_nanos(2_000_000_000),
         primitive_graph_hash: 0,
     };
 

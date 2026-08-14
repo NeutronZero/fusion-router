@@ -75,7 +75,7 @@ async fn test_v1_executions_auth_enforcement() {
         fusion_router::compiler::build_compiler(
             fusion_router::types::ModelCatalog::default(),
             Arc::new(DefaultResourceManager::new(fusion_router::types::Quota {
-                max_daily_cost: 1_000_000.0,
+                max_daily_cost: fusion_router::types::NanoUSD::from_nanos(1_000_000_000_000),
                 max_daily_tokens: 1_000_000_000,
                 max_concurrent: 100,
                 provider_limits: Default::default(),

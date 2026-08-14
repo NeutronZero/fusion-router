@@ -169,6 +169,7 @@ fn validate_fusion_config(_node: &IRNode) -> Result<(), crate::CompilerError> {
 mod tests {
     use super::*;
     use crate::CompilerPass;
+    use fusion_core::NanoUSD;
     use std::collections::HashMap;
 
     fn ir_with_strategy(strategy: StrategyKind, config: HashMap<String, serde_json::Value>) -> WorkflowIR {
@@ -184,7 +185,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.01,
+			estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 100,
             },
         }

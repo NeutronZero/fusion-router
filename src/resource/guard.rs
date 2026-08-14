@@ -63,7 +63,7 @@ mod tests {
     #[tokio::test]
     async fn test_resource_guard_drop_releases_quota() {
         let quota = Quota {
-            max_daily_cost: 10.0,
+            max_daily_cost: NanoUSD::from_nanos(10_000_000_000),
             max_daily_tokens: 1000,
             max_concurrent: 10,
             provider_limits: std::collections::HashMap::new(),
@@ -75,13 +75,13 @@ mod tests {
             nodes: vec![],
             edges: vec![],
             metadata: GraphMetadata {
-                estimated_cost: 2.0,
+                estimated_cost: NanoUSD::from_nanos(2_000_000_000),
                 estimated_tokens: 200,
                 max_depth: 1,
                 node_count: 0,
             },
             total_tokens: 200,
-            total_cost: 2,
+            total_cost: NanoUSD::from_nanos(2_000_000_000),
             primitive_graph_hash: 0,
         };
 
@@ -101,7 +101,7 @@ mod tests {
     #[tokio::test]
     async fn test_resource_guard_commit_retains_quota() {
         let quota = Quota {
-            max_daily_cost: 10.0,
+            max_daily_cost: NanoUSD::from_nanos(10_000_000_000),
             max_daily_tokens: 1000,
             max_concurrent: 10,
             provider_limits: std::collections::HashMap::new(),
@@ -113,13 +113,13 @@ mod tests {
             nodes: vec![],
             edges: vec![],
             metadata: GraphMetadata {
-                estimated_cost: 2.0,
+                estimated_cost: NanoUSD::from_nanos(2_000_000_000),
                 estimated_tokens: 200,
                 max_depth: 1,
                 node_count: 0,
             },
             total_tokens: 200,
-            total_cost: 2,
+            total_cost: NanoUSD::from_nanos(2_000_000_000),
             primitive_graph_hash: 0,
         };
 

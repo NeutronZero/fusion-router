@@ -370,7 +370,7 @@ pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
         });
     }
 
-    let total_cost = (ir.metadata.estimated_cost * 1000.0) as u64;
+    let total_cost = ir.metadata.estimated_cost;
     let total_tokens = ir.metadata.estimated_tokens;
 
     Ok(ExecutionGraph {
@@ -979,6 +979,7 @@ pub fn build_compiler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fusion_core::NanoUSD;
 
     fn test_ir() -> WorkflowIR {
         WorkflowIR {
@@ -993,7 +994,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.1,
+                estimated_cost: NanoUSD::from_nanos(100_000_000),
                 estimated_tokens: 500,
             },
         }
@@ -1008,7 +1009,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
             },
         };
@@ -1243,7 +1244,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.01,
+                estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 100,
             },
         };
@@ -1299,7 +1300,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
             },
         };
@@ -1328,7 +1329,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
             },
         };
@@ -1358,7 +1359,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
             },
         };
@@ -1405,7 +1406,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
             },
         };
@@ -1431,7 +1432,7 @@ mod tests {
                 IRNode { id: id_orphan, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
             ],
             edges: vec![IREdge { from: id_a, to: id_b, condition: None }],
-            metadata: IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
+            metadata: IRMetadata { policy_applied: vec![], estimated_cost: NanoUSD::ZERO, estimated_tokens: 0 },
         };
         let result = pass.apply(ir).await.expect("pass should succeed");
         assert_eq!(result.nodes.len(), 2, "orphan node should be eliminated");
@@ -1451,7 +1452,7 @@ mod tests {
                 IRNode { id: id_b, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
             ],
             edges: vec![IREdge { from: id_a, to: id_b, condition: None }],
-            metadata: IRMetadata { policy_applied: vec![], estimated_cost: 0.0, estimated_tokens: 0 },
+            metadata: IRMetadata { policy_applied: vec![], estimated_cost: NanoUSD::ZERO, estimated_tokens: 0 },
         };
         let result = pass.apply(ir).await.expect("pass should succeed");
         assert_eq!(result.nodes.len(), 2);
@@ -1503,7 +1504,7 @@ mod tests {
                 config,
             }],
             edges: vec![],
-            metadata: IRMetadata { policy_applied: vec![], estimated_cost: 0.01, estimated_tokens: 100 },
+            metadata: IRMetadata { policy_applied: vec![], estimated_cost: NanoUSD::from_nanos(10_000_000), estimated_tokens: 100 },
         };
         let result = engine.compile("test", &ir).await;
         assert!(result.is_err(), "deny policy should block compilation through factory");

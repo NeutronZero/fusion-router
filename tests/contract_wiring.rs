@@ -64,7 +64,7 @@ impl ChatProvider for MockChatProvider {
 
 fn permissive_quota() -> Quota {
     Quota {
-        max_daily_cost: 1_000_000.0,
+        max_daily_cost: fusion_router::types::NanoUSD::from_nanos(1_000_000_000_000),
         max_daily_tokens: 1_000_000_000,
         max_concurrent: 100,
         provider_limits: HashMap::new(),

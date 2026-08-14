@@ -197,7 +197,7 @@ impl PipelineStep<ExecutionGraph, ResourceGuard> for ResourceReservationStep {
 
         // Initialize per-request budget envelope from global quota
         let q = self.resource_manager.quota();
-        let max_cost = ((q.max_daily_cost * 0.2 * 1000.0) as u64).max(10_000);
+        let max_cost = NanoUSD::from_nanos((q.max_daily_cost.as_nanos() / 5).max(10_000));
         // The envelope must never be smaller than the request itself needs:
         // every LLM node re-sends the full assembled context, so the minimum
         // workable budget is (input + output) x number of LLM nodes.
@@ -369,7 +369,7 @@ mod tests {
 
     fn permissive_quota() -> crate::types::Quota {
         crate::types::Quota {
-            max_daily_cost: 1_000_000.0,
+            max_daily_cost: crate::types::NanoUSD::from_nanos(1_000_000_000_000),
             max_daily_tokens: 1_000_000_000,
             max_concurrent: 100,
             provider_limits: std::collections::HashMap::new(),
@@ -389,7 +389,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.1,
+                estimated_cost: crate::types::NanoUSD::from_nanos(100_000_000),
                 estimated_tokens: 500,
             },
         }

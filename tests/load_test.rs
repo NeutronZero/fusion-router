@@ -11,7 +11,7 @@ use fusion_router::providers::ChatProvider;
 use fusion_router::resource::DefaultResourceManager;
 use fusion_router::telemetry::EvidenceRepository;
 use fusion_router::types::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice, Quota, Usage,
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice, NanoUSD, Quota, Usage,
 };
 
 struct LoadMockProvider;
@@ -74,7 +74,7 @@ fn build_app(quota: &Quota) -> Router {
         unsafe_dev: false,
         server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 0, shutdown_timeout_secs: 30, cors: Default::default() },
         resources: fusion_router::config::ResourceConfig {
-            max_daily_cost: quota.max_daily_cost,
+            max_daily_cost: quota.max_daily_cost.to_usd_f64(),
             max_daily_tokens: quota.max_daily_tokens,
             max_concurrent: quota.max_concurrent,
             max_concurrent_nodes: 16,
@@ -109,7 +109,7 @@ fn make_request_body() -> serde_json::Value {
 #[tokio::test]
 async fn test_response_contains_actual_llm_output() {
     let quota = Quota {
-        max_daily_cost: 1000.0,
+        max_daily_cost: NanoUSD::from_nanos(1_000_000_000_000),
         max_daily_tokens: 1_000_000,
         max_concurrent: 100,
         provider_limits: Default::default(),
@@ -148,7 +148,7 @@ async fn test_response_contains_actual_llm_output() {
 #[tokio::test]
 async fn test_concurrent_throughput() {
     let quota = Quota {
-        max_daily_cost: 1000.0,
+        max_daily_cost: NanoUSD::from_nanos(1_000_000_000_000),
         max_daily_tokens: 1_000_000,
         max_concurrent: 100,
         provider_limits: Default::default(),
@@ -212,7 +212,7 @@ async fn test_concurrent_throughput() {
 #[tokio::test]
 async fn test_quota_enforcement() {
     let quota = Quota {
-        max_daily_cost: 0.001,
+        max_daily_cost: NanoUSD::from_nanos(1_000_000),
         max_daily_tokens: 10,
         max_concurrent: 100,
         provider_limits: Default::default(),
@@ -256,7 +256,7 @@ async fn test_quota_enforcement() {
 #[tokio::test]
 async fn test_concurrent_streaming() {
     let quota = Quota {
-        max_daily_cost: 1000.0,
+        max_daily_cost: NanoUSD::from_nanos(1_000_000_000_000),
         max_daily_tokens: 1_000_000,
         max_concurrent: 50,
         provider_limits: Default::default(),
@@ -372,10 +372,10 @@ async fn test_concurrent_dag_workflows() {
             ExecutionEdge { from: b_id, to: join_id, condition: None },
         ],
         metadata: GraphMetadata {
-            estimated_cost: 0.02, estimated_tokens: 1000, max_depth: 2, node_count: 4,
+            estimated_cost: NanoUSD::from_nanos(20_000_000), estimated_tokens: 1000, max_depth: 2, node_count: 4,
         },
         total_tokens: 1000,
-        total_cost: 1,
+        total_cost: NanoUSD::from_nanos(1_000_000_000),
         primitive_graph_hash: 0,
     };
 
@@ -471,10 +471,10 @@ async fn test_loop_iteration_stress() {
             ExecutionEdge { from: loop_id, to: exit_id, condition: Some("exit".into()) },
         ],
         metadata: GraphMetadata {
-            estimated_cost: 0.5, estimated_tokens: 25000, max_depth: 50, node_count: 3,
+            estimated_cost: NanoUSD::from_nanos(500_000_000), estimated_tokens: 25000, max_depth: 50, node_count: 3,
         },
         total_tokens: 25000,
-        total_cost: 1,
+        total_cost: NanoUSD::from_nanos(1_000_000_000),
         primitive_graph_hash: 0,
     };
 
@@ -502,7 +502,7 @@ async fn test_compilation_throughput() {
     use uuid::Uuid;
 
     let quota = Quota {
-        max_daily_cost: 1_000_000.0,
+        max_daily_cost: NanoUSD::from_nanos(1_000_000_000_000_000),
         max_daily_tokens: 1_000_000_000,
         max_concurrent: 100,
         provider_limits: Default::default(),
@@ -541,7 +541,7 @@ async fn test_compilation_throughput() {
         edges,
         metadata: IRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.5,
+            estimated_cost: NanoUSD::from_nanos(500_000_000),
             estimated_tokens: 5000,
         },
     };
@@ -676,13 +676,13 @@ async fn test_high_concurrency_scheduling() {
             nodes,
             edges,
             metadata: GraphMetadata {
-                estimated_cost: n as f64 * 0.01,
+                estimated_cost: NanoUSD::from_nanos((n as f64 * 10_000_000.0) as u64),
                 estimated_tokens: n as u64 * 100,
                 max_depth: n as u32,
                 node_count: n as u32,
             },
             total_tokens: n as u64 * 100,
-            total_cost: n as u64,
+            total_cost: NanoUSD::from_nanos(n as u64 * 1_000_000_000),
             primitive_graph_hash: 0,
         }
     }
@@ -718,7 +718,7 @@ async fn test_budget_no_race_on_concurrent_reserve() {
     use fusion_router::types::{ExecutionGraph, GraphMetadata};
 
     let quota = Quota {
-        max_daily_cost: 0.7,
+        max_daily_cost: NanoUSD::from_nanos(700_000_000),
         max_daily_tokens: 1_000_000,
         max_concurrent: 100,
         provider_limits: Default::default(),
@@ -730,13 +730,13 @@ async fn test_budget_no_race_on_concurrent_reserve() {
         nodes: vec![],
         edges: vec![],
         metadata: GraphMetadata {
-            estimated_cost: 0.6,
+            estimated_cost: NanoUSD::from_nanos(600_000_000),
             estimated_tokens: 100,
             max_depth: 0,
             node_count: 0,
         },
         total_tokens: 100,
-        total_cost: 1,
+        total_cost: NanoUSD::from_nanos(1_000_000_000),
         primitive_graph_hash: 0,
     };
 

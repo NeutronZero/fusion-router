@@ -62,13 +62,13 @@ async fn test_scheduler_parity_and_budget_enforcement() {
         nodes: vec![node1],
         edges: vec![],
         metadata: GraphMetadata {
-            estimated_cost: 0.01,
+            estimated_cost: NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 100,
             max_depth: 1,
             node_count: 1,
         },
         total_tokens: 100,
-        total_cost: 10,
+        total_cost: NanoUSD::from_nanos(10_000_000_000),
         primitive_graph_hash: 0,
     };
 
@@ -78,13 +78,13 @@ async fn test_scheduler_parity_and_budget_enforcement() {
 
     // Test run() with strict budget limit (token limit = 5 vs 20 consumed -> breached immediately)
     let mut instance1 = scheduler.schedule(graph.clone(), ReservationId(Uuid::new_v4()));
-    instance1.budget_envelope = Some(BudgetEnvelope::new(1000, 5, 10));
+    instance1.budget_envelope = Some(BudgetEnvelope::new(NanoUSD::from_nanos(1000), 5, 10));
     let res1 = scheduler.run(&mut instance1, &executor).await.unwrap();
 
     // Test run_with_cancellation() with identical budget limit
     let token = tokio_util::sync::CancellationToken::new();
     let mut instance2 = scheduler.schedule(graph.clone(), ReservationId(Uuid::new_v4()));
-    instance2.budget_envelope = Some(BudgetEnvelope::new(1000, 5, 10));
+    instance2.budget_envelope = Some(BudgetEnvelope::new(NanoUSD::from_nanos(1000), 5, 10));
     let res2 = scheduler
         .run_with_cancellation(&mut instance2, &executor, &token)
         .await
@@ -144,13 +144,13 @@ async fn test_terminal_node_response_selection() {
         nodes: vec![gen_node, reflect_node, judge_node],
         edges,
         metadata: GraphMetadata {
-            estimated_cost: 0.01,
+            estimated_cost: NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 100,
             max_depth: 3,
             node_count: 3,
         },
         total_tokens: 100,
-        total_cost: 10,
+        total_cost: NanoUSD::from_nanos(10_000_000_000),
         primitive_graph_hash: 0,
     };
 

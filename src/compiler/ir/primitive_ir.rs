@@ -6,7 +6,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::types::{
-    ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata, StrategyKind,
+    ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata, NanoUSD, StrategyKind,
     RetryPolicy, FallbackConfig,
 };
 
@@ -267,13 +267,13 @@ impl PrimitiveGraph {
             nodes: exec_nodes,
             edges: exec_edges,
             metadata: GraphMetadata {
-                estimated_cost: 0.0,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 0,
                 node_count: id_to_uuid.len() as u32,
             },
             total_tokens: 0,
-            total_cost: 0,
+            total_cost: NanoUSD::ZERO,
             primitive_graph_hash: graph_hash,
         }
     }

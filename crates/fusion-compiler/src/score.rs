@@ -210,6 +210,7 @@ impl PolicyScorer for StaticPolicyScorer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fusion_core::NanoUSD;
 
     #[tokio::test]
     async fn default_capability_differentiates_providers() {
@@ -261,7 +262,7 @@ mod tests {
             edges: vec![],
             metadata: fusion_types::IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+				estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
             },
         };

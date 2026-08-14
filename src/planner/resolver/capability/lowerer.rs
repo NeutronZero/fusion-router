@@ -9,7 +9,7 @@ use uuid::Uuid;
 use fusion_plugin_api::CapabilityId;
 use crate::types::{
     ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind,
-    GraphMetadata, RetryPolicy, StrategyKind,
+    GraphMetadata, NanoUSD, RetryPolicy, StrategyKind,
 };
 use super::CapabilityGraph;
 
@@ -32,13 +32,13 @@ impl CapabilityGraphLowerer {
                 nodes: Vec::new(),
                 edges: Vec::new(),
                 metadata: GraphMetadata {
-                    estimated_cost: 0.0,
+                    estimated_cost: NanoUSD::ZERO,
                     estimated_tokens: 0,
                     max_depth: 0,
                     node_count: 0,
                 },
                 total_tokens: 0,
-                total_cost: 0,
+                total_cost: NanoUSD::ZERO,
                 primitive_graph_hash: 0,
             },
         };
@@ -60,7 +60,7 @@ impl CapabilityGraphLowerer {
         }
         let max_depth = depths.values().max().copied().unwrap_or(0);
 
-        let mut total_cost: u64 = 0;
+        let mut total_cost_nanos: u64 = 0;
         let total_tokens: u64 = 0;
 
         for cap_id in &order {
@@ -70,7 +70,7 @@ impl CapabilityGraphLowerer {
             let Some(node) = cap_graph.get_node(cap_id) else {
                 continue;
             };
-            total_cost += (node.contract.estimated_cost_usd * 1000.0) as u64;
+            total_cost_nanos += (node.contract.estimated_cost_usd * 1_000_000_000.0) as u64;
 
             let mut config = std::collections::HashMap::new();
             config.insert("capability_id".into(), serde_json::json!(cap_id.as_str()));
@@ -110,13 +110,13 @@ impl CapabilityGraphLowerer {
             nodes,
             edges,
             metadata: GraphMetadata {
-                estimated_cost: (total_cost as f64) / 1000.0,
+                estimated_cost: NanoUSD::from_nanos(total_cost_nanos),
                 estimated_tokens: 0,
                 max_depth,
                 node_count: cap_graph.node_count() as u32,
             },
             total_tokens,
-            total_cost,
+            total_cost: NanoUSD::from_nanos(total_cost_nanos),
             primitive_graph_hash: 0,
         }
     }
@@ -211,7 +211,7 @@ mod tests {
         assert!(exec_graph.nodes.is_empty());
         assert!(exec_graph.edges.is_empty());
         assert_eq!(exec_graph.metadata.node_count, 0);
-        assert_eq!(exec_graph.total_cost, 0);
+        assert_eq!(exec_graph.total_cost, NanoUSD::ZERO);
         assert_eq!(exec_graph.total_tokens, 0);
     }
 }

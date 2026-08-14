@@ -142,7 +142,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.1,
+                estimated_cost: crate::types::NanoUSD::from_nanos(100_000_000),
                 estimated_tokens: 500,
             },
         }
@@ -166,7 +166,7 @@ mod tests {
 
     fn permissive_quota() -> crate::types::Quota {
         crate::types::Quota {
-            max_daily_cost: 1_000_000.0,
+            max_daily_cost: crate::types::NanoUSD::from_nanos(1_000_000_000_000),
             max_daily_tokens: 1_000_000_000,
             max_concurrent: 100,
             provider_limits: std::collections::HashMap::new(),
@@ -261,7 +261,7 @@ mod tests {
             edges: vec![],
             metadata: crate::types::IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.0,
+                estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 0,
             },
         };

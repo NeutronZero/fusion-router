@@ -8,7 +8,7 @@ use fusion_router::config::AppConfig;
 use fusion_router::providers::ChatProvider;
 use fusion_router::resource::DefaultResourceManager;
 use fusion_router::telemetry::EvidenceRepository;
-use fusion_router::types::{ChatCompletionRequest, Quota};
+use fusion_router::types::{ChatCompletionRequest, NanoUSD, Quota};
 
 struct MockProvider;
 
@@ -71,7 +71,7 @@ impl EvidenceRepository for NoopEvidence {
 async fn test_chat_completion_endpoint() {
     let provider = Arc::new(MockProvider);
     let resource_manager = DefaultResourceManager::new(Quota {
-        max_daily_cost: 100.0,
+        max_daily_cost: NanoUSD::from_nanos(100_000_000_000),
         max_daily_tokens: 100000,
         max_concurrent: 10,
         provider_limits: Default::default(),
@@ -235,13 +235,13 @@ async fn test_dag_split_join_workflow() {
             ExecutionEdge { from: join_id, to: final_id, condition: None },
         ],
         metadata: GraphMetadata {
-            estimated_cost: 0.03,
+            estimated_cost: NanoUSD::from_nanos(30_000_000),
             estimated_tokens: 1500,
             max_depth: 3,
             node_count: 5,
         },
         total_tokens: 1500,
-        total_cost: 1,
+        total_cost: NanoUSD::from_nanos(1_000_000_000),
     };
 
     let reservation = fusion_router::types::ReservationId(Uuid::new_v4());
@@ -307,7 +307,7 @@ fn test_config() -> AppConfig {
 async fn test_middleware_stack_rejects_unauthenticated() {
     let provider = Arc::new(MidMockProvider);
     let resource_manager = DefaultResourceManager::new(Quota {
-        max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default(),
+        max_daily_cost: NanoUSD::from_nanos(100_000_000_000), max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default(),
     });
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = test_config();
@@ -356,7 +356,7 @@ async fn test_middleware_stack_rejects_unauthenticated() {
 async fn test_middleware_request_id_header() {
     let provider = Arc::new(MidMockProvider);
     let resource_manager = DefaultResourceManager::new(Quota {
-        max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default(),
+        max_daily_cost: NanoUSD::from_nanos(100_000_000_000), max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default(),
     });
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = test_config();
@@ -417,7 +417,7 @@ async fn test_config_validation_invalid_format() {
 async fn test_health_ready_endpoints() {
     let provider = Arc::new(MidMockProvider);
     let resource_manager = DefaultResourceManager::new(Quota {
-        max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default(),
+        max_daily_cost: NanoUSD::from_nanos(100_000_000_000), max_daily_tokens: 100000, max_concurrent: 10, provider_limits: Default::default(),
     });
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = test_config();
@@ -468,7 +468,7 @@ async fn test_executions_and_operations_auth_enforcement() {
 
     let provider = Arc::new(MidMockProvider);
     let resource_manager = DefaultResourceManager::new(Quota {
-        max_daily_cost: 100.0,
+        max_daily_cost: NanoUSD::from_nanos(100_000_000_000),
         max_daily_tokens: 100000,
         max_concurrent: 10,
         provider_limits: Default::default(),

@@ -290,7 +290,7 @@ impl ExecutionPlane {
             &execution_id,
             ExecutionEvent::WorkflowCompleted {
                 total_duration_ms: started_at.elapsed().as_millis() as u64,
-                total_cost_usd: result.total_cost,
+                total_cost_usd: result.total_cost.to_usd_f64(),
             },
         )
         .await;
@@ -413,7 +413,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-                estimated_cost: 0.1,
+                estimated_cost: crate::types::NanoUSD::from_nanos(100_000_000),
                 estimated_tokens: 100,
             },
         }
@@ -425,7 +425,7 @@ mod tests {
             crate::types::ModelCatalog::default(),
             Arc::new(crate::resource::DefaultResourceManager::new(
                 crate::types::Quota {
-                    max_daily_cost: 1_000_000.0,
+                    max_daily_cost: crate::types::NanoUSD::from_nanos(1_000_000_000_000),
                     max_daily_tokens: 1_000_000_000,
                     max_concurrent: 100,
                     provider_limits: std::collections::HashMap::new(),
@@ -544,7 +544,7 @@ mod tests {
                 "edges": [],
                 "metadata": {
                     "policy_applied": [],
-                    "estimated_cost": 0.1,
+                    "estimated_cost": 100000000,
                     "estimated_tokens": 100
                 }
             }
@@ -603,14 +603,14 @@ mod tests {
                 condition: None,
             }],
             metadata: crate::types::GraphMetadata {
-                estimated_cost: 0.0,
+                estimated_cost: crate::types::NanoUSD::ZERO,
                 estimated_tokens: 0,
                 max_depth: 1,
                 node_count: 2,
             },
             primitive_graph_hash: 0,
             total_tokens: 0,
-            total_cost: 0,
+            total_cost: crate::types::NanoUSD::ZERO,
         };
 
         let order = ExecutionPlane::topological_order(&graph);

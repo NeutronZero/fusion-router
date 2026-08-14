@@ -25,7 +25,7 @@ impl KernelResourceManager {
         Self {
             inner,
             quota: fusion_kernel::resource::Quota {
-                max_daily_cost,
+                max_daily_cost: max_daily_cost.to_usd_f64(),
                 max_daily_tokens,
             },
         }
@@ -37,14 +37,14 @@ impl KernelResourceManager {
             nodes: vec![],
             edges: vec![],
             metadata: GraphMetadata {
-                estimated_cost: estimated_cost.to_usd_f64(),
+                estimated_cost,
                 estimated_tokens,
                 max_depth: 1,
                 node_count: 0,
             },
             primitive_graph_hash: 0,
             total_tokens: 0,
-            total_cost: 0,
+            total_cost: fusion_core::NanoUSD::ZERO,
         }
     }
 }
@@ -95,7 +95,7 @@ mod tests {
 
     fn manager() -> KernelResourceManager {
         KernelResourceManager::new(Arc::new(DefaultResourceManager::new(Quota {
-            max_daily_cost: 1.0,
+            max_daily_cost: fusion_core::NanoUSD::ONE_DOLLAR,
             max_daily_tokens: 1000,
             max_concurrent: 10,
             provider_limits: std::collections::HashMap::new(),

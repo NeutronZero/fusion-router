@@ -24,7 +24,7 @@ fn create_test_ir() -> WorkflowIR {
         edges: vec![],
         metadata: IRMetadata {
             policy_applied: vec!["test".to_string()],
-            estimated_cost: 0.01,
+            estimated_cost: fusion_router::types::NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 500,
         },
     }
@@ -34,7 +34,7 @@ fn permissive_compiler() -> fusion_router::compiler::DefaultCompiler {
     build_compiler(
         Default::default(),
         std::sync::Arc::new(DefaultResourceManager::new(Quota {
-            max_daily_cost: 1_000_000.0,
+            max_daily_cost: fusion_router::types::NanoUSD::from_nanos(1_000_000_000_000),
             max_daily_tokens: 1_000_000_000,
             max_concurrent: 100,
             provider_limits: Default::default(),
@@ -65,7 +65,7 @@ async fn test_constraint_validation_empty_ir() {
         edges: vec![],
         metadata: IRMetadata {
             policy_applied: vec![],
-            estimated_cost: 0.0,
+            estimated_cost: fusion_router::types::NanoUSD::ZERO,
             estimated_tokens: 0,
         },
     };

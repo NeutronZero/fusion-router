@@ -276,13 +276,13 @@ resources:
 
         let quota = config.to_quota();
 
-        assert_eq!(quota.max_daily_cost, 42.5);
+        assert_eq!(quota.max_daily_cost, crate::types::NanoUSD::from_nanos(42_500_000_000));
         assert_eq!(quota.max_daily_tokens, 999);
         assert_eq!(quota.max_concurrent, 7);
         let limit = quota.provider_limits.get("openai").unwrap();
         assert_eq!(limit.max_rpm, 60);
         assert_eq!(limit.max_tpm, 100_000);
-        assert_eq!(limit.max_daily_cost, 10.0);
+        assert_eq!(limit.max_daily_cost, crate::types::NanoUSD::from_nanos(10_000_000_000));
     }
 
     #[test]

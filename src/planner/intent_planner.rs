@@ -4,7 +4,7 @@ use super::Planner;
 use crate::providers::capability_catalog::CapabilityCatalog;
 use crate::types::execution::ExecutionIntent;
 use crate::types::{
-    ComplexityLevel, EvidenceSnapshot, IRNodeKind, Intent, ModelCatalog, Policy, Requirements,
+    ComplexityLevel, EvidenceSnapshot, IRNodeKind, Intent, ModelCatalog, NanoUSD, Policy, Requirements,
     StrategyKind, WorkflowIR,
 };
 
@@ -220,7 +220,7 @@ impl IntentPlanner {
             ExecutionIntent::Constrained { .. } => ("intent:balanced", 0.03, 3000),
         };
         plan.metadata.policy_applied = vec![policy.to_string()];
-        plan.metadata.estimated_cost = cost;
+        plan.metadata.estimated_cost = NanoUSD::from_nanos((cost * 1_000_000_000.0) as u64);
         plan.metadata.estimated_tokens = tokens;
         Some(plan)
     }
@@ -285,7 +285,7 @@ mod tests {
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
         let ir = planner.plan(&reqs, &[], None).await;
         assert_eq!(ir.nodes.len(), 5);
-        assert_eq!(ir.metadata.estimated_cost, 0.05);
+        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(50_000_000));
         assert_eq!(ir.metadata.estimated_tokens, 5000);
         assert!(ir
             .metadata
@@ -316,7 +316,7 @@ mod tests {
             .metadata
             .policy_applied
             .contains(&"intent:speed".to_string()));
-        assert_eq!(ir.metadata.estimated_cost, 0.01);
+        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(10_000_000));
         assert_eq!(ir.metadata.estimated_tokens, 1000);
     }
 
@@ -333,7 +333,7 @@ mod tests {
             .metadata
             .policy_applied
             .contains(&"intent:balanced".to_string()));
-        assert_eq!(ir.metadata.estimated_cost, 0.03);
+        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(30_000_000));
     }
 
     #[tokio::test]
@@ -346,7 +346,7 @@ mod tests {
             .metadata
             .policy_applied
             .contains(&"intent:exhaustive".to_string()));
-        assert_eq!(ir.metadata.estimated_cost, 0.08);
+        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(80_000_000));
         assert_eq!(ir.metadata.estimated_tokens, 8000);
     }
 

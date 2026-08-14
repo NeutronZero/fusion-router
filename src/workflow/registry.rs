@@ -93,7 +93,7 @@ impl WorkflowDefinition {
             edges,
             metadata: crate::types::IRMetadata {
                 policy_applied: vec!["workflow_definition".to_string()],
-                estimated_cost: base_cost * node_count as f64,
+                estimated_cost: crate::types::NanoUSD::from_nanos((base_cost * 1_000_000_000.0 * node_count as f64) as u64),
                 estimated_tokens: 1000 * node_count as u64,
             },
         }
@@ -245,7 +245,7 @@ mod tests {
         assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
         assert_eq!(ir.nodes[0].model.as_deref(), Some("claude-sonnet-4-20250514"));
         assert_eq!(ir.metadata.estimated_tokens, 1000);
-        assert_eq!(ir.metadata.estimated_cost, 0.01);
+        assert_eq!(ir.metadata.estimated_cost, crate::types::NanoUSD::from_nanos(10_000_000));
     }
 
     #[test]
@@ -255,7 +255,7 @@ mod tests {
         let ir = wf.instantiate(&reqs(Intent::Code, false, ComplexityLevel::High));
 
         assert_eq!(ir.nodes[0].model.as_deref(), Some("gpt-4o"));
-        assert_eq!(ir.metadata.estimated_cost, 0.10);
+        assert_eq!(ir.metadata.estimated_cost, crate::types::NanoUSD::from_nanos(100_000_000));
     }
 
     #[test]

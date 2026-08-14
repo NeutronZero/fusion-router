@@ -40,7 +40,7 @@ use fusion_router::strategies::single::SingleStrategy;
 use fusion_router::strategies::Strategy;
 use fusion_router::types::{
     ChatCompletionRequest, ChatMessage, ComplexityLevel, ExecutionGraph, ExecutionNodeKind,
-    IRMetadata, IRNode, IRNodeKind, Intent, ReservationId, Requirements,
+    IRMetadata, IRNode, IRNodeKind, Intent, NanoUSD, ReservationId, Requirements,
     StrategyKind, WorkflowIR,
 };
 use fusion_router::types::execution::ExecutionIntent;
@@ -817,7 +817,7 @@ fn build_single_node_ir(_task: &TaskDef, model: &str) -> WorkflowIR {
         edges: vec![],
         metadata: IRMetadata {
             policy_applied: vec!["eval:single".into()],
-            estimated_cost: 0.01,
+            estimated_cost: NanoUSD::from_nanos(10_000_000),
             estimated_tokens: 1000,
         },
     }
@@ -982,7 +982,7 @@ async fn run_condition_b(
                 run_index: 0,
                 output: output.clone(),
                 quality_score: quality,
-                cost_usd: exec_result.total_cost,
+                cost_usd: exec_result.total_cost.to_usd_f64(),
                 latency_ms: latency,
                 tokens: exec_result.total_tokens,
                 call_count: count_llm_nodes(&instance.graph),
@@ -1114,7 +1114,7 @@ async fn run_condition_c(
                 run_index: 0,
                 output: output.clone(),
                 quality_score: quality,
-                cost_usd: exec_result.total_cost,
+                cost_usd: exec_result.total_cost.to_usd_f64(),
                 latency_ms: latency,
                 tokens: exec_result.total_tokens,
                 call_count: count_llm_nodes(&instance.graph),
@@ -1482,7 +1482,7 @@ async fn main() -> Result<()> {
 
     // Build pipeline components for conditions B & C
     let resource_manager = Arc::new(DefaultResourceManager::new(fusion_router::types::Quota {
-        max_daily_cost: 100.0,
+        max_daily_cost: fusion_core::NanoUSD::from_nanos(100_000_000_000),
         max_daily_tokens: 10_000_000,
         max_concurrent: 10,
         provider_limits: HashMap::new(),

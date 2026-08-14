@@ -248,7 +248,7 @@ pub(crate) async fn process_request(
         request_id = %request_id,
         graph_id = %graph.graph_id,
         node_count = graph.nodes.len(),
-        estimated_cost = graph.metadata.estimated_cost,
+        estimated_cost = %graph.metadata.estimated_cost,
         estimated_tokens = graph.metadata.estimated_tokens,
         "graph compiled"
     );
