@@ -1,48 +1,75 @@
 use std::sync::Arc;
-use parking_lot::Mutex;
 use crate::policy::PolicyDeclaration;
+use crate::policy::PolicyRegistry;
 use crate::telemetry::audit::{AuditLog, AuditEntry};
 use crate::operations::OperationError;
+use fusion_planner::PolicySnapshot;
 
+/// Thin administrative facade over the authoritative `PolicyRegistry`.
+///
+/// All CRUD operations delegate to the registry, which maintains versioned
+/// immutable snapshots. The audit log records every mutation for traceability.
 pub struct PolicyAdmin {
-    store: Arc<Mutex<Vec<PolicyDeclaration>>>,
+    registry: Arc<PolicyRegistry>,
     audit_log: Arc<AuditLog>,
-    registry: Option<Arc<crate::policy::PolicyRegistry>>,
 }
 
 impl PolicyAdmin {
-    pub fn new(
-        store: Arc<Mutex<Vec<PolicyDeclaration>>>,
-        audit_log: Arc<AuditLog>,
-    ) -> Self {
-        Self { store, audit_log, registry: None }
+    pub fn new(registry: Arc<PolicyRegistry>, audit_log: Arc<AuditLog>) -> Self {
+        Self { registry, audit_log }
     }
 
-    pub fn new_with_registry(
-        registry: Arc<crate::policy::PolicyRegistry>,
-        store: Arc<Mutex<Vec<PolicyDeclaration>>>,
-        audit_log: Arc<AuditLog>,
-    ) -> Self {
-        Self { store, audit_log, registry: Some(registry) }
+    /// Returns the current policy snapshot from the registry.
+    pub fn current_snapshot(&self) -> PolicySnapshot {
+        self.registry.current_snapshot()
     }
 
+    /// Returns a specific historical snapshot by version.
+    pub fn snapshot_at(&self, version: u64) -> Option<PolicySnapshot> {
+        self.registry.snapshot_at(version)
+    }
+
+    /// Returns all historical snapshots.
+    pub fn snapshot_history(&self) -> Vec<PolicySnapshot> {
+        self.registry.snapshot_history()
+    }
+
+    /// Lists all active policies as `PolicyDeclaration` values.
     pub fn list_policies(&self) -> Result<Vec<PolicyDeclaration>, OperationError> {
-        let store = self.store.lock();
-        Ok(store.clone())
+        let snap = self.registry.current_snapshot();
+        Ok(snap.policies.into_iter().map(|p| PolicyDeclaration {
+            name: p.name,
+            priority: 0,
+            match_target: p.rule.clone(),
+            effect: "allow".into(),
+            conditions: Default::default(),
+            annotations: Default::default(),
+        }).collect())
     }
 
-    #[allow(dead_code)]
+    /// Gets a policy by name.
     pub fn get_policy(&self, name: &str) -> Result<Option<PolicyDeclaration>, OperationError> {
-        let store = self.store.lock();
-        Ok(store.iter().find(|d| d.name == name).cloned())
+        let snap = self.registry.current_snapshot();
+        Ok(snap.policies.iter().find(|p| p.name == name).map(|p| PolicyDeclaration {
+            name: p.name.clone(),
+            priority: 0,
+            match_target: p.rule.clone(),
+            effect: "allow".into(),
+            conditions: Default::default(),
+            annotations: Default::default(),
+        }))
     }
 
+    /// Creates a new policy. Rejects duplicates by name.
     pub fn create_policy(&self, decl: PolicyDeclaration) -> Result<(), OperationError> {
-        let mut store = self.store.lock();
-        if store.iter().any(|d| d.name == decl.name) {
+        if self.registry.has_policy(&decl.name) {
             return Err(OperationError::Policy(format!("Policy '{}' already exists", decl.name)));
         }
-        store.push(decl.clone());
+        self.registry.apply_policy(
+            decl.name.clone(),
+            decl.name.clone(),
+            decl.match_target.clone(),
+        );
         self.audit_log.record(AuditEntry {
             timestamp: chrono::Utc::now().timestamp(),
             request_id: String::new(),
@@ -54,32 +81,33 @@ impl PolicyAdmin {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    /// Updates an existing policy by name.
     pub fn update_policy(&self, name: &str, decl: PolicyDeclaration) -> Result<(), OperationError> {
-        let mut store = self.store.lock();
-        if let Some(existing) = store.iter_mut().find(|d| d.name == name) {
-            *existing = decl.clone();
-            self.audit_log.record(AuditEntry {
-                timestamp: chrono::Utc::now().timestamp(),
-                request_id: String::new(),
-                user_id: None,
-                action: format!("policy.update:{}", name),
-                result: "ok".into(),
-                details: serde_json::json!(decl),
-            });
-            Ok(())
-        } else {
-            Err(OperationError::Policy(format!("Policy '{}' not found", name)))
-        }
-    }
-
-    pub fn delete_policy(&self, name: &str) -> Result<(), OperationError> {
-        let mut store = self.store.lock();
-        let len_before = store.len();
-        store.retain(|d| d.name != name);
-        if store.len() == len_before {
+        if !self.registry.has_policy(name) {
             return Err(OperationError::Policy(format!("Policy '{}' not found", name)));
         }
+        self.registry.apply_policy(
+            name.to_string(),
+            decl.name.clone(),
+            decl.match_target.clone(),
+        );
+        self.audit_log.record(AuditEntry {
+            timestamp: chrono::Utc::now().timestamp(),
+            request_id: String::new(),
+            user_id: None,
+            action: format!("policy.update:{}", name),
+            result: "ok".into(),
+            details: serde_json::json!(decl),
+        });
+        Ok(())
+    }
+
+    /// Deletes a policy by name.
+    pub fn delete_policy(&self, name: &str) -> Result<(), OperationError> {
+        if !self.registry.has_policy(name) {
+            return Err(OperationError::Policy(format!("Policy '{}' not found", name)));
+        }
+        self.registry.remove_policy(name);
         self.audit_log.record(AuditEntry {
             timestamp: chrono::Utc::now().timestamp(),
             request_id: String::new(),
@@ -99,21 +127,27 @@ mod tests {
     use crate::telemetry::audit::AuditLog;
     use std::collections::HashMap;
 
-    #[test]
-    fn test_create_and_list_policies() {
-        let store = Arc::new(Mutex::new(Vec::new()));
+    fn test_admin() -> PolicyAdmin {
+        let registry = Arc::new(PolicyRegistry::new());
         let audit = Arc::new(AuditLog::new(100));
-        let admin = PolicyAdmin::new(store.clone(), audit.clone());
+        PolicyAdmin::new(registry, audit)
+    }
 
-        let decl = PolicyDeclaration {
-            name: "test-policy".into(),
+    fn test_decl(name: &str) -> PolicyDeclaration {
+        PolicyDeclaration {
+            name: name.into(),
             priority: 10,
             match_target: "shell.exec".into(),
             effect: "deny".into(),
             conditions: HashMap::new(),
             annotations: HashMap::new(),
-        };
-        admin.create_policy(decl.clone()).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_create_and_list_policies() {
+        let admin = test_admin();
+        admin.create_policy(test_decl("test-policy")).unwrap();
         let list = admin.list_policies().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "test-policy");
@@ -121,19 +155,8 @@ mod tests {
 
     #[test]
     fn test_delete_policy() {
-        let store = Arc::new(Mutex::new(Vec::new()));
-        let audit = Arc::new(AuditLog::new(100));
-        let admin = PolicyAdmin::new(store.clone(), audit.clone());
-
-        let decl = PolicyDeclaration {
-            name: "to-delete".into(),
-            priority: 5,
-            match_target: "http.*".into(),
-            effect: "allow".into(),
-            conditions: HashMap::new(),
-            annotations: HashMap::new(),
-        };
-        admin.create_policy(decl).unwrap();
+        let admin = test_admin();
+        admin.create_policy(test_decl("to-delete")).unwrap();
         admin.delete_policy("to-delete").unwrap();
         let list = admin.list_policies().unwrap();
         assert!(list.is_empty());
@@ -141,20 +164,47 @@ mod tests {
 
     #[test]
     fn test_create_duplicate_returns_error() {
-        let store = Arc::new(Mutex::new(Vec::new()));
-        let audit = Arc::new(AuditLog::new(100));
-        let admin = PolicyAdmin::new(store.clone(), audit.clone());
-
-        let decl = PolicyDeclaration {
-            name: "dup".into(),
-            priority: 1,
-            match_target: "*".into(),
-            effect: "allow".into(),
-            conditions: HashMap::new(),
-            annotations: HashMap::new(),
-        };
-        admin.create_policy(decl.clone()).unwrap();
-        let result = admin.create_policy(decl);
+        let admin = test_admin();
+        admin.create_policy(test_decl("dup")).unwrap();
+        let result = admin.create_policy(test_decl("dup"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_policy() {
+        let admin = test_admin();
+        admin.create_policy(test_decl("original")).unwrap();
+        admin.update_policy("original", test_decl("updated")).unwrap();
+        let snap = admin.current_snapshot();
+        assert_eq!(snap.policies.len(), 1);
+        assert_eq!(snap.policies[0].name, "updated");
+    }
+
+    #[test]
+    fn test_delete_nonexistent_returns_error() {
+        let admin = test_admin();
+        assert!(admin.delete_policy("ghost").is_err());
+    }
+
+    #[test]
+    fn test_snapshot_history_grows() {
+        let admin = test_admin();
+        assert_eq!(admin.snapshot_history().len(), 1);
+        admin.create_policy(test_decl("p1")).unwrap();
+        assert_eq!(admin.snapshot_history().len(), 2);
+        admin.delete_policy("p1").unwrap();
+        assert_eq!(admin.snapshot_history().len(), 3);
+    }
+
+    #[test]
+    fn test_current_snapshot_reflects_state() {
+        let admin = test_admin();
+        let snap = admin.current_snapshot();
+        assert_eq!(snap.version, 1);
+        assert!(snap.policies.is_empty());
+        admin.create_policy(test_decl("p1")).unwrap();
+        let snap = admin.current_snapshot();
+        assert_eq!(snap.version, 2);
+        assert_eq!(snap.policies.len(), 1);
     }
 }

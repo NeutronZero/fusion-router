@@ -152,9 +152,9 @@ async fn test_v1_operations_auth_enforcement() {
         ops_cache.clone(),
     ));
     let ops_inspector = Arc::new(RuntimeInspector::new(ops_cache.clone()));
-    let ops_store = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let ops_policy_registry = Arc::new(fusion_router::policy::PolicyRegistry::new());
     let ops_audit = Arc::new(AuditLog::new(1000));
-    let ops_policy_admin = Arc::new(PolicyAdmin::new(ops_store, ops_audit.clone()));
+    let ops_policy_admin = Arc::new(PolicyAdmin::new(ops_policy_registry, ops_audit.clone()));
     let ops_verifier = Arc::new(MockPackageVerifier);
     let ops_attestation_viewer = Arc::new(AttestationViewer::new(ops_verifier, ops_audit));
 

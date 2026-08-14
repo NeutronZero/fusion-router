@@ -30,16 +30,15 @@ pub struct OperationsState {
 #[cfg(test)]
 impl OperationsState {
     pub fn new_mock() -> Self {
-        use parking_lot::Mutex as ParkingMutex;
         use crate::telemetry::audit::AuditLog;
 
         let registry = Arc::new(RwLock::new(InMemoryCapabilityRegistry::new()));
         let cache = Arc::new(RuntimeModuleCache::new());
         let dashboard = Arc::new(DefaultDashboardDataProvider::new(registry, cache));
         let inspector = Arc::new(RuntimeInspector::new(Arc::new(RuntimeModuleCache::new())));
-        let store = Arc::new(ParkingMutex::new(Vec::new()));
+        let policy_registry = Arc::new(crate::policy::PolicyRegistry::new());
         let audit = Arc::new(AuditLog::new(100));
-        let policy_admin = Arc::new(PolicyAdmin::new(store, audit.clone()));
+        let policy_admin = Arc::new(PolicyAdmin::new(policy_registry, audit.clone()));
         let verifier = Arc::new(MockPackageVerifier);
         let attestation_viewer = Arc::new(AttestationViewer::new(verifier, audit.clone()));
 

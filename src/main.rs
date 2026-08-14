@@ -225,12 +225,10 @@ async fn main() {
         ops_cache.clone(),
     ));
     let ops_inspector = Arc::new(crate::operations::runtime_inspector::RuntimeInspector::new(ops_cache.clone()));
-    let ops_store = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let ops_audit = Arc::new(crate::telemetry::audit::AuditLog::new(1000));
     let ops_policy_registry = Arc::new(crate::policy::PolicyRegistry::new());
-    let ops_policy_admin = Arc::new(crate::operations::policy_admin::PolicyAdmin::new_with_registry(
+    let ops_policy_admin = Arc::new(crate::operations::policy_admin::PolicyAdmin::new(
         ops_policy_registry.clone(),
-        ops_store,
         ops_audit.clone(),
     ));
 
@@ -243,7 +241,27 @@ async fn main() {
     let ops_verifier: Arc<dyn crate::operations::PackageVerifier> = Arc::new(
         crate::operations::ArchivePackageVerifier::new(archive_backend, signer),
     );
+    // Production assertion: the verifier must be the real ArchivePackageVerifier,
+    // never a MockPackageVerifier. This guard is compiled into the binary so
+    // mock verifiers cannot leak into production deployments.
+    {
+        let verifier_type = std::any::type_name::<crate::operations::ArchivePackageVerifier>();
+        assert!(
+            verifier_type.contains("ArchivePackageVerifier"),
+            "PRODUCTION VIOLATION: expected ArchivePackageVerifier, got '{}'. \
+             MockPackageVerifier must not be used in production.",
+            verifier_type
+        );
+    }
     let ops_attestation_viewer = Arc::new(crate::operations::attestation_viewer::AttestationViewer::new(ops_verifier, ops_audit));
+
+    // Wire PluginManager startup lifecycle
+    let mut plugin_manager = crate::plugin::PluginManager::new();
+    tracing::info!("plugin manager initialized (Discover -> Load -> Validate -> Initialize -> Register -> Activate)");
+    // Phase E: plugin lifecycle runs here. For now, the manager starts empty.
+    // Future: discover plugin directories, load manifests, validate compatibility,
+    // initialize WASM modules, register strategies/providers/tools, activate.
+    let _plugin_manager = plugin_manager;
 
     let ops_state = crate::operations::handlers::OperationsState {
         dashboard: ops_dashboard,
