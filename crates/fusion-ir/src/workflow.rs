@@ -79,15 +79,17 @@ mod tests {
             nodes: vec![
                 WorkflowNode {
                     id: "n1".into(),
-                    kind: WorkflowNodeKind::Task,
-                    capability: Some("CodeGeneration".into()),
-                    config: BTreeMap::new(),
+                kind: WorkflowNodeKind::Task,
+                capability: Some("CodeGeneration".into()),
+                selected_model: None,
+                config: BTreeMap::new(),
                 },
                 WorkflowNode {
                     id: "n2".into(),
-                    kind: WorkflowNodeKind::Output,
-                    capability: None,
-                    config: BTreeMap::new(),
+                kind: WorkflowNodeKind::Output,
+                capability: None,
+                selected_model: None,
+                config: BTreeMap::new(),
                 },
             ],
             edges: vec![WorkflowEdge {

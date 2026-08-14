@@ -18,7 +18,7 @@ pub trait ResourceManager: Send + Sync {
     async fn try_reserve(&self, graph: &ExecutionGraph) -> bool;
     async fn release(&self, graph: &ExecutionGraph) -> anyhow::Result<()>;
     fn quota(&self) -> &Quota;
-    fn spent_cost(&self) -> f64;
+    fn spent_cost(&self) -> NanoUSD;
     fn spent_tokens(&self) -> u64;
     /// Records actual measured usage (e.g. from a stream meter) so quota
     /// accounting reflects reality rather than only estimates. No-op by
@@ -92,8 +92,8 @@ impl ResourceManager for DefaultResourceManager {
         &self.quota
     }
 
-    fn spent_cost(&self) -> f64 {
-        self.used_cost.load(Ordering::Acquire) as f64 / 1_000_000_000.0
+    fn spent_cost(&self) -> NanoUSD {
+        NanoUSD::from_nanos(self.used_cost.load(Ordering::Acquire))
     }
 
     fn spent_tokens(&self) -> u64 {

@@ -49,6 +49,7 @@ pub struct CapabilityCatalogSnapshot {
     pub catalog: CapabilityCatalog,
 }
 
+#[derive(Debug, Clone)]
 pub struct PlanningRequest {
     pub intent: ExecutionIntent,
     pub user_prompt: String,

@@ -88,11 +88,17 @@ impl StreamMeter {
 
     fn update_cost(&mut self, pricing: Option<&ModelPricing>) {
         if let Some(p) = pricing {
-            let prompt_nanos = (self.prompt_tokens as f64 * p.input_cost_per_1k * 1_000_000.0) as u64;
-            let completion_nanos = (self.completion_tokens as f64 * p.output_cost_per_1k * 1_000_000.0) as u64;
+            let prompt_nanos = nanos_for_tokens(self.prompt_tokens, p.input_cost_per_1k);
+            let completion_nanos = nanos_for_tokens(self.completion_tokens, p.output_cost_per_1k);
             self.cost = NanoUSD::from_nanos(prompt_nanos + completion_nanos);
         }
     }
+}
+
+fn nanos_for_tokens(tokens: u64, usd_per_1k_tokens: f64) -> u64 {
+    if !usd_per_1k_tokens.is_finite() || usd_per_1k_tokens <= 0.0 { return 0; }
+    let nanos_per_token = usd_per_1k_tokens * 1_000_000.0;
+    (tokens as f64 * nanos_per_token).round().max(0.0) as u64
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

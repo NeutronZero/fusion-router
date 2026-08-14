@@ -7,6 +7,8 @@ pub struct WorkflowNode {
     pub(crate) id: String,
     pub(crate) kind: WorkflowNodeKind,
     pub(crate) capability: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) selected_model: Option<String>,
     pub(crate) config: BTreeMap<String, serde_json::Value>,
 }
 
@@ -21,6 +23,10 @@ impl WorkflowNode {
 
     pub fn capability(&self) -> Option<&str> {
         self.capability.as_deref()
+    }
+
+    pub fn selected_model(&self) -> Option<&str> {
+        self.selected_model.as_deref()
     }
 
     pub fn config(&self) -> &BTreeMap<String, serde_json::Value> {
@@ -79,6 +85,7 @@ mod tests {
             id: "n1".into(),
             kind: WorkflowNodeKind::Task,
             capability: None,
+            selected_model: None,
             config,
         };
         let json = serde_json::to_string(&node).unwrap();

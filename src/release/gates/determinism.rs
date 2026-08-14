@@ -17,14 +17,30 @@ pub trait DeterminismBackend: Send + Sync {
     fn compile_fixture(&self, ctx: &DeterminismContext) -> Result<u64, GateError>;
 }
 
-/// Real determinism backend scaffold — returns `GateError::ToolNotAvailable` until full planner/compiler integration exists.
 pub struct RealDeterminismBackend;
 
 impl DeterminismBackend for RealDeterminismBackend {
     fn name(&self) -> &'static str { "real" }
 
-    fn compile_fixture(&self, _ctx: &DeterminismContext) -> Result<u64, GateError> {
-        Err(GateError::ToolNotAvailable("real determinism backend requires full compilation pipeline — use mock in tests".into()))
+    fn compile_fixture(&self, ctx: &DeterminismContext) -> Result<u64, GateError> {
+        use std::hash::{Hash, Hasher};
+        let planner = fusion_planner::IntentPlanner::new(fusion_core::ModelCatalog::default());
+        let request = fusion_planner::PlanningRequest {
+            intent: fusion_planner::ExecutionIntent::Balanced,
+            user_prompt: ctx.request_fixture.clone(),
+            requested_model: None,
+            requested_strategy: None,
+            strategy_config: None,
+            requirements: Default::default(),
+            policies: Default::default(),
+            capability_catalog: Default::default(),
+            model_catalog: Default::default(),
+            telemetry: Default::default(),
+        };
+        let ir = planner.plan(&request).map_err(|e| GateError::ExecutionFailed(format!("planning failed: {e:?}")))?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        ir.to_canonical_json().map_err(|e| GateError::ExecutionFailed(e.to_string()))?.hash(&mut hasher);
+        Ok(hasher.finish())
     }
 }
 

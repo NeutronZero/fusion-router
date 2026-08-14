@@ -17,6 +17,16 @@ pub trait Planner: Send + Sync {
         policies: &[Policy],
         evidence: Option<&EvidenceSnapshot>,
     ) -> WorkflowIR;
+
+    async fn plan_with_policy_version(
+        &self,
+        requirements: &Requirements,
+        policies: &[Policy],
+        evidence: Option<&EvidenceSnapshot>,
+        _policy_version: u64,
+    ) -> WorkflowIR {
+        self.plan(requirements, policies, evidence).await
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

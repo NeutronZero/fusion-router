@@ -369,6 +369,7 @@ mod tests {
             id: id.into(),
             kind,
             capability: None,
+            selected_model: None,
             config: BTreeMap::new(),
         }
     }
@@ -498,6 +499,7 @@ mod tests {
                 id: "a".into(),
                 kind: WorkflowNodeKind::Task,
                 capability: None,
+                selected_model: None,
                 config: BTreeMap::from([("model".into(), serde_json::Value::String("gpt-4".into()))]),
             }],
             vec![edge("a", "a", WorkflowEdgeKind::Loop)],

@@ -37,8 +37,8 @@ pub trait ResourceManager: Send + Sync {
     /// Returns the budget quota.
     fn quota(&self) -> &Quota;
 
-    /// Returns total cost spent so far (in dollars).
-    fn spent_cost(&self) -> f64;
+    /// Returns total cost spent so far in NanoUSD.
+    fn spent_cost(&self) -> NanoUSD;
 
     /// Returns total tokens spent so far.
     fn spent_tokens(&self) -> u64;
@@ -117,8 +117,8 @@ impl ResourceManager for StubResourceManager {
         &self.quota
     }
 
-    fn spent_cost(&self) -> f64 {
-        self.cost.load(Ordering::Acquire) as f64 / 1000.0
+    fn spent_cost(&self) -> NanoUSD {
+        NanoUSD::from_nanos(self.cost.load(Ordering::Acquire))
     }
 
     fn spent_tokens(&self) -> u64 {
@@ -138,11 +138,11 @@ mod tests {
     #[test]
     fn stub_tracks_spend() {
         let stub = StubResourceManager::new(Quota { max_daily_cost: NanoUSD::from_nanos(100_000_000_000), max_daily_tokens: 1_000_000 });
-        assert_eq!(stub.spent_cost(), 0.0);
+        assert_eq!(stub.spent_cost(), NanoUSD::ZERO);
         assert_eq!(stub.spent_tokens(), 0);
 
-        stub.simulate_spend(50_000, 100_000); // $50 cost, 100k tokens
-        assert_eq!(stub.spent_cost(), 50.0);
+        stub.simulate_spend(50_000, 100_000);
+        assert_eq!(stub.spent_cost(), NanoUSD::from_nanos(50_000));
         assert_eq!(stub.spent_tokens(), 100_000);
     }
 

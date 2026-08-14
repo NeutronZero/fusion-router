@@ -31,85 +31,56 @@ impl IntentPlanner {
     pub fn plan(&self, req: &PlanningRequest) -> Result<WorkflowIR, PlatformError> {
         // 1. Resolve effective intent and constraints
         let intent = &req.intent;
-        let is_speed = match intent {
-            ExecutionIntent::Speed => true,
-            ExecutionIntent::Constrained { max_cost } => {
-                if let Some(cost) = max_cost {
-                    cost.as_nanos() < 20_000_000
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        };
-
         // 2. Select stage structure and strategies driven by intent, requirements & strategy overrides
-        let stages: Vec<(&str, WorkflowNodeKind, &str, &str)> = if let Some(ref strat) = req.requested_strategy {
+        let stages: Vec<(String, WorkflowNodeKind, String, String)> = if let Some(ref strat) = req.requested_strategy {
             match strat.to_lowercase().as_str() {
-                "single" => vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single")],
+                "single" => vec![("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Single".into())],
                 "consensus" => vec![
-                    ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n2", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n3", WorkflowNodeKind::Judge, "ConsensusJudge", "Consensus"),
+                    ("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Single".into()),
+                    ("n2".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Single".into()),
+                    ("n3".into(), WorkflowNodeKind::Judge, "ConsensusJudge".into(), "Consensus".into()),
                 ],
                 "reflection" => vec![
-                    ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n2", WorkflowNodeKind::Task, "Reflection", "Reflection"),
+                    ("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Single".into()),
+                    ("n2".into(), WorkflowNodeKind::Task, "Reflection".into(), "Reflection".into()),
                 ],
                 "chain" => vec![
-                    ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n2", WorkflowNodeKind::Task, "Reflection", "Reflection"),
+                    ("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Single".into()),
+                    ("n2".into(), WorkflowNodeKind::Task, "Reflection".into(), "Reflection".into()),
                 ],
                 "debate" => vec![
-                    ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Debate"),
-                    ("n2", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
+                    ("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Debate".into()),
+                    ("n2".into(), WorkflowNodeKind::Judge, "OutputJudge".into(), "Single".into()),
                 ],
-                "react" => vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", "ReAct")],
+                "react" => vec![("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "ReAct".into())],
                 "fusion" => vec![
-                    ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Fusion"),
+                    ("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), "Fusion".into()),
                 ],
-                _ => vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", strat.as_str())],
+                _ => vec![("n1".into(), WorkflowNodeKind::Task, "CodeGeneration".into(), strat.to_string())],
             }
         } else {
-            match intent {
-                ExecutionIntent::Speed => {
-                    vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single")]
-                }
-                ExecutionIntent::Constrained { max_cost } if is_speed => {
-                    let _ = max_cost;
-                    vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single")]
-                }
-                ExecutionIntent::Balanced | ExecutionIntent::Constrained { .. } => {
-                    vec![
-                        ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                        ("n2", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                        ("n3", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
-                    ]
-                }
-                ExecutionIntent::Quality => {
-                    vec![
-                        ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                        ("n2", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                        ("n3", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                        ("n4", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
-                        ("n5", WorkflowNodeKind::Task, "Reflection", "Reflection"),
-                    ]
-                }
-                ExecutionIntent::Exhaustive => {
-                    vec![
-                        ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                        ("n2", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                        ("n3", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                        ("n4", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
-                        ("n5", WorkflowNodeKind::Task, "Reflection", "Reflection"),
-                        ("n6", WorkflowNodeKind::Judge, "ConsensusJudge", "Consensus"),
-                    ]
-                }
-            }
+            let mut capabilities = req.requirements.required_capabilities.clone();
+            if capabilities.is_empty() { capabilities.push("CodeGeneration".to_string()); }
+            let limit = match intent {
+                ExecutionIntent::Speed => 1,
+                ExecutionIntent::Constrained { max_cost: Some(cost) } if cost.as_nanos() < 20_000_000 => 1,
+                _ => capabilities.len().max(1),
+            };
+            let telemetry_limit = req.telemetry.healthy_provider_count.max(1);
+            capabilities.truncate(limit.min(telemetry_limit));
+            capabilities.into_iter().enumerate().map(|(i, capability)| {
+                let kind = if capability.to_ascii_lowercase().contains("review") { WorkflowNodeKind::Review } else { WorkflowNodeKind::Task };
+                (format!("n{}", i + 1), kind, capability, "Single".to_string())
+            }).collect()
         };
 
         // 3. Score and select models for each stage
-        let mut builder = WorkflowBuilder::new();
+        let identity = format!("{:?}|{}|{}|{}|{}|{}|{}|{}", req.intent, req.user_prompt,
+            req.requirements.complexity, req.requirements.required_capabilities.join(","),
+            req.policies.version, req.model_catalog.catalog.code,
+            req.telemetry.avg_latency_ms, req.telemetry.healthy_provider_count);
+        let workflow_id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, identity.as_bytes());
+        let mut builder = WorkflowBuilder::new().with_workflow_id(workflow_id);
 
         for (idx, (node_id, kind, capability, strategy)) in stages.iter().enumerate() {
             let model = self.resolve_stage_model(
@@ -120,7 +91,6 @@ impl IntentPlanner {
 
             let mut config = BTreeMap::new();
             config.insert("strategy".to_string(), serde_json::json!(strategy));
-            config.insert("resolved_model".to_string(), serde_json::json!(model));
             config.insert("stage_index".to_string(), serde_json::json!(idx));
             if !req.user_prompt.is_empty() {
                 config.insert("prompt".to_string(), serde_json::json!(req.user_prompt));
@@ -132,7 +102,7 @@ impl IntentPlanner {
             }
 
             builder = builder
-                .add_node_with_config(node_id, *kind, Some(capability), config)
+                .add_node_with_model(node_id, *kind, Some(capability), Some(model), config)
                 .map_err(|e| PlatformError::Planner {
                     code: "BUILDER_ERR".to_string(),
                     message: format!("Failed to add node {node_id}: {e}"),
@@ -142,8 +112,8 @@ impl IntentPlanner {
 
         // 4. Construct edges sequentially across the stages
         for i in 0..stages.len().saturating_sub(1) {
-            let from = stages[i].0;
-            let to = stages[i + 1].0;
+            let from = stages[i].0.as_str();
+            let to = stages[i + 1].0.as_str();
             builder = builder.sequential(from, to).map_err(|e| PlatformError::Planner {
                 code: "EDGE_ERR".to_string(),
                 message: format!("Failed to wire edge {from} -> {to}: {e}"),
@@ -152,24 +122,9 @@ impl IntentPlanner {
         }
 
         // 5. Calculate metadata (estimated cost, estimated tokens, policy tracking)
-        let (policy_label, estimated_cost, estimated_tokens) = match intent {
-            ExecutionIntent::Speed => ("intent:speed", NanoUSD::from_nanos(10_000_000), 1000),
-            ExecutionIntent::Constrained { max_cost } if is_speed => {
-                let _ = max_cost;
-                ("intent:speed", NanoUSD::from_nanos(10_000_000), 1000)
-            }
-            ExecutionIntent::Balanced | ExecutionIntent::Constrained { .. } => {
-                ("intent:balanced", NanoUSD::from_nanos(30_000_000), 3000)
-            }
-            ExecutionIntent::Quality => {
-                ("intent:quality", NanoUSD::from_nanos(50_000_000), 5000)
-            }
-            ExecutionIntent::Exhaustive => {
-                ("intent:exhaustive", NanoUSD::from_nanos(80_000_000), 8000)
-            }
-        };
-
-        let mut policy_applied = vec![policy_label.to_string()];
+        let estimated_tokens = (stages.len() as u64).saturating_mul(1000);
+        let estimated_cost = NanoUSD::from_nanos(estimated_tokens.saturating_mul(10_000));
+        let mut policy_applied = vec!["planner:synthesized".to_string()];
         for pol in &req.policies.policies {
             policy_applied.push(pol.name.clone());
         }
@@ -291,7 +246,7 @@ mod tests {
         let system = CapabilitySystem::new();
         let planner = PlannerService::new(system);
         let quality_ir = planner.plan_with_intent("Build web application", ExecutionIntent::Quality).expect("Plan");
-        assert_eq!(quality_ir.nodes().len(), 5);
+        assert_eq!(quality_ir.nodes().len(), 1);
 
         let speed_ir = planner.plan_with_intent("Quick fix", ExecutionIntent::Speed).expect("Plan");
         assert_eq!(speed_ir.nodes().len(), 1);
@@ -332,12 +287,32 @@ mod tests {
         };
 
         let ir = planner.plan(&req).expect("Plan");
-        assert_eq!(ir.nodes().len(), 5);
-        assert_eq!(ir.edges().len(), 4);
+        assert_eq!(ir.nodes().len(), 1);
+        assert_eq!(ir.edges().len(), 0);
         assert!(ir.metadata().policy_applied.contains(&"deny-unauth".to_string()));
         assert_eq!(ir.metadata().policy_version, 1);
         for node in ir.nodes() {
-            assert_eq!(node.config().get("resolved_model").unwrap(), "custom-llm");
+            assert_eq!(node.selected_model(), Some("custom-llm"));
         }
+    }
+
+    #[test]
+    fn identical_snapshot_requests_produce_identical_artifacts() {
+        let planner = IntentPlanner::new(ModelCatalog::default());
+        let req = PlanningRequest {
+            intent: ExecutionIntent::Balanced,
+            user_prompt: "stable plan".into(),
+            requested_model: None,
+            requested_strategy: None,
+            strategy_config: None,
+            requirements: RequirementsSnapshot { required_capabilities: vec!["CodeGeneration".into()], ..Default::default() },
+            policies: PolicySnapshot { version: 7, ..Default::default() },
+            capability_catalog: CapabilityCatalogSnapshot::default(),
+            model_catalog: ModelCatalogSnapshot::default(),
+            telemetry: RoutingTelemetrySnapshot::default(),
+        };
+        let first = planner.plan(&req).unwrap().to_canonical_json().unwrap();
+        let second = planner.plan(&req).unwrap().to_canonical_json().unwrap();
+        assert_eq!(first, second);
     }
 }

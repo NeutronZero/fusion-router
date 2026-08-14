@@ -107,12 +107,13 @@ impl PipelineStep<(), EvidenceSnapshot> for EvidenceSnapshotStep {
 pub struct PlanningStep {
     pub planner: Arc<dyn Planner + Send + Sync>,
     pub policies: Vec<Policy>,
+    pub policy_version: u64,
 }
 
 #[async_trait]
 impl PipelineStep<(Requirements, Option<EvidenceSnapshot>), WorkflowIR> for PlanningStep {
     async fn execute(&self, (reqs, evidence): (Requirements, Option<EvidenceSnapshot>), ctx: &mut PipelineContext) -> Result<WorkflowIR, RouterError> {
-        let ir = self.planner.plan(&reqs, &self.policies, evidence.as_ref()).await;
+        let ir = self.planner.plan_with_policy_version(&reqs, &self.policies, evidence.as_ref(), self.policy_version).await;
         ctx.ir = Some(ir.clone());
         Ok(ir)
     }

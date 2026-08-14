@@ -50,6 +50,7 @@ impl WorkflowBuilder {
             id: id.to_string(),
             kind,
             capability: capability.map(String::from),
+            selected_model: None,
             config: BTreeMap::new(),
         });
         Ok(self)
@@ -69,6 +70,7 @@ impl WorkflowBuilder {
             id: id.to_string(),
             kind,
             capability: capability.map(String::from),
+            selected_model: None,
             config,
         });
         Ok(self)
@@ -81,6 +83,18 @@ impl WorkflowBuilder {
             .find(|n| n.id == id)
             .ok_or_else(|| ValidationError::UnknownNodeRef(id.to_string()))?;
         node.config = config;
+        Ok(self)
+    }
+
+    pub fn add_node_with_model(
+        mut self, id: &str, kind: WorkflowNodeKind, capability: Option<&str>,
+        selected_model: Option<String>, config: BTreeMap<String, serde_json::Value>,
+    ) -> Result<Self, ValidationError> {
+        if !self.seen.insert(id.to_string()) {
+            return Err(ValidationError::DuplicateNodeId(id.to_string()));
+        }
+        self.nodes.push(WorkflowNode { id: id.to_string(), kind,
+            capability: capability.map(String::from), selected_model, config });
         Ok(self)
     }
 

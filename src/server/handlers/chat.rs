@@ -206,6 +206,7 @@ pub(crate) async fn process_request(
     let step_plan = PlanningStep {
         planner: state.planner.clone(),
         policies,
+        policy_version: policy_snapshot.version,
     };
     let ir = step_plan
         .execute((reqs.clone(), Some(evidence)), &mut pctx)

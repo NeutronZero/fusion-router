@@ -73,7 +73,7 @@ impl fusion_kernel::resource::ResourceManager for KernelResourceManager {
         &self.quota
     }
 
-    fn spent_cost(&self) -> f64 {
+    fn spent_cost(&self) -> fusion_core::NanoUSD {
         self.inner.spent_cost()
     }
 
@@ -130,7 +130,7 @@ mod tests {
     async fn spend_reads_through_to_inner() {
         let rm = manager();
         rm.try_reserve(fusion_core::NanoUSD::from_nanos(250_000_000), 250).await;
-        assert_eq!(rm.spent_cost(), 0.25);
+        assert_eq!(rm.spent_cost(), fusion_core::NanoUSD::from_nanos(250_000_000));
         assert_eq!(rm.spent_tokens(), 250);
     }
 }

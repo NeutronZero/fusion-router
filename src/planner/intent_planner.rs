@@ -31,100 +31,6 @@ impl IntentPlanner {
         }
     }
 
-    fn select_model(&self, requirements: &Requirements) -> String {
-        let base_model = match requirements.intent_classification {
-            Intent::Code | Intent::Debug => self.model_catalog.code.clone(),
-            Intent::Architecture => self.model_catalog.architecture.clone(),
-            Intent::Analysis => self.model_catalog.analysis.clone(),
-            Intent::Creative => self.model_catalog.creative.clone(),
-            Intent::General => self.model_catalog.general.clone(),
-        };
-
-        if let Some(ref catalog) = self.capability_catalog {
-            let model_reqs = requirements.model_requirements.clone().unwrap_or_default();
-            let candidates = catalog.resolve(&model_reqs);
-            if let Some(best) = candidates.first() {
-                return format!("{}/{}", best.provider_name, best.model_id);
-            }
-        }
-
-        base_model
-    }
-
-    fn resolve_model_for_step(
-        &self,
-        step: &str,
-        intent: &ExecutionIntent,
-        fallback: &str,
-    ) -> String {
-        let catalog = match &self.capability_catalog {
-            Some(cat) => cat,
-            None => return fallback.to_string(),
-        };
-
-        let candidates = catalog.query_by_capability(step);
-        if candidates.is_empty() {
-            return fallback.to_string();
-        }
-
-        let valid_candidates: Vec<_> = candidates
-            .iter()
-            .filter(|c| {
-                c.capabilities.reasoning_score.is_finite()
-                    && c.capabilities.coding_score.is_finite()
-                    && c.pricing.input_cost_per_1k.is_finite()
-            })
-            .collect();
-
-        if valid_candidates.is_empty() {
-            return fallback.to_string();
-        }
-
-        let best = match intent {
-            ExecutionIntent::Quality | ExecutionIntent::Exhaustive => {
-                valid_candidates.iter().copied().max_by(|a, b| {
-                    a.capabilities
-                        .reasoning_score
-                        .partial_cmp(&b.capabilities.reasoning_score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-            }
-            ExecutionIntent::Speed => {
-                valid_candidates.iter().copied().min_by(|a, b| {
-                    a.pricing
-                        .input_cost_per_1k
-                        .partial_cmp(&b.pricing.input_cost_per_1k)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-            }
-            ExecutionIntent::Balanced => {
-                valid_candidates.iter().copied().max_by(|a, b| {
-                    let score_a =
-                        a.capabilities.reasoning_score * 0.5 + a.capabilities.coding_score * 0.5;
-                    let score_b =
-                        b.capabilities.reasoning_score * 0.5 + b.capabilities.coding_score * 0.5;
-                    score_a
-                        .partial_cmp(&score_b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-            }
-            ExecutionIntent::Constrained { .. } => {
-                valid_candidates.iter().copied().max_by(|a, b| {
-                    let score_a =
-                        a.capabilities.reasoning_score * 0.5 + a.capabilities.coding_score * 0.5;
-                    let score_b =
-                        b.capabilities.reasoning_score * 0.5 + b.capabilities.coding_score * 0.5;
-                    score_a
-                        .partial_cmp(&score_b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-            }
-        };
-
-        best.map(|c| format!("{}/{}", c.provider_name, c.model_id))
-            .unwrap_or_else(|| fallback.to_string())
-    }
-
     fn to_fusion_core_catalog(catalog: &ModelCatalog) -> fusion_core::ModelCatalog {
         fusion_core::ModelCatalog {
             code: catalog.code.clone(),
@@ -141,9 +47,9 @@ impl IntentPlanner {
     fn plan_from_crates(
         &self,
         intent: &ExecutionIntent,
-        model: &str,
         requirements: &Requirements,
         policies: &[Policy],
+        policy_version: u64,
     ) -> Result<WorkflowIR, String> {
         let crates_intent = match intent {
             ExecutionIntent::Quality => fusion_planner::ExecutionIntent::Quality,
@@ -167,7 +73,7 @@ impl IntentPlanner {
         let req = fusion_planner::PlanningRequest {
             intent: crates_intent,
             user_prompt: requirements.original_text.clone(),
-            requested_model: Some(model.to_string()),
+            requested_model: None,
             requested_strategy: None,
             strategy_config: None,
             requirements: fusion_planner::RequirementsSnapshot {
@@ -176,7 +82,7 @@ impl IntentPlanner {
                 required_capabilities: vec![],
             },
             policies: fusion_planner::PolicySnapshot {
-                version: 1,
+                version: policy_version,
                 policies: policy_declarations,
                 created_at: 0,
             },
@@ -201,7 +107,16 @@ impl Planner for IntentPlanner {
         policies: &[Policy],
         _evidence: Option<&EvidenceSnapshot>,
     ) -> WorkflowIR {
-        let model = self.select_model(requirements);
+        self.plan_with_policy_version(requirements, policies, _evidence, 0).await
+    }
+
+    async fn plan_with_policy_version(
+        &self,
+        requirements: &Requirements,
+        policies: &[Policy],
+        _evidence: Option<&EvidenceSnapshot>,
+        policy_version: u64,
+    ) -> WorkflowIR {
 
         let intent = requirements.execution_intent.clone().unwrap_or_else(|| {
             match requirements.complexity {
@@ -210,7 +125,7 @@ impl Planner for IntentPlanner {
                 ComplexityLevel::Medium | ComplexityLevel::Low => ExecutionIntent::Speed,
             }
         });
-        self.plan_from_crates(&intent, &model, requirements, policies)
+        self.plan_from_crates(&intent, requirements, policies, policy_version)
             .unwrap_or_else(|e| panic!("Planning failure in fusion-planner for intent {:?}: {}", intent, e))
     }
 }
@@ -248,17 +163,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_quality_plan_node_count() {
+    async fn test_planning_is_snapshot_driven() {
         let planner = make_planner();
-        let reqs = make_reqs(Some(ExecutionIntent::Quality));
-        let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 5);
-        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(50_000_000));
-        assert_eq!(ir.metadata.estimated_tokens, 5000);
-        assert!(ir
-            .metadata
-            .policy_applied
-            .contains(&"intent:quality".to_string()));
+        let ir = planner.plan(&make_reqs(Some(ExecutionIntent::Balanced)), &[], None).await;
+        assert!(ir.nodes.iter().all(|n| n.model.is_some()));
+        assert!(ir.metadata.policy_applied.contains(&"planner:synthesized".to_string()));
     }
 
     #[tokio::test]
@@ -417,10 +326,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_select_model_returns_non_empty_string() {
+    async fn test_planner_selects_model_inside_contract() {
         let planner = make_planner();
-        let model = planner.select_model(&make_reqs(None));
-        assert!(!model.is_empty());
+        let ir = planner.plan(&make_reqs(None), &[], None).await;
+        assert!(ir.nodes.iter().all(|node| node.model.is_some()));
     }
 
     #[tokio::test]
