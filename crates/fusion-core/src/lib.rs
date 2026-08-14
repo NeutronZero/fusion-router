@@ -59,7 +59,7 @@ pub struct ExecutionOutcome {
     pub execution_id: ExecutionId,
     pub status: ExecutionState,
     pub output_payload: serde_json::Value,
-    pub total_cost_usd: f64,
+    pub total_cost: NanoUSD,
     pub total_duration_ms: u64,
     pub produced_artifacts: Vec<String>,
     pub completed_at: String,
@@ -182,6 +182,6 @@ pub struct ModelRequirements {
     pub requires_tools: bool,
     pub requires_streaming: bool,
     pub requires_vision: bool,
-    pub max_cost_per_1k_tokens: Option<f64>,
+    pub max_cost_per_1k_tokens: Option<NanoUSD>,
     pub preferred_provider: Option<String>,
 }

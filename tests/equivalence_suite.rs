@@ -374,12 +374,15 @@ async fn test_intent_planner_equivalence() {
         execution_intent: intent,
         output_preferences: None,
         model_requirements: None,
+        requested_strategy: None,
     };
 
     let make_crate_req = |intent: CrateExecutionIntent| fusion_planner::PlanningRequest {
         intent,
         user_prompt: "test intent".to_string(),
         requested_model: None,
+        requested_strategy: None,
+        strategy_config: None,
         requirements: fusion_planner::RequirementsSnapshot::default(),
         policies: fusion_planner::PolicySnapshot::default(),
         capability_catalog: fusion_planner::CapabilityCatalogSnapshot::default(),
@@ -412,13 +415,13 @@ async fn test_intent_planner_equivalence() {
     assert_eq!(crate_exhaustive.nodes().len(), 6);
 
     // 5. Constrained Intent (cost < 0.02 -> speed)
-    let monolith_constrained_low = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost_usd: Some(0.01), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
+    let monolith_constrained_low = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.01").unwrap()), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
     let crate_constrained_low = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.01").unwrap()) })).expect("crate constrained low plan");
     assert_eq!(monolith_constrained_low.nodes.len(), 1);
     assert_eq!(crate_constrained_low.nodes().len(), 1);
 
     // 6. Constrained Intent (cost >= 0.02 -> balanced)
-    let monolith_constrained_high = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost_usd: Some(0.10), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
+    let monolith_constrained_high = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.10").unwrap()), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
     let crate_constrained_high = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.10").unwrap()) })).expect("crate constrained high plan");
     assert_eq!(monolith_constrained_high.nodes.len(), 3);
     assert_eq!(crate_constrained_high.nodes().len(), 3);

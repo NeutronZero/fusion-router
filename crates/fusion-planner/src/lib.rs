@@ -43,40 +43,68 @@ impl IntentPlanner {
             _ => false,
         };
 
-        // 2. Select stage structure and strategies driven by intent & requirements
-        let stages: Vec<(&str, WorkflowNodeKind, &str, &str)> = match intent {
-            ExecutionIntent::Speed => {
-                vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single")]
-            }
-            ExecutionIntent::Constrained { max_cost } if is_speed => {
-                let _ = max_cost;
-                vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single")]
-            }
-            ExecutionIntent::Balanced | ExecutionIntent::Constrained { .. } => {
-                vec![
+        // 2. Select stage structure and strategies driven by intent, requirements & strategy overrides
+        let stages: Vec<(&str, WorkflowNodeKind, &str, &str)> = if let Some(ref strat) = req.requested_strategy {
+            match strat.to_lowercase().as_str() {
+                "single" => vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single")],
+                "consensus" => vec![
                     ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
                     ("n2", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n3", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
-                ]
-            }
-            ExecutionIntent::Quality => {
-                vec![
+                    ("n3", WorkflowNodeKind::Judge, "ConsensusJudge", "Consensus"),
+                ],
+                "reflection" => vec![
                     ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n2", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n3", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n4", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
-                    ("n5", WorkflowNodeKind::Task, "Reflection", "Reflection"),
-                ]
-            }
-            ExecutionIntent::Exhaustive => {
-                vec![
+                    ("n2", WorkflowNodeKind::Task, "Reflection", "Reflection"),
+                ],
+                "chain" => vec![
                     ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n2", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n3", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
-                    ("n4", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
-                    ("n5", WorkflowNodeKind::Task, "Reflection", "Reflection"),
-                    ("n6", WorkflowNodeKind::Judge, "ConsensusJudge", "Consensus"),
-                ]
+                    ("n2", WorkflowNodeKind::Task, "Reflection", "Reflection"),
+                ],
+                "debate" => vec![
+                    ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Debate"),
+                    ("n2", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
+                ],
+                "react" => vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", "ReAct")],
+                "fusion" => vec![
+                    ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Fusion"),
+                ],
+                _ => vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", strat.as_str())],
+            }
+        } else {
+            match intent {
+                ExecutionIntent::Speed => {
+                    vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single")]
+                }
+                ExecutionIntent::Constrained { max_cost } if is_speed => {
+                    let _ = max_cost;
+                    vec![("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single")]
+                }
+                ExecutionIntent::Balanced | ExecutionIntent::Constrained { .. } => {
+                    vec![
+                        ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
+                        ("n2", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
+                        ("n3", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
+                    ]
+                }
+                ExecutionIntent::Quality => {
+                    vec![
+                        ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
+                        ("n2", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
+                        ("n3", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
+                        ("n4", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
+                        ("n5", WorkflowNodeKind::Task, "Reflection", "Reflection"),
+                    ]
+                }
+                ExecutionIntent::Exhaustive => {
+                    vec![
+                        ("n1", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
+                        ("n2", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
+                        ("n3", WorkflowNodeKind::Task, "CodeGeneration", "Single"),
+                        ("n4", WorkflowNodeKind::Judge, "OutputJudge", "Single"),
+                        ("n5", WorkflowNodeKind::Task, "Reflection", "Reflection"),
+                        ("n6", WorkflowNodeKind::Judge, "ConsensusJudge", "Consensus"),
+                    ]
+                }
             }
         };
 
@@ -92,9 +120,15 @@ impl IntentPlanner {
 
             let mut config = BTreeMap::new();
             config.insert("strategy".to_string(), serde_json::json!(strategy));
+            config.insert("resolved_model".to_string(), serde_json::json!(model));
             config.insert("stage_index".to_string(), serde_json::json!(idx));
             if !req.user_prompt.is_empty() {
                 config.insert("prompt".to_string(), serde_json::json!(req.user_prompt));
+            }
+            if let Some(ref extra_config) = req.strategy_config {
+                for (k, v) in extra_config {
+                    config.insert(k.clone(), v.clone());
+                }
             }
 
             builder = builder
@@ -142,6 +176,7 @@ impl IntentPlanner {
 
         let metadata = WorkflowMetadata {
             policy_applied,
+            policy_version: req.policies.version,
             estimated_cost,
             estimated_tokens,
         };
@@ -235,6 +270,8 @@ impl PlannerService {
             intent: execution_intent,
             user_prompt: intent_text.to_string(),
             requested_model: None,
+            requested_strategy: None,
+            strategy_config: None,
             requirements: RequirementsSnapshot::default(),
             policies: PolicySnapshot::default(),
             capability_catalog: CapabilityCatalogSnapshot::new(self.capability_catalog.clone()),
@@ -277,6 +314,8 @@ mod tests {
             intent: ExecutionIntent::Quality,
             user_prompt: "Build compiler pass".into(),
             requested_model: Some("custom-llm".into()),
+            requested_strategy: None,
+            strategy_config: None,
             requirements: RequirementsSnapshot::default(),
             policies: PolicySnapshot {
                 version: 1,
@@ -296,8 +335,9 @@ mod tests {
         assert_eq!(ir.nodes().len(), 5);
         assert_eq!(ir.edges().len(), 4);
         assert!(ir.metadata().policy_applied.contains(&"deny-unauth".to_string()));
+        assert_eq!(ir.metadata().policy_version, 1);
         for node in ir.nodes() {
-            assert_eq!(node.config().get("model").unwrap(), "custom-llm");
+            assert_eq!(node.config().get("resolved_model").unwrap(), "custom-llm");
         }
     }
 }

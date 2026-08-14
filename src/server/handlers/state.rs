@@ -42,6 +42,7 @@ pub struct AppState {
     pub workflow_registry: Arc<WorkflowRegistry>,
     pub tool_registry: Arc<ToolRegistry>,
     pub connector_resolver: Arc<ConnectorResolver>,
+    pub policy_registry: Arc<crate::policy::PolicyRegistry>,
 }
 
 impl AppState {
@@ -146,6 +147,7 @@ impl AppState {
         ));
 
         let config_manager = Arc::new(ConfigManager::new(config_path, config, vec![]));
+        let policy_registry = Arc::new(crate::policy::PolicyRegistry::new());
 
         Self {
             context_assembler,
@@ -161,6 +163,12 @@ impl AppState {
             workflow_registry,
             tool_registry,
             connector_resolver,
+            policy_registry,
         }
+    }
+
+    pub fn with_policy_registry(mut self, policy_registry: Arc<crate::policy::PolicyRegistry>) -> Self {
+        self.policy_registry = policy_registry;
+        self
     }
 }

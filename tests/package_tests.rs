@@ -86,7 +86,7 @@ fn test_full_verify_load_resolve_cycle() {
         outputs_schema: serde_json::json!({"type": "object"}),
         permissions: vec![Permission::Network],
         dependencies: vec![],
-        estimated_cost_usd: 0.001,
+        estimated_cost: fusion_core::NanoUSD::from_nanos(1_000_000),
         estimated_latency_ms: 10,
         reliability_score: 0.99,
         supports_streaming: false,

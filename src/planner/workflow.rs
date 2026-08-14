@@ -65,6 +65,7 @@ mod tests {
             execution_intent: None,
             output_preferences: None,
             model_requirements: None,
+            requested_strategy: None,
         }
     }
 

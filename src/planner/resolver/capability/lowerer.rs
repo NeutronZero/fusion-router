@@ -70,7 +70,7 @@ impl CapabilityGraphLowerer {
             let Some(node) = cap_graph.get_node(cap_id) else {
                 continue;
             };
-            total_cost_nanos += (node.contract.estimated_cost_usd * 1_000_000_000.0) as u64;
+            total_cost_nanos += node.contract.estimated_cost.as_nanos();
 
             let mut config = std::collections::HashMap::new();
             config.insert("capability_id".into(), serde_json::json!(cap_id.as_str()));
@@ -154,7 +154,7 @@ mod tests {
             outputs_schema: json!({}),
             permissions: vec![],
             dependencies: vec![],
-            estimated_cost_usd: 0.0,
+            estimated_cost: fusion_core::NanoUSD::ZERO,
             estimated_latency_ms: 1,
             reliability_score: 1.0,
             supports_streaming: false,

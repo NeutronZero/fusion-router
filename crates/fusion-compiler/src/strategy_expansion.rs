@@ -11,6 +11,14 @@ use fusion_types::*;
 
 /// Returns the prebuilt subgraph for a strategy node, or `None` for Single.
 pub fn expanded_subgraph(node: &ExecutionNode) -> Option<ExecutionSubgraph> {
+    expanded_subgraph_with_custom(node, None)
+}
+
+/// Returns the prebuilt subgraph for a strategy node, allowing custom strategy compiler delegate.
+pub fn expanded_subgraph_with_custom(
+    node: &ExecutionNode,
+    custom_compiler: Option<&dyn crate::strategy_compiler::StrategyCompiler>,
+) -> Option<ExecutionSubgraph> {
     match &node.strategy {
         StrategyKind::Single => None,
         StrategyKind::Consensus => Some(expand_consensus(node)),
@@ -19,7 +27,13 @@ pub fn expanded_subgraph(node: &ExecutionNode) -> Option<ExecutionSubgraph> {
         StrategyKind::Debate => Some(expand_debate(node)),
         StrategyKind::ReAct => Some(expand_react(node)),
         StrategyKind::Fusion => Some(expand_fusion(node)),
-        StrategyKind::Custom(custom_name) => Some(expand_custom(node, custom_name)),
+        StrategyKind::Custom(custom_name) => {
+            if let Some(compiler) = custom_compiler {
+                Some(compiler.compile_subgraph(node, custom_name))
+            } else {
+                Some(expand_custom(node, custom_name))
+            }
+        }
     }
 }
 

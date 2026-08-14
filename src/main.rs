@@ -267,6 +267,7 @@ async fn main() {
         "plugin manager startup lifecycle executed (Discover -> Load -> Validate -> Initialize -> Register -> Activate)"
     );
     let _plugin_manager = plugin_manager;
+    let state = state.with_policy_registry(ops_policy_registry.clone());
 
     let ops_state = crate::operations::handlers::OperationsState {
         dashboard: ops_dashboard,

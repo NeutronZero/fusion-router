@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+﻿use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -126,6 +126,8 @@ pub struct Requirements {
     pub execution_intent: Option<ExecutionIntent>,
     #[serde(default)]
     pub output_preferences: Option<OutputPreferences>,
+    #[serde(default)]
+    pub requested_strategy: Option<RequestStrategy>,
     #[serde(default, skip)]
     pub model_requirements: Option<crate::providers::ModelRequirements>,
 }

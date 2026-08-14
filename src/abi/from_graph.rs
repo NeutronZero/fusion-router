@@ -32,12 +32,15 @@ fn u64_from(config: &HashMap<String, Value>, key: &str) -> Option<u64> {
     config.get(key).and_then(|v| v.as_u64())
 }
 
-fn f64_from(config: &HashMap<String, Value>, key: &str) -> Option<f64> {
-    config.get(key).and_then(|v| v.as_f64()).or_else(|| {
-        config
-            .get(key)
-            .and_then(|v| v.as_u64())
-            .map(|n| n as f64)
+fn nanousd_from(config: &HashMap<String, Value>, key: &str) -> Option<fusion_core::NanoUSD> {
+    config.get(key).and_then(|v| {
+        if let Some(n) = v.as_u64() {
+            Some(fusion_core::NanoUSD::from_nanos(n))
+        } else if let Some(s) = v.as_str() {
+            fusion_core::NanoUSD::checked_from_decimal_usd(s).ok()
+        } else {
+            None
+        }
     })
 }
 
@@ -65,7 +68,7 @@ pub fn abi_from_graph(graph: &crate::types::ExecutionGraph) -> ExecutionAbi {
             let capability = kind_capability(&node.kind).to_string();
             let constraints = AbiConstraints {
                 max_latency_ms: u64_from(&node.config, "max_latency_ms"),
-                max_cost_usd: f64_from(&node.config, "max_cost_usd"),
+                max_cost: nanousd_from(&node.config, "max_cost"),
                 max_tokens: u64_from(&node.config, "max_tokens"),
             };
             let retry_policy = if node.retry_policy.max_retries > 0 {

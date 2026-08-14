@@ -12,7 +12,7 @@ fn sample_intent() -> NormalizedIntent {
             ..Constraints::default()
         },
         budget: Budget {
-            max_cost_usd: Some(0.05),
+            max_cost: Some(fusion_core::NanoUSD::from_nanos(50_000_000)),
             max_tokens: Some(4096),
             max_execution_ms: None,
         },

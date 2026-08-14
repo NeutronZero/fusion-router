@@ -6,6 +6,7 @@
 //! - `RuntimeEngine` that integrates scheduler + provider
 
 use async_trait::async_trait;
+use fusion_core::NanoUSD;
 use fusion_kernel::resource::ResourceManager;
 use fusion_scheduler::{DefaultScheduler, Executor, ExecutionOutcome};
 use fusion_types::{
@@ -289,7 +290,7 @@ impl ProviderExecutor {
         let mut outputs: StdHashMap<uuid::Uuid, serde_json::Value> = StdHashMap::new();
         let mut completed: HashSet<uuid::Uuid> = HashSet::new();
         let mut total_tokens: u64 = 0;
-        let mut total_cost: f64 = 0.0;
+        let mut total_cost = NanoUSD::ZERO;
         let start = std::time::Instant::now();
 
         // Topological execution loop
@@ -340,7 +341,7 @@ impl ProviderExecutor {
                         }
                         if let Some(ref usage) = result.usage {
                             total_tokens += usage.total_tokens as u64;
-                            total_cost += usage.total_tokens as f64 * 0.000001;
+                            total_cost = total_cost.saturating_add(NanoUSD::from_nanos(usage.total_tokens as u64 * 1_000));
                         }
                     }
                     NodeState::Failed(msg) => {

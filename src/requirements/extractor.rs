@@ -61,6 +61,7 @@ impl RequirementsExtractor for DefaultRequirementsExtractor {
             execution_intent: None,
             output_preferences: None,
             model_requirements: Some(self.build_model_requirements(ctx, &intent)),
+            requested_strategy: None,
         }
     }
 }

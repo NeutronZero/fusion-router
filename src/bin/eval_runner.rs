@@ -901,6 +901,7 @@ async fn run_condition_b(
         execution_intent: Some(intent),
         output_preferences: None,
         model_requirements: None,
+        requested_strategy: None,
     };
 
     // Let planner generate the IR (picks model, strategy structure)
@@ -1040,6 +1041,7 @@ async fn run_condition_c(
         execution_intent: Some(intent),
         output_preferences: None,
         model_requirements: None,
+        requested_strategy: None,
     };
 
     // Full pipeline: planner picks model AND strategy

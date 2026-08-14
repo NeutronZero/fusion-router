@@ -53,6 +53,8 @@ pub struct PlanningRequest {
     pub intent: ExecutionIntent,
     pub user_prompt: String,
     pub requested_model: Option<String>,
+    pub requested_strategy: Option<String>,
+    pub strategy_config: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     pub requirements: RequirementsSnapshot,
     pub policies: PolicySnapshot,
     pub capability_catalog: CapabilityCatalogSnapshot,

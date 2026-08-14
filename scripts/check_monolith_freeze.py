@@ -24,10 +24,16 @@ def check_gate_01_planner_authority():
     intent_planner = src_planner / "intent_planner.rs"
     if intent_planner.exists():
         content = intent_planner.read_text(encoding="utf-8")
-        forbidden = ["fn build_quality(", "fn build_speed(", "fn build_balanced(", "fn build_exhaustive("]
+        forbidden = ["fn build_quality(", "fn build_speed(", "fn build_balanced(", "fn build_exhaustive(", "node.model = Some("]
         for fn in forbidden:
             if fn in content:
-                return False, f"Host fallback method '{fn}' still present in intent_planner.rs"
+                return False, f"Host fallback / mutation '{fn}' still present in intent_planner.rs"
+
+    chat_rs = ROOT / "src" / "server" / "handlers" / "chat.rs"
+    if chat_rs.exists():
+        content = chat_rs.read_text(encoding="utf-8")
+        if "ir.nodes = vec![" in content:
+            return False, "Host chat handler overwrites planner IR nodes directly"
 
     crate_planner = ROOT / "crates" / "fusion-planner" / "src" / "lib.rs"
     if crate_planner.exists():
@@ -153,7 +159,7 @@ def check_gate_09_monetary_authority():
             return False, f"Legacy field 'cost_millicosts' found in {rel_path}"
 
     f64_fields = ["estimated_cost", "total_cost", "max_daily_cost", "cost_per", "max_cost"]
-    excluded_crates = {"fusion-core", "fusion-plugin-api"}
+    excluded_crates = set()
 
     crates_dir = ROOT / "crates"
     for toml_file in crates_dir.rglob("Cargo.toml"):
@@ -218,25 +224,31 @@ def check_gate_11_deterministic_compilation():
 
     check_dirs = [
         ROOT / "crates" / "fusion-planner" / "src",
+        ROOT / "crates" / "fusion-compiler" / "src",
     ]
 
     for check_dir in check_dirs:
         if not check_dir.exists():
             continue
         for rs_file in check_dir.rglob("*.rs"):
-            if "/tests/" in str(rs_file) or "/test_" in rs_file.name:
+            if "/tests/" in str(rs_file).replace("\\", "/") or "/test_" in rs_file.name:
                 continue
             content = rs_file.read_text(encoding="utf-8")
+            in_test_mod = False
             for line_num, line in enumerate(content.split("\n"), 1):
                 stripped = line.strip()
+                if "mod tests {" in stripped or "mod tests" in stripped:
+                    in_test_mod = True
+                if in_test_mod:
+                    continue
                 if stripped.startswith("//") or stripped.startswith("#[cfg(test)]"):
                     continue
                 for pattern, desc in forbidden_patterns:
                     if re.search(pattern, stripped):
                         rel_path = rs_file.relative_to(ROOT)
-                        return False, f"{desc} in planning at {rel_path}:{line_num}"
+                        return False, f"{desc} in non-test compilation code at {rel_path}:{line_num}"
 
-    return True, "Deterministic planning with child_id v5"
+    return True, "Deterministic planning and compilation with child_id v5"
 
 
 GATES = [

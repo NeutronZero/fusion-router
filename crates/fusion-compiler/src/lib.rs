@@ -846,7 +846,7 @@ impl CompilerPass for PolicyCompilerPass {
                     });
 
                     if !already_guarded {
-                        let gate_id = uuid::Uuid::new_v4();
+                        let gate_id = uuid::Uuid::new_v5(&node.id, b"policy_approval_gate");
                         let gate_node = IRNode {
                             id: gate_id,
                             kind: IRNodeKind::Gate,

@@ -43,7 +43,12 @@ pub fn workflow_to_types(ir: &WorkflowIR) -> Result<TypesWorkflowIR, String> {
             config.insert("capability".to_string(), serde_json::json!(cap));
         }
         config.insert("semantic_kind".to_string(), serde_json::json!(format!("{:?}", node.kind())));
-        let model = node.config().get("model").and_then(|v| v.as_str()).map(String::from);
+        let model = node
+            .config()
+            .get("resolved_model")
+            .or_else(|| node.config().get("model"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let strategy = if let Some(strat_str) = node.config().get("strategy").and_then(|v| v.as_str()) {
             match strat_str {
                 "Consensus" => crate::types::StrategyKind::Consensus,
@@ -112,6 +117,7 @@ mod tests {
         WorkflowBuilder::new()
             .metadata(WorkflowMetadata {
                 policy_applied: vec!["pol".into()],
+                policy_version: 0,
                 estimated_cost: fusion_core::NanoUSD::from_nanos(1_500_000_000),
                 estimated_tokens: 100,
             })

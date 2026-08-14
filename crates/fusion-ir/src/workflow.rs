@@ -18,6 +18,8 @@ pub struct WorkflowIR {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkflowMetadata {
     pub policy_applied: Vec<String>,
+    #[serde(default)]
+    pub policy_version: u64,
     pub estimated_cost: fusion_core::NanoUSD,
     pub estimated_tokens: u64,
 }
@@ -162,7 +164,7 @@ mod tests {
     #[test]
     fn workflow_ir_round_trip_is_lossless() {
         let mut ir = sample();
-        ir.metadata.estimated_cost = 0.0123456789;
+        ir.metadata.estimated_cost = fusion_core::NanoUSD::from_nanos(12_345_678);
         ir.metadata.estimated_tokens = 500;
         let json = ir.to_canonical_json().unwrap();
         let back = WorkflowIR::from_json(&json).unwrap();

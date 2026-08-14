@@ -42,7 +42,7 @@ mod tests {
     fn test_constrained_json_round_trip() {
         let intent = ExecutionIntent::Constrained {
             max_latency_ms: Some(5000),
-            max_cost_usd: Some(0.05),
+            max_cost: Some(fusion_core::NanoUSD::from_nanos(50_000_000)),
             max_tokens: Some(4096),
             min_confidence: Some(0.8),
         };
@@ -51,12 +51,12 @@ mod tests {
         match deserialized {
             ExecutionIntent::Constrained {
                 max_latency_ms,
-                max_cost_usd,
+                max_cost,
                 max_tokens,
                 min_confidence,
             } => {
                 assert_eq!(max_latency_ms, Some(5000));
-                assert_eq!(max_cost_usd, Some(0.05));
+                assert_eq!(max_cost, Some(fusion_core::NanoUSD::from_nanos(50_000_000)));
                 assert_eq!(max_tokens, Some(4096));
                 assert_eq!(min_confidence, Some(0.8));
             }
@@ -68,7 +68,7 @@ mod tests {
     fn test_constrained_with_all_none_fields() {
         let intent = ExecutionIntent::Constrained {
             max_latency_ms: None,
-            max_cost_usd: None,
+            max_cost: None,
             max_tokens: None,
             min_confidence: None,
         };
@@ -77,12 +77,12 @@ mod tests {
         match deserialized {
             ExecutionIntent::Constrained {
                 max_latency_ms,
-                max_cost_usd,
+                max_cost,
                 max_tokens,
                 min_confidence,
             } => {
                 assert_eq!(max_latency_ms, None);
-                assert_eq!(max_cost_usd, None);
+                assert_eq!(max_cost, None);
                 assert_eq!(max_tokens, None);
                 assert_eq!(min_confidence, None);
             }
@@ -260,7 +260,7 @@ mod tests {
         let json = r#"{
             "model": "test",
             "messages": [{"role": "user", "content": "hello"}],
-            "execution": {"mode": "constrained", "max_cost_usd": 0.01, "max_latency_ms": 1000, "max_tokens": 100, "min_confidence": 0.5}
+            "execution": {"mode": "constrained", "max_cost": 10000000, "max_latency_ms": 1000, "max_tokens": 100, "min_confidence": 0.5}
         }"#;
 
         let request: ChatCompletionRequest = serde_json::from_str(json).unwrap();
@@ -274,13 +274,14 @@ mod tests {
             execution_intent: None,
             output_preferences: None,
             model_requirements: None,
+            requested_strategy: None,
         };
         reqs.execution_intent = request.execution.clone();
         reqs.output_preferences = request.output.clone();
 
         match reqs.execution_intent {
-            Some(ExecutionIntent::Constrained { max_cost_usd, .. }) => {
-                assert_eq!(max_cost_usd, Some(0.01));
+            Some(ExecutionIntent::Constrained { max_cost, .. }) => {
+                assert_eq!(max_cost, Some(fusion_core::NanoUSD::from_nanos(10_000_000)));
             }
             _ => panic!("Expected Constrained variant"),
         }

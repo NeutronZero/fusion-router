@@ -188,55 +188,28 @@ pub(crate) async fn process_request(
     };
     let evidence = step_evidence.execute((), &mut pctx).await?;
 
-    // 4. Planning
-    let snapshot = state.config_manager.snapshot();
-    let policies = snapshot.config.to_policies();
+    // 4. Planning: Authoritative Policy Snapshot
+    let policy_snapshot = state.policy_registry.current_snapshot();
+    let policies: Vec<crate::types::Policy> = policy_snapshot
+        .policies
+        .iter()
+        .map(|p| crate::types::Policy {
+            name: p.name.clone(),
+            priority: 0,
+            conditions: vec![],
+            actions: vec![crate::types::PolicyAction {
+                action_type: "audit".into(),
+                params: std::collections::HashMap::new(),
+            }],
+        })
+        .collect();
     let step_plan = PlanningStep {
         planner: state.planner.clone(),
         policies,
     };
-    let mut ir = step_plan
+    let ir = step_plan
         .execute((reqs.clone(), Some(evidence)), &mut pctx)
         .await?;
-
-    if let Some(strategy) = &request.strategy {
-        let kind = match strategy.kind.as_str() {
-            "Single" | "single" => crate::types::StrategyKind::Single,
-            "Consensus" | "consensus" => crate::types::StrategyKind::Consensus,
-            "Reflection" | "reflection" => crate::types::StrategyKind::Reflection,
-            "Debate" | "debate" => crate::types::StrategyKind::Debate,
-            "ReAct" | "react" => crate::types::StrategyKind::ReAct,
-            "Chain" | "chain" => crate::types::StrategyKind::Chain,
-            "Fusion" | "fusion" => crate::types::StrategyKind::Fusion,
-            other => crate::types::StrategyKind::Custom(other.to_string()),
-        };
-        let mut config: std::collections::HashMap<String, serde_json::Value> =
-            std::collections::HashMap::new();
-        if kind == crate::types::StrategyKind::Consensus {
-            config.insert("count".into(), serde_json::json!(strategy.count));
-            if !strategy.members.is_empty() {
-                config.insert("members".into(), serde_json::json!(strategy.members));
-            }
-        }
-        config.insert(
-            "max_tool_rounds".into(),
-            serde_json::json!(strategy.max_tool_rounds),
-        );
-        tracing::info!(
-            request_id = %request_id,
-            strategy = %strategy.kind,
-            count = strategy.count,
-            members = ?strategy.members,
-            "request strategy override applied"
-        );
-        ir.nodes = vec![crate::types::IRNode {
-            id: Uuid::new_v4(),
-            kind: crate::types::IRNodeKind::Generate,
-            strategy: kind,
-            model: Some(request.model.clone()),
-            config,
-        }];
-    }
     tracing::debug!(plan_id = %ir.plan_id, nodes = ir.nodes.len(), request_id = %request_id, "plan created");
 
     // 5. Compilation

@@ -36,7 +36,8 @@ pub struct ExecutionAbiNode {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AbiConstraints {
     pub max_latency_ms: Option<u64>,
-    pub max_cost_usd: Option<f64>,
+    #[serde(default)]
+    pub max_cost: Option<fusion_core::NanoUSD>,
     pub max_tokens: Option<u64>,
 }
 

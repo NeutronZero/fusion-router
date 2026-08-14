@@ -13,9 +13,7 @@ pub fn intent_to_workflow(intent: &NormalizedIntent) -> Result<WorkflowIR, Valid
         config.insert("max_tokens".into(), serde_json::Value::Number(tokens.into()));
     }
 
-    let estimated_cost = intent.budget.max_cost_usd
-        .map(|usd| NanoUSD::from_nanos((usd * 1_000_000_000.0) as u64))
-        .unwrap_or(NanoUSD::ZERO);
+    let estimated_cost = intent.budget.max_cost.unwrap_or(NanoUSD::ZERO);
 
     let metadata = WorkflowMetadata {
         estimated_cost,
@@ -57,7 +55,7 @@ mod tests {
     fn default_constraints() -> Constraints {
         Constraints {
             max_latency_ms: None,
-            max_cost_usd: None,
+            max_cost: None,
             max_tokens: None,
             min_confidence: None,
         }
@@ -65,7 +63,7 @@ mod tests {
 
     fn default_budget() -> crate::intent::Budget {
         crate::intent::Budget {
-            max_cost_usd: None,
+            max_cost: None,
             max_tokens: None,
             max_execution_ms: None,
         }
@@ -111,7 +109,7 @@ mod tests {
             IntentKind::Code,
             Constraints {
                 max_latency_ms: Some(250),
-                max_cost_usd: Some(0.5),
+                max_cost: Some(NanoUSD::from_nanos(500_000_000)),
                 max_tokens: Some(4096),
                 min_confidence: Some(0.8),
             },
@@ -146,7 +144,7 @@ mod tests {
             IntentKind::Analysis,
             default_constraints(),
             crate::intent::Budget {
-                max_cost_usd: Some(1.5),
+                max_cost: Some(NanoUSD::from_nanos(1_500_000_000)),
                 max_tokens: Some(8000),
                 max_execution_ms: None,
             },

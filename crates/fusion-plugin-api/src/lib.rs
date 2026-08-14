@@ -115,6 +115,8 @@ pub struct PluginMetadata {
     pub capabilities: Vec<CapabilityId>,
 }
 
+pub use fusion_core::NanoUSD;
+
 /// Declarative ABI contract exposed by a capability to the Planner & Scheduler.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityContract {
@@ -125,7 +127,8 @@ pub struct CapabilityContract {
     pub outputs_schema: serde_json::Value,
     pub permissions: Vec<Permission>,
     pub dependencies: Vec<CapabilityId>,
-    pub estimated_cost_usd: f64,
+    #[serde(default)]
+    pub estimated_cost: NanoUSD,
     pub estimated_latency_ms: u64,
     pub reliability_score: f32,
     pub supports_streaming: bool,
@@ -273,7 +276,7 @@ mod tests {
             outputs_schema: serde_json::json!({}),
             permissions: vec![Permission::Network, Permission::Http("https://example.com".into())],
             dependencies: vec![],
-            estimated_cost_usd: 0.0,
+            estimated_cost: NanoUSD::ZERO,
             estimated_latency_ms: 0,
             reliability_score: 1.0,
             supports_streaming: false,
@@ -301,7 +304,7 @@ mod tests {
 
     #[test]
     fn contract_defaults_traits_to_empty() {
-        let json = r#"{"id":"x.cap","version":"1.0.0","description":"d","inputs_schema":{},"outputs_schema":{},"permissions":[],"dependencies":[],"estimated_cost_usd":0.0,"estimated_latency_ms":0,"reliability_score":1.0,"supports_streaming":false}"#;
+        let json = r#"{"id":"x.cap","version":"1.0.0","description":"d","inputs_schema":{},"outputs_schema":{},"permissions":[],"dependencies":[],"estimated_cost":0,"estimated_latency_ms":0,"reliability_score":1.0,"supports_streaming":false}"#;
         let contract: CapabilityContract = serde_json::from_str(json).unwrap();
         assert!(contract.traits.is_empty());
     }

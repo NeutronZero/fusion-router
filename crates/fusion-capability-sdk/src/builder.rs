@@ -67,11 +67,6 @@ impl CapabilityBuilder {
         self
     }
 
-    pub fn estimated_cost_usd(mut self, cost: f64) -> Self {
-        self.estimated_cost = NanoUSD::from_nanos((cost * 1_000_000_000.0) as u64);
-        self
-    }
-
     pub fn estimated_latency_ms(mut self, latency: u64) -> Self {
         self.estimated_latency_ms = latency;
         self
@@ -101,7 +96,7 @@ impl CapabilityBuilder {
             outputs_schema: self.outputs_schema.unwrap_or(Value::Object(Default::default())),
             permissions: self.permissions,
             dependencies: self.dependencies,
-            estimated_cost_usd: self.estimated_cost.to_usd_f64(),
+            estimated_cost: self.estimated_cost,
             estimated_latency_ms: self.estimated_latency_ms,
             reliability_score: self.reliability_score,
             supports_streaming: self.supports_streaming,
@@ -129,14 +124,14 @@ mod tests {
             .version("1.0.0")
             .description("A full test capability")
             .permission(Permission::Network)
-            .estimated_cost_usd(0.01)
+            .estimated_cost(NanoUSD::from_nanos(10_000_000))
             .estimated_latency_ms(50)
             .reliability_score(0.99)
             .supports_streaming(true)
             .finish();
         assert_eq!(contract.description, "A full test capability");
         assert_eq!(contract.permissions, vec![Permission::Network]);
-        assert!((contract.estimated_cost_usd - 0.01).abs() < 1e-9);
+        assert_eq!(contract.estimated_cost, NanoUSD::from_nanos(10_000_000));
         assert!(contract.supports_streaming);
     }
 

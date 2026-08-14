@@ -11,6 +11,7 @@ fn build_full_ir() -> fusion_ir::WorkflowIR {
     let mut builder = WorkflowBuilder::new();
     builder = builder.metadata(WorkflowMetadata {
         policy_applied: vec!["policy_v1".into(), "policy_v2".into()],
+        policy_version: 0,
         estimated_cost: NanoUSD::from_nanos(123_000_000),
         estimated_tokens: 5000,
     });

@@ -11,7 +11,8 @@ pub enum ExecutionIntent {
     Exhaustive,
     Constrained {
         max_latency_ms: Option<u64>,
-        max_cost_usd: Option<f64>,
+        #[serde(default, alias = "max_cost_usd")]
+        max_cost: Option<fusion_core::NanoUSD>,
         max_tokens: Option<u64>,
         min_confidence: Option<f32>,
     },
@@ -63,7 +64,7 @@ mod tests {
     fn test_constrained_json_round_trip() {
         let intent = ExecutionIntent::Constrained {
             max_latency_ms: Some(5000),
-            max_cost_usd: Some(0.05),
+            max_cost: Some(fusion_core::NanoUSD::from_nanos(50_000_000)),
             max_tokens: Some(4096),
             min_confidence: Some(0.8),
         };
@@ -72,12 +73,12 @@ mod tests {
         match deserialized {
             ExecutionIntent::Constrained {
                 max_latency_ms,
-                max_cost_usd,
+                max_cost,
                 max_tokens,
                 min_confidence,
             } => {
                 assert_eq!(max_latency_ms, Some(5000));
-                assert_eq!(max_cost_usd, Some(0.05));
+                assert_eq!(max_cost, Some(fusion_core::NanoUSD::from_nanos(50_000_000)));
                 assert_eq!(max_tokens, Some(4096));
                 assert_eq!(min_confidence, Some(0.8));
             }

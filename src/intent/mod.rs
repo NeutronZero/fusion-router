@@ -31,14 +31,16 @@ pub enum IntentKind {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Constraints {
     pub max_latency_ms: Option<u64>,
-    pub max_cost_usd: Option<f64>,
+    #[serde(default)]
+    pub max_cost: Option<fusion_core::NanoUSD>,
     pub max_tokens: Option<u64>,
     pub min_confidence: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Budget {
-    pub max_cost_usd: Option<f64>,
+    #[serde(default)]
+    pub max_cost: Option<fusion_core::NanoUSD>,
     pub max_tokens: Option<u64>,
     pub max_execution_ms: Option<u64>,
 }
@@ -101,7 +103,7 @@ mod tests {
     #[test]
     fn budget_serde_round_trip() {
         let budget = Budget {
-            max_cost_usd: Some(0.05),
+            max_cost: Some(fusion_core::NanoUSD::from_nanos(50_000_000)),
             max_tokens: Some(4096),
             max_execution_ms: Some(30_000),
         };

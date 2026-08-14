@@ -78,12 +78,12 @@ fn intent() -> NormalizedIntent {
         kind: IntentKind::Code,
         constraints: Constraints {
             max_latency_ms: Some(60_000),
-            max_cost_usd: None,
+            max_cost: None,
             max_tokens: Some(10_000),
             min_confidence: None,
         },
         budget: Budget {
-            max_cost_usd: Some(1.0),
+            max_cost: Some(fusion_core::NanoUSD::from_nanos(1_000_000_000)),
             max_tokens: Some(10_000),
             max_execution_ms: None,
         },

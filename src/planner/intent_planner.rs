@@ -150,9 +150,8 @@ impl IntentPlanner {
             ExecutionIntent::Speed => fusion_planner::ExecutionIntent::Speed,
             ExecutionIntent::Balanced => fusion_planner::ExecutionIntent::Balanced,
             ExecutionIntent::Exhaustive => fusion_planner::ExecutionIntent::Exhaustive,
-            ExecutionIntent::Constrained { max_cost_usd, .. } => {
-                let cost = max_cost_usd.and_then(|usd| fusion_core::NanoUSD::checked_from_decimal_usd(&usd.to_string()).ok());
-                fusion_planner::ExecutionIntent::Constrained { max_cost: cost }
+            ExecutionIntent::Constrained { max_cost, .. } => {
+                fusion_planner::ExecutionIntent::Constrained { max_cost: *max_cost }
             }
         };
 
@@ -169,6 +168,8 @@ impl IntentPlanner {
             intent: crates_intent,
             user_prompt: requirements.original_text.clone(),
             requested_model: Some(model.to_string()),
+            requested_strategy: None,
+            strategy_config: None,
             requirements: fusion_planner::RequirementsSnapshot {
                 complexity: format!("{:?}", requirements.complexity),
                 execution_intent: None,
@@ -188,13 +189,7 @@ impl IntentPlanner {
             Ok(c) => c,
             Err(e) => return Err(format!("fusion_planner error: {:?}", e)),
         };
-        let mut ir = crate::ir::adapter::workflow_to_types(&contract).map_err(|e| format!("adapter error: {}", e))?;
-        for node in &mut ir.nodes {
-            if node.model.is_none() {
-                node.model = Some(model.to_string());
-            }
-        }
-        Ok(ir)
+        crate::ir::adapter::workflow_to_types(&contract).map_err(|e| format!("adapter error: {}", e))
     }
 }
 
@@ -235,6 +230,7 @@ mod tests {
             execution_intent,
             output_preferences: None,
             model_requirements: None,
+            requested_strategy: None,
         }
     }
 
@@ -337,7 +333,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Constrained {
             max_latency_ms: None,
-            max_cost_usd: Some(0.01),
+            max_cost: Some(NanoUSD::from_nanos(10_000_000)),
             max_tokens: None,
             min_confidence: None,
         }));
@@ -350,7 +346,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Constrained {
             max_latency_ms: None,
-            max_cost_usd: Some(0.05),
+            max_cost: Some(NanoUSD::from_nanos(50_000_000)),
             max_tokens: None,
             min_confidence: None,
         }));
@@ -363,7 +359,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Constrained {
             max_latency_ms: None,
-            max_cost_usd: None,
+            max_cost: None,
             max_tokens: None,
             min_confidence: None,
         }));
@@ -376,7 +372,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Constrained {
             max_latency_ms: None,
-            max_cost_usd: Some(0.02),
+            max_cost: Some(NanoUSD::from_nanos(20_000_000)),
             max_tokens: None,
             min_confidence: None,
         }));

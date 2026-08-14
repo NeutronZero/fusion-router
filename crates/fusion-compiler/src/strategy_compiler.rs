@@ -7,6 +7,21 @@
 use std::collections::HashSet;
 use fusion_types::*;
 
+/// Delegate compiler trait for lowering custom strategies into executable subgraphs.
+pub trait StrategyCompiler: Send + Sync {
+    fn compile_subgraph(&self, node: &ExecutionNode, custom_name: &str) -> ExecutionSubgraph;
+}
+
+/// A default strategy compiler that emits a delegate execution subgraph.
+#[derive(Debug, Default, Clone)]
+pub struct DefaultCustomStrategyCompiler;
+
+impl StrategyCompiler for DefaultCustomStrategyCompiler {
+    fn compile_subgraph(&self, node: &ExecutionNode, custom_name: &str) -> ExecutionSubgraph {
+        crate::strategy_expansion::expand_custom(node, custom_name)
+    }
+}
+
 /// Validates and annotates strategy kinds across the IR.
 ///
 /// This pass ensures that:
@@ -20,6 +35,7 @@ use fusion_types::*;
 #[derive(Default)]
 pub struct StrategyLoweringPass {
     registered_custom: HashSet<String>,
+    custom_compilers: std::collections::HashMap<String, std::sync::Arc<dyn StrategyCompiler>>,
 }
 
 impl StrategyLoweringPass {
@@ -28,7 +44,17 @@ impl StrategyLoweringPass {
     }
 
     pub fn with_registered_custom(registered_custom: HashSet<String>) -> Self {
-        Self { registered_custom }
+        Self {
+            registered_custom,
+            custom_compilers: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn register_compiler(mut self, name: impl Into<String>, compiler: std::sync::Arc<dyn StrategyCompiler>) -> Self {
+        let n = name.into();
+        self.registered_custom.insert(n.clone());
+        self.custom_compilers.insert(n, compiler);
+        self
     }
 }
 
@@ -193,7 +219,7 @@ mod tests {
             edges: vec![],
             metadata: IRMetadata {
                 policy_applied: vec![],
-			estimated_cost: NanoUSD::from_nanos(10_000_000),
+                estimated_cost: NanoUSD::from_nanos(10_000_000),
                 estimated_tokens: 100,
             },
         }
@@ -201,14 +227,14 @@ mod tests {
 
     #[tokio::test]
     async fn single_always_valid() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let ir = ir_with_strategy(StrategyKind::Single, HashMap::new());
         assert!(pass.apply(ir).await.is_ok());
     }
 
     #[tokio::test]
     async fn consensus_valid() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let mut config = HashMap::new();
         config.insert("count".into(), serde_json::json!(3));
         let ir = ir_with_strategy(StrategyKind::Consensus, config);
@@ -217,7 +243,7 @@ mod tests {
 
     #[tokio::test]
     async fn consensus_zero_count_rejected() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let mut config = HashMap::new();
         config.insert("count".into(), serde_json::json!(0));
         let ir = ir_with_strategy(StrategyKind::Consensus, config);
@@ -227,7 +253,7 @@ mod tests {
 
     #[tokio::test]
     async fn reflection_valid() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let mut config = HashMap::new();
         config.insert("max_cycles".into(), serde_json::json!(3));
         let ir = ir_with_strategy(StrategyKind::Reflection, config);
@@ -236,7 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn reflection_zero_cycles_rejected() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let mut config = HashMap::new();
         config.insert("max_cycles".into(), serde_json::json!(0));
         let ir = ir_with_strategy(StrategyKind::Reflection, config);
@@ -246,7 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn chain_empty_stages_rejected() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let mut config = HashMap::new();
         config.insert("stages".into(), serde_json::json!([]));
         let ir = ir_with_strategy(StrategyKind::Chain, config);
@@ -256,7 +282,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_too_few_roles_rejected() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let mut config = HashMap::new();
         config.insert("roles".into(), serde_json::json!(["only_one"]));
         let ir = ir_with_strategy(StrategyKind::Debate, config);
@@ -266,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn debate_two_roles_valid() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let mut config = HashMap::new();
         config.insert(
             "roles".into(),
@@ -281,7 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn react_zero_rounds_rejected() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let mut config = HashMap::new();
         config.insert("max_tool_rounds".into(), serde_json::json!(0));
         let ir = ir_with_strategy(StrategyKind::ReAct, config);
@@ -291,14 +317,14 @@ mod tests {
 
     #[tokio::test]
     async fn fusion_always_valid() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let ir = ir_with_strategy(StrategyKind::Fusion, HashMap::new());
         assert!(pass.apply(ir).await.is_ok());
     }
 
     #[tokio::test]
     async fn custom_empty_name_rejected() {
-        let pass = StrategyLoweringPass;
+        let pass = StrategyLoweringPass::new();
         let ir = ir_with_strategy(
             StrategyKind::Custom(String::new()),
             HashMap::new(),

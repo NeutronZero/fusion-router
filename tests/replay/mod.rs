@@ -19,7 +19,7 @@ async fn test_replay_validation_from_checkpoint() {
             outputs_schema: json!({}),
             permissions: vec![],
             dependencies: vec![],
-            estimated_cost_usd: 0.0,
+            estimated_cost: fusion_core::NanoUSD::ZERO,
             estimated_latency_ms: 1,
             reliability_score: 1.0,
             supports_streaming: false,
