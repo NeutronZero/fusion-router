@@ -7,14 +7,9 @@ use axum::{
 };
 use futures::stream::{self, BoxStream};
 use futures::StreamExt;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::state::AppState;
-use crate::providers::ModelPricing;
-use crate::resource::cancelling_stream::metered_stream_with_finish;
-use crate::resource::guard::ResourceGuard;
-use crate::resource::ResourceManager;
 use crate::server::pipeline::{
     CompilationStep, ContextAssemblyStep, EvidenceSnapshotStep, PipelineContext, PipelineStep,
     PlanningStep, RequirementsExtractionStep, ResourceReservationStep, ResponseBuilderStep,
@@ -45,22 +40,26 @@ pub async fn chat_completions(
             .into_response();
     }
 
-    let direct_stream_allowed = std::env::var("FUSION_EXPERIMENTAL_DIRECT_STREAM")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false);
-    if request.stream && direct_stream_allowed {
-        tracing::info!(request_id = %request_id, "streaming request via direct provider escape hatch");
-        return stream_response(state, request, request_id).await;
-    }
-
+    // Phase F: all requests — streaming and non-streaming — execute through
+    // the identical pipeline (PlanningRequest → fusion-ir → fusion-compiler →
+    // fusion-scheduler → fusion-runtime). The only difference is the transport
+    // layer: streaming wraps the final result in SSE chunked output.
     tracing::info!("processing request through full pipeline");
 
+    let is_stream = request.stream;
     let result = process_request(&state, &request, request_id).await;
 
     match result {
         Ok(response) => {
-            tracing::info!(request_id = %request_id, status = "success");
-            Json(response).into_response()
+            tracing::info!(request_id = %request_id, status = "success", stream = is_stream);
+            if is_stream {
+                // Phase F: SSE transport adapter — wrap the completed result in
+                // SSE chunks. The pipeline executed identically to non-streaming;
+                // only the response encoding differs.
+                stream_completed_response(response, &request.model, request_id).await
+            } else {
+                Json(response).into_response()
+            }
         }
         Err(e) => {
             let status = e.status_code();
@@ -74,124 +73,78 @@ pub async fn chat_completions(
     }
 }
 
-pub(crate) fn stream_graph_estimate(
-    request_id: Uuid,
-    request: &ChatCompletionRequest,
-) -> ExecutionGraph {
-    let input_tokens: u64 = request
-        .messages
-        .iter()
-        .map(|m| (m.content.len() / 4).max(1) as u64)
-        .sum();
-    let max_output = request.max_tokens.unwrap_or(4096) as u64;
-    let estimated_tokens = (input_tokens + max_output).max(1);
-    ExecutionGraph {
-        graph_id: request_id,
-        nodes: vec![],
-        edges: vec![],
-        metadata: GraphMetadata {
-            estimated_cost: 0.0,
-            estimated_tokens,
-            max_depth: 0,
-            node_count: 0,
-        },
-        total_tokens: estimated_tokens,
-        total_cost: 0,
-        primitive_graph_hash: 0,
-    }
-}
-
-async fn stream_response(
-    state: AppState,
-    request: ChatCompletionRequest,
+/// Phase F: SSE transport adapter — wraps a completed `ChatCompletionResponse`
+/// in SSE chunked output. The pipeline executed identically to non-streaming;
+/// only the response encoding differs. This ensures Gate 08 (Streaming
+/// Authority): streaming and non-streaming share the same `ExecutionGraph`.
+pub(crate) async fn stream_completed_response(
+    response: ChatCompletionResponse,
+    model: &str,
     request_id: Uuid,
 ) -> axum::response::Response {
-    let request_id_str = request_id.to_string();
-    let model_name = request.model.clone();
-    let created = chrono::Utc::now().timestamp();
+    let id = response.id.clone();
+    let model_name = model.to_string();
+    let created = response.created;
 
-    let pricing: Option<ModelPricing> = None;
-    let resource_manager = state.resource_manager.clone();
+    // Extract content from the completed response
+    let content = response
+        .choices
+        .first()
+        .map(|c| c.message.content.clone())
+        .unwrap_or_default();
+    let finish_reason = response
+        .choices
+        .first()
+        .map(|c| c.finish_reason.clone())
+        .unwrap_or_else(|| "stop".to_string());
 
-    let provider = state.provider.clone();
-    let inner = provider.chat_stream(&request).await;
-    let graph = stream_graph_estimate(request_id, &request);
-    drop(request);
-    drop(state);
+    // Split content into token-sized chunks for streaming simulation
+    let chunk_size = 16;
+    let chunks: Vec<String> = content
+        .chars()
+        .collect::<Vec<_>>()
+        .chunks(chunk_size)
+        .map(|c| c.iter().collect())
+        .collect();
 
-    let event_stream: BoxStream<'static, Result<Event, std::convert::Infallible>> = match inner {
-        Ok(inner_stream) => {
-            if !resource_manager.try_reserve(&graph).await {
-                tracing::warn!(
-                    request_id = %request_id,
-                    "streaming request rejected: daily resource quota exhausted"
-                );
-                return (
-                    StatusCode::TOO_MANY_REQUESTS,
-                    Json(error_response(
-                        request_id,
-                        &model_name,
-                        "Daily resource quota exhausted",
-                    )),
-                )
-                    .into_response();
-            }
-            let cancel = CancellationToken::new();
-            let guard = ResourceGuard::new(request_id, graph, resource_manager.clone());
-            let hook_manager = resource_manager.clone();
-            let (metered, _meter) = metered_stream_with_finish(
-                inner_stream,
-                guard,
-                cancel,
-                pricing,
-                Box::new(move |report| {
-                    let manager = hook_manager.clone();
-                    tokio::spawn(async move {
-                        manager
-                            .record_usage(report.cost_millicosts, report.total_tokens)
-                            .await;
-                    });
-                    crate::telemetry::stream_metrics::StreamMetrics::instance()
-                        .record_report(&report);
-                }),
-            );
-            Box::pin(metered.map(move |chunk_result| {
-                let id = request_id_str.clone();
-                let model = model_name.clone();
-                let payload = match chunk_result {
-                    Ok(chunk) => {
-                        serde_json::json!({
-                            "id": id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": model,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {
-                                    "content": chunk.content,
-                                },
-                                "finish_reason": chunk.finish_reason,
-                            }],
-                        })
-                    }
-                    Err(e) => {
-                        crate::telemetry::stream_metrics::StreamMetrics::instance()
-                            .record_error();
-                        tracing::error!(request_id = %request_id_str, error = %e, "stream error mid-response");
-                        serde_json::json!({"error": "streaming error"})
-                    }
-                };
-                Ok(Event::default().data(serde_json::to_string(&payload).unwrap_or_default()))
-            }))
-        }
-        Err(e) => {
-            tracing::error!(request_id = %request_id, error = %e, "failed to open provider stream");
-            let error = serde_json::json!({"error": "upstream provider unavailable"});
-            Box::pin(stream::once(async move {
-                Ok(Event::default().data(serde_json::to_string(&error).unwrap_or_default()))
-            }))
-        }
-    };
+    let total_chunks = chunks.len();
+
+    let event_stream: BoxStream<'static, Result<Event, std::convert::Infallible>> =
+        Box::pin(stream::iter(0..=total_chunks).enumerate().map(move |(i, _)| {
+            let id = id.clone();
+            let model = model_name.clone();
+            let payload = if i < total_chunks {
+                serde_json::json!({
+                    "id": id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "content": chunks[i].clone(),
+                        },
+                        "finish_reason": null,
+                    }],
+                })
+            } else {
+                // Final chunk with finish_reason
+                serde_json::json!({
+                    "id": id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": finish_reason,
+                    }],
+                })
+            };
+            Ok(Event::default().data(
+                serde_json::to_string(&payload).unwrap_or_default(),
+            ))
+        }));
 
     let sse = event_stream.chain(stream::once(async {
         Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"))
