@@ -53,7 +53,7 @@ async fn test_end_to_end_runtime_event_pipeline() {
         Some(env2.event_id.clone()),
         ExecutionEvent::WorkflowCompleted {
             total_duration_ms: 200,
-            total_cost_usd: 0.002,
+            total_cost: fusion_router::types::NanoUSD::from_nanos(2_000_000),
         },
     );
 

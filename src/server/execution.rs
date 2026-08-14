@@ -290,7 +290,7 @@ impl ExecutionPlane {
             &execution_id,
             ExecutionEvent::WorkflowCompleted {
                 total_duration_ms: started_at.elapsed().as_millis() as u64,
-                total_cost_usd: result.total_cost.to_usd_f64(),
+                total_cost: result.total_cost,
             },
         )
         .await;

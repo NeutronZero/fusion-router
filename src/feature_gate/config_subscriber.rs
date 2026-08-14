@@ -78,7 +78,7 @@ mod tests {
                 cors: CorsConfig::default(),
             },
             resources: ResourceConfig {
-                max_daily_cost: 100.0,
+                max_daily_cost: crate::types::NanoUSD::from_nanos(100_000_000_000),
                 max_daily_tokens: 1_000_000,
                 max_concurrent: 5,
                 max_concurrent_nodes: 16,

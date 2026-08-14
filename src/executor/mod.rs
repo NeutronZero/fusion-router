@@ -3,6 +3,7 @@ use async_trait::async_trait;
 pub mod capability_executor;
 mod fusion_bridge;
 mod node_exec;
+#[cfg(test)]
 mod tool_loop;
 
 pub use fusion_bridge::{connect_tools, FusionChatProvider, FusionTool};

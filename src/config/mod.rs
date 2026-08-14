@@ -24,7 +24,7 @@ mod tests {
                 cors: CorsConfig::default(),
             },
             resources: ResourceConfig {
-                max_daily_cost: 100.0,
+                max_daily_cost: crate::types::NanoUSD::from_nanos(100_000_000_000),
                 max_daily_tokens: 1_000_000,
                 max_concurrent: 5,
                 max_concurrent_nodes: 16,
@@ -192,7 +192,7 @@ resources:
     #[test]
     fn test_validate_rejects_negative_cost() {
         let mut config = base_config();
-        config.resources.max_daily_cost = -1.0;
+        config.resources.max_daily_cost = crate::types::NanoUSD::ZERO;
         let errors = config.validate().unwrap_err();
         assert!(errors.iter().any(|e| e.field == "resources.max_daily_cost"));
     }
@@ -262,13 +262,13 @@ resources:
     #[test]
     fn test_to_quota_maps_resource_fields() {
         let mut config = base_config();
-        config.resources.max_daily_cost = 42.5;
+        config.resources.max_daily_cost = crate::types::NanoUSD::from_nanos(42_500_000_000);
         config.resources.max_daily_tokens = 999;
         config.resources.max_concurrent = 7;
         config.resources.provider_limits.insert(
             "openai".into(),
             ProviderLimitConfig {
-                max_daily_cost: 10.0,
+                max_daily_cost: crate::types::NanoUSD::from_nanos(10_000_000_000),
                 max_rpm: 60,
                 max_tpm: 100_000,
             },

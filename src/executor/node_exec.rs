@@ -46,7 +46,7 @@ impl DefaultExecutor {
             model: node.model.clone(), messages, stream: false,
             temperature: node.config.get("temperature").and_then(|v| v.as_f64()).map(|v| v as f32),
             max_tokens: node.config.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
-            tools: self.request_tool_definitions(node), files: None, execution: None, output: None, strategy: None,
+            tools: None, files: None, execution: None, output: None, strategy: None,
         }
     }
 

@@ -99,7 +99,7 @@ mod tests {
             Some(env1.event_id.clone()),
             ExecutionEvent::WorkflowCompleted {
                 total_duration_ms: 100,
-                total_cost_usd: 0.001,
+                total_cost: crate::types::NanoUSD::from_nanos(1_000_000),
             },
         );
 
@@ -138,7 +138,7 @@ mod tests {
             None,
             ExecutionEvent::WorkflowCompleted {
                 total_duration_ms: 100,
-                total_cost_usd: 0.001,
+                total_cost: crate::types::NanoUSD::from_nanos(1_000_000),
             },
         );
         let env1 = ExecutionEventEnvelope::new(

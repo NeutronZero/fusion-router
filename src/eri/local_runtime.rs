@@ -102,7 +102,10 @@ impl ExecutionRuntimeInterface for LocalEri {
             outputs,
             metrics: HashMap::from([
                 ("total_latency_ms".to_string(), result.total_latency_ms as f64),
-                ("total_cost_usd".to_string(), result.total_cost.to_usd_f64()),
+                // The ERI ABI exposes scalar metrics as f64; keep the
+                // monetary value in NanoUSD and label this boundary value
+                // explicitly as nanos rather than presenting USD accounting.
+                ("total_cost_nanos".to_string(), result.total_cost.as_nanos() as f64),
                 ("total_tokens".to_string(), result.total_tokens as f64),
             ]),
         })

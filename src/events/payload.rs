@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
+use crate::types::NanoUSD;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum ExecutionEvent {
     // Workflow Lifecycle
     WorkflowStarted { intent: String, input_tokens: usize },
-    WorkflowCompleted { total_duration_ms: u64, total_cost_usd: f64 },
+    WorkflowCompleted { total_duration_ms: u64, total_cost: NanoUSD },
     WorkflowFailed { error: String, failed_node_id: Option<String> },
 
     // Compilation & Scheduling
@@ -23,7 +24,7 @@ pub enum ExecutionEvent {
 
     // Transport, Provider & Tool Activity
     ProviderCalled { provider: String, model: String, prompt_bytes: usize },
-    ProviderResponded { provider: String, model: String, duration_ms: u64, cost_usd: f64 },
+    ProviderResponded { provider: String, model: String, duration_ms: u64, cost: NanoUSD },
     ToolInvoked { tool_name: String, node_id: String },
     ToolCompleted { tool_name: String, node_id: String, duration_ms: u64, success: bool },
 

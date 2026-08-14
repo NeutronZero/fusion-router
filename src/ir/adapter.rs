@@ -42,6 +42,9 @@ pub fn workflow_to_types(ir: &WorkflowIR) -> Result<TypesWorkflowIR, String> {
         if let Some(cap) = node.capability() {
             config.insert("capability".to_string(), serde_json::json!(cap));
         }
+        // The execution ABI intentionally has fewer operational node kinds.
+        // Preserve the nine-kind planning vocabulary explicitly at this
+        // boundary so lowering is not mistaken for semantic loss.
         config.insert("semantic_kind".to_string(), serde_json::json!(format!("{:?}", node.kind())));
         let model = node.selected_model().map(String::from);
         let strategy = if let Some(strat_str) = node.config().get("strategy").and_then(|v| v.as_str()) {
@@ -158,6 +161,7 @@ mod tests {
         assert_eq!(types.edges[0].from, uuid_for("n1"));
         assert_eq!(types.edges[0].to, uuid_for("n2"));
         assert_eq!(types.nodes[0].kind, IRNodeKind::Generate);
+        assert_eq!(types.nodes[0].config.get("semantic_kind").and_then(|v| v.as_str()), Some("Task"));
         assert_eq!(types.nodes[1].kind, IRNodeKind::Transform);
         assert_eq!(types.metadata.policy_applied, vec!["pol".to_string()]);
         assert_eq!(types.metadata.estimated_cost, crate::types::NanoUSD::from_nanos(1_500_000_000));

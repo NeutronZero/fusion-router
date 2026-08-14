@@ -74,7 +74,7 @@ fn build_app(quota: &Quota) -> Router {
         unsafe_dev: false,
         server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 0, shutdown_timeout_secs: 30, cors: Default::default() },
         resources: fusion_router::config::ResourceConfig {
-            max_daily_cost: quota.max_daily_cost.to_usd_f64(),
+            max_daily_cost: quota.max_daily_cost,
             max_daily_tokens: quota.max_daily_tokens,
             max_concurrent: quota.max_concurrent,
             max_concurrent_nodes: 16,

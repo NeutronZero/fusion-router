@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use crate::types::{EvidenceSnapshot, ExecutionRecord};
+use crate::types::{EvidenceSnapshot, ExecutionRecord, NanoUSD};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelPerformanceStats {
@@ -7,7 +7,7 @@ pub struct ModelPerformanceStats {
     pub total_requests: u64,
     pub success_count: u64,
     pub avg_latency_ms: f64,
-    pub avg_cost: f64,
+    pub avg_cost: NanoUSD,
 }
 
 #[async_trait]

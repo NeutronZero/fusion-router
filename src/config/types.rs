@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use serde::Deserialize;
+use crate::types::NanoUSD;
 
 use crate::config::defaults::*;
 use crate::feature_gate::FeatureConfig;
@@ -126,7 +127,8 @@ impl Default for LoggingConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResourceConfig {
-    pub max_daily_cost: f64,
+    #[serde(deserialize_with = "deserialize_usd")]
+    pub max_daily_cost: NanoUSD,
     pub max_daily_tokens: u64,
     #[serde(default = "default_concurrent")]
     pub max_concurrent: u32,
@@ -138,9 +140,24 @@ pub struct ResourceConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderLimitConfig {
-    pub max_daily_cost: f64,
+    #[serde(deserialize_with = "deserialize_usd")]
+    pub max_daily_cost: NanoUSD,
     pub max_rpm: u32,
     pub max_tpm: u64,
+}
+
+fn deserialize_usd<'de, D>(deserializer: D) -> Result<NanoUSD, D::Error>
+where D: serde::Deserializer<'de> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Money { Integer(u64), Decimal(f64), Text(String) }
+    let value = Money::deserialize(deserializer)?;
+    let text = match value {
+        Money::Integer(value) => value.to_string(),
+        Money::Decimal(value) => value.to_string(),
+        Money::Text(value) => value,
+    };
+    NanoUSD::checked_from_decimal_usd(&text).map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Clone, Deserialize)]

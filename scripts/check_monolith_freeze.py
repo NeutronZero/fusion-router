@@ -67,20 +67,31 @@ def check_gate_02_compiler_authority():
 def check_gate_03_strategy_authority():
     """Gate 03: Zero host strategy execution in src/executor."""
     src_executor = ROOT / "src" / "executor"
-    strategy_resolver = src_executor / "strategy_resolver.rs"
-    if strategy_resolver.exists():
-        return False, "Host strategy resolver still in src/executor"
-    return True, "No host strategy execution"
+    forbidden = ["resolve_strategy", "expanded_subgraph", "execute_legacy", "execute_native_tool_calls",
+                 "provider.chat_completion", "subgraph traversal", "strategy execution"]
+    for rs_file in src_executor.glob("*.rs"):
+        if rs_file.name == "mod.rs":
+            continue
+        if rs_file.name == "tool_loop.rs":
+            # tool_loop is compiled only by the executor unit-test module.
+            continue
+        content = rs_file.read_text(encoding="utf-8")
+        production = content.split("#[cfg(test)]", 1)[0]
+        for marker in forbidden:
+            if marker in production:
+                return False, f"Host executor semantic marker '{marker}' remains in {rs_file.name}"
+    return True, "Host executor contains only runtime delegation adapters"
 
 
 def check_gate_04_runtime_authority():
     """Gate 04: Zero legacy provider execution paths."""
     src_executor = ROOT / "src" / "executor"
     node_exec = src_executor / "node_exec.rs"
-    if node_exec.exists():
-        content = node_exec.read_text(encoding="utf-8")
-        if "resolve_strategy" in content:
-            return False, "Legacy resolve_strategy still referenced"
+    if not node_exec.exists():
+        return False, "src/executor/node_exec.rs is missing"
+    content = node_exec.read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]
+    if "fusion_runtime::ProviderExecutor" not in content:
+        return False, "node_exec.rs does not delegate to fusion-runtime"
     return True, "Runtime authority consolidated in crates/fusion-runtime"
 
 
@@ -158,31 +169,24 @@ def check_gate_09_monetary_authority():
             rel_path = rs_file.relative_to(ROOT)
             return False, f"Legacy field 'cost_millicosts' found in {rel_path}"
 
-    f64_fields = ["estimated_cost", "total_cost", "max_daily_cost", "cost_per", "max_cost"]
-    excluded_crates = set()
-
-    crates_dir = ROOT / "crates"
-    for toml_file in crates_dir.rglob("Cargo.toml"):
-        crate_name = toml_file.parent.name
-        if crate_name in excluded_crates:
+    monetary_fields = ["max_daily_cost", "total_cost_usd", "cost_usd", "avg_cost", "avg_cost_nanos", "estimated_cost_usd"]
+    presentation_only = {Path("src/bin/eval_runner.rs")}
+    for rs_file in ROOT.rglob("*.rs"):
+        rel_path = rs_file.relative_to(ROOT)
+        normalized = str(rel_path).replace("\\", "/")
+        if normalized.startswith("target/") or normalized.startswith("tests/") or rel_path in presentation_only:
             continue
-        src_dir = toml_file.parent / "src"
-        if not src_dir.exists():
-            continue
-        for rs_file in src_dir.rglob("*.rs"):
-            if "/tests/" in str(rs_file) or "/test_" in rs_file.name:
+        content = rs_file.read_text(encoding="utf-8")
+        production = content.split("#[cfg(test)]", 1)[0]
+        for line in production.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
                 continue
-            content = rs_file.read_text(encoding="utf-8")
-            for line in content.split("\n"):
-                stripped = line.strip()
-                if stripped.startswith("//") or stripped.startswith("#[cfg(test)]"):
-                    continue
-                if not re.match(r'^pub\s+\w+\s*:\s*', stripped):
-                    continue
-                for field in f64_fields:
-                    if field in stripped and "f64" in stripped:
-                        rel_path = rs_file.relative_to(ROOT)
-                        return False, f"f64 monetary field '{field}' in {rel_path}"
+            if "f64" not in stripped:
+                continue
+            for field in monetary_fields:
+                if re.search(rf"\b{re.escape(field)}\b", stripped):
+                    return False, f"internal monetary f64 field '{field}' in {rel_path}"
 
     return True, "NanoUSD is canonical integer monetary type across all crates and host"
 

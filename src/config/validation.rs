@@ -11,12 +11,12 @@ impl AppConfig {
 
     pub fn to_quota(&self) -> Quota {
         Quota {
-            max_daily_cost: crate::types::NanoUSD::from_nanos((self.resources.max_daily_cost * 1_000_000_000.0) as u64),
+            max_daily_cost: self.resources.max_daily_cost,
             max_daily_tokens: self.resources.max_daily_tokens,
             max_concurrent: self.resources.max_concurrent,
             provider_limits: self.resources.provider_limits.iter().map(|(k, v)| {
                 (k.clone(), ProviderLimit {
-                    max_daily_cost: crate::types::NanoUSD::from_nanos((v.max_daily_cost * 1_000_000_000.0) as u64),
+                    max_daily_cost: v.max_daily_cost,
                     max_rpm: v.max_rpm,
                     max_tpm: v.max_tpm,
                 })
@@ -78,11 +78,11 @@ impl AppConfig {
             });
         }
 
-        if self.resources.max_daily_cost < 0.0 {
+        if self.resources.max_daily_cost == crate::types::NanoUSD::ZERO {
             errors.push(ConfigValidationError {
                 field: "resources.max_daily_cost".into(),
-                message: "max_daily_cost must be non-negative".into(),
-                value: Some(self.resources.max_daily_cost.to_string()),
+                message: "max_daily_cost must be positive".into(),
+                value: Some(self.resources.max_daily_cost.to_decimal_usd()),
                 severity: ValidationSeverity::Error,
             });
         }

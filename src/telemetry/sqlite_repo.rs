@@ -105,7 +105,7 @@ impl EvidenceRepository for SqliteEvidenceRepository {
                 let mut stmt = tx.prepare(
                     "SELECT model,
                             AVG(latency_ms),
-                            AVG(cost),
+                            CAST(AVG(cost) AS INTEGER),
                             CAST(SUM(success) AS REAL) / CAST(COUNT(*) AS REAL) AS rate
                      FROM execution_records
                      GROUP BY model
@@ -114,13 +114,13 @@ impl EvidenceRepository for SqliteEvidenceRepository {
                 let rows = stmt.query_map([], |row| {
                     let model: String = row.get(0)?;
                     let avg_lat: f64 = row.get(1)?;
-                    let avg_cost_nanos: f64 = row.get(2)?;
+                    let avg_cost_nanos: i64 = row.get(2)?;
                     Ok((model, avg_lat, avg_cost_nanos))
                 })?;
                 for row in rows {
                     let (model, avg_lat, avg_cost_nanos) = row?;
                     avg_latencies.insert(model.clone(), avg_lat);
-                    avg_costs.insert(model.clone(), crate::types::NanoUSD::from_nanos(avg_cost_nanos as u64));
+                    avg_costs.insert(model.clone(), crate::types::NanoUSD::from_nanos(avg_cost_nanos.max(0) as u64));
                     model_rankings.push(model);
                 }
             }
@@ -157,7 +157,7 @@ impl EvidenceRepository for SqliteEvidenceRepository {
                         COUNT(*) as total_requests,
                         SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_count,
                         AVG(latency_ms) as avg_latency,
-                        AVG(cost) as avg_cost
+                        CAST(AVG(cost) AS INTEGER) as avg_cost
                  FROM execution_records
                  WHERE timestamp >= ?1
                  GROUP BY model",
@@ -168,7 +168,7 @@ impl EvidenceRepository for SqliteEvidenceRepository {
                 let total_requests: i64 = row.get(1)?;
                 let success_count: i64 = row.get(2)?;
                 let avg_latency_ms: f64 = row.get::<_, Option<f64>>(3)?.unwrap_or(0.0);
-                let avg_cost: f64 = row.get::<_, Option<f64>>(4)?.unwrap_or(0.0) / 1_000_000_000.0;
+                let avg_cost = crate::types::NanoUSD::from_nanos(row.get::<_, Option<i64>>(4)?.unwrap_or(0).max(0) as u64);
 
                 Ok(ModelPerformanceStats {
                     model,

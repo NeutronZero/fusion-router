@@ -82,7 +82,7 @@ async fn test_chat_completion_endpoint() {
             unsafe_dev: false,
             server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 8080, shutdown_timeout_secs: 30, cors: Default::default() },
             resources: fusion_router::config::ResourceConfig {
-                max_daily_cost: 100.0,
+                max_daily_cost: fusion_router::types::NanoUSD::from_nanos(100_000_000_000),
                 max_daily_tokens: 100000,
                 max_concurrent: 10,
                 max_concurrent_nodes: 16,
@@ -292,7 +292,7 @@ fn test_config() -> AppConfig {
     AppConfig {
         unsafe_dev: false,
         server: ServerConfig { host: "0.0.0.0".into(), port: 8080, shutdown_timeout_secs: 30, cors: CorsConfig::default() },
-        resources: ResourceConfig { max_daily_cost: 100.0, max_daily_tokens: 100000, max_concurrent: 10, max_concurrent_nodes: 16, provider_limits: Default::default() },
+        resources: ResourceConfig { max_daily_cost: fusion_router::types::NanoUSD::from_nanos(100_000_000_000), max_daily_tokens: 100000, max_concurrent: 10, max_concurrent_nodes: 16, provider_limits: Default::default() },
         policies: vec![], providers: Default::default(),
         strategies: StrategyConfig { consensus_count: 3 }, tools: ToolsConfig::default(),
         auth: AuthConfig { enabled: true, api_keys: vec!["test-key".into()] },
