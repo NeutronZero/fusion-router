@@ -376,39 +376,50 @@ async fn test_intent_planner_equivalence() {
         model_requirements: None,
     };
 
+    let make_crate_req = |intent: CrateExecutionIntent| fusion_planner::PlanningRequest {
+        intent,
+        user_prompt: "test intent".to_string(),
+        requested_model: None,
+        requirements: fusion_planner::RequirementsSnapshot::default(),
+        policies: fusion_planner::PolicySnapshot::default(),
+        capability_catalog: fusion_planner::CapabilityCatalogSnapshot::default(),
+        model_catalog: fusion_planner::ModelCatalogSnapshot::new(CrateModelCatalog::default()),
+        telemetry: fusion_planner::RoutingTelemetrySnapshot::default(),
+    };
+
     // 1. Quality Intent
     let monolith_quality = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Quality)), &[], None).await;
-    let crate_quality = crate_planner.plan_intent(&CrateExecutionIntent::Quality).expect("crate quality plan");
+    let crate_quality = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Quality)).expect("crate quality plan");
     assert_eq!(monolith_quality.nodes.len(), 5);
     assert_eq!(crate_quality.nodes().len(), 5);
 
     // 2. Speed Intent
     let monolith_speed = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Speed)), &[], None).await;
-    let crate_speed = crate_planner.plan_intent(&CrateExecutionIntent::Speed).expect("crate speed plan");
+    let crate_speed = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Speed)).expect("crate speed plan");
     assert_eq!(monolith_speed.nodes.len(), 1);
-    assert_eq!(crate_speed.nodes().len(), 2);
+    assert_eq!(crate_speed.nodes().len(), 1);
 
     // 3. Balanced Intent
     let monolith_balanced = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Balanced)), &[], None).await;
-    let crate_balanced = crate_planner.plan_intent(&CrateExecutionIntent::Balanced).expect("crate balanced plan");
+    let crate_balanced = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Balanced)).expect("crate balanced plan");
     assert_eq!(monolith_balanced.nodes.len(), 3);
     assert_eq!(crate_balanced.nodes().len(), 3);
 
     // 4. Exhaustive Intent
     let monolith_exhaustive = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Exhaustive)), &[], None).await;
-    let crate_exhaustive = crate_planner.plan_intent(&CrateExecutionIntent::Exhaustive).expect("crate exhaustive plan");
+    let crate_exhaustive = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Exhaustive)).expect("crate exhaustive plan");
     assert_eq!(monolith_exhaustive.nodes.len(), 6);
     assert_eq!(crate_exhaustive.nodes().len(), 6);
 
     // 5. Constrained Intent (cost < 0.02 -> speed)
     let monolith_constrained_low = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost_usd: Some(0.01), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
-    let crate_constrained_low = crate_planner.plan_intent(&CrateExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.01").unwrap()) }).expect("crate constrained low plan");
+    let crate_constrained_low = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.01").unwrap()) })).expect("crate constrained low plan");
     assert_eq!(monolith_constrained_low.nodes.len(), 1);
-    assert_eq!(crate_constrained_low.nodes().len(), 2);
+    assert_eq!(crate_constrained_low.nodes().len(), 1);
 
     // 6. Constrained Intent (cost >= 0.02 -> balanced)
     let monolith_constrained_high = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost_usd: Some(0.10), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
-    let crate_constrained_high = crate_planner.plan_intent(&CrateExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.10").unwrap()) }).expect("crate constrained high plan");
+    let crate_constrained_high = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.10").unwrap()) })).expect("crate constrained high plan");
     assert_eq!(monolith_constrained_high.nodes.len(), 3);
     assert_eq!(crate_constrained_high.nodes().len(), 3);
 }

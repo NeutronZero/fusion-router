@@ -152,7 +152,7 @@ mod tests {
             prompt_tokens: 10,
             completion_tokens: 20,
             total_tokens: 30,
-            cost_millicosts: 5,
+            cost: crate::types::NanoUSD::from_nanos(5_000_000),
             ttfb_ms: Some(200),
             total_duration_ms: Some(5000),
         };
@@ -169,7 +169,7 @@ mod tests {
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 5,
-            cost_millicosts: 0,
+            cost: crate::types::NanoUSD::ZERO,
             ttfb_ms: None,
             total_duration_ms: None,
         };

@@ -712,7 +712,7 @@ impl CompilerPass for BudgetOptimisationPass {
 
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
         if !self.resource_manager.can_afford(
-            fusion_core::NanoUSD::checked_from_decimal_usd(&format!("{:.9}", ir.metadata.estimated_cost)).unwrap_or(fusion_core::NanoUSD::ZERO),
+            ir.metadata.estimated_cost,
             ir.metadata.estimated_tokens,
         ).await {
             return Err(CompilerError::ValidationError {
@@ -962,7 +962,7 @@ pub fn build_compiler(
     let mut engine = CompilerEngine::with_resource_manager_custom(resource_manager.clone());
     engine.add_pass(Box::new(ConstraintValidationPass));
     engine.add_pass(Box::new(ControlFlowValidationPass));
-    engine.add_pass(Box::new(StrategyLoweringPass));
+    engine.add_pass(Box::new(StrategyLoweringPass::new()));
     engine.add_pass(Box::new(DeadNodeEliminationPass));
     engine.add_pass(Box::new(ModelResolutionPass::new(model_catalog)));
     engine.add_pass(Box::new(BudgetOptimisationPass { resource_manager }));

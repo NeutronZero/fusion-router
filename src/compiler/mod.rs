@@ -59,7 +59,7 @@ pub fn build_compiler(
     let mut passes: Vec<Box<dyn CompilerPass + Send + Sync>> = vec![
         Box::new(CratesPass(Box::new(fusion_compiler::ConstraintValidationPass))),
         Box::new(CratesPass(Box::new(fusion_compiler::ControlFlowValidationPass))),
-        Box::new(CratesPass(Box::new(fusion_compiler::strategy_compiler::StrategyLoweringPass))),
+        Box::new(CratesPass(Box::new(fusion_compiler::strategy_compiler::StrategyLoweringPass::new()))),
         Box::new(CratesPass(Box::new(fusion_compiler::DeadNodeEliminationPass))),
         Box::new(CratesPass(Box::new(fusion_compiler::ModelResolutionPass::new(model_catalog)))),
         Box::new(CratesPass(Box::new(fusion_compiler::BudgetOptimisationPass {

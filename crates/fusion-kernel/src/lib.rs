@@ -94,8 +94,9 @@ pub enum ExecutionProfile {
     Offline,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityCatalog {
-    catalog: HashMap<String, Vec<String>>,
+    pub catalog: HashMap<String, Vec<String>>,
 }
 
 impl CapabilityCatalog {
@@ -125,8 +126,9 @@ impl Default for CapabilityCatalog {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilitySystem {
-    capabilities: HashMap<String, Vec<String>>,
+    pub capabilities: HashMap<String, Vec<String>>,
 }
 
 impl CapabilitySystem {

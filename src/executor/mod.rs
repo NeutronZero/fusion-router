@@ -1270,4 +1270,54 @@ mod tests {
             "cancellation must never be retried"
         );
     }
+
+    #[test]
+    fn test_routing_split_single_vs_legacy() {
+        let provider = Arc::new(SequenceProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: 0,
+            fail_models: vec![],
+            content: "ok".into(),
+            recorded_models: std::sync::Mutex::new(Vec::new()),
+        });
+        let executor = DefaultExecutor::new(provider, HashMap::new());
+
+        // 1. Plain Single leaf -> delegates to crates runtime
+        let plain_single = make_single_leaf(HashMap::new());
+        assert!(
+            executor.delegate_to_crates(&plain_single),
+            "plain single leaf must delegate to crates runtime"
+        );
+
+        // 2. Node with tool allowlist -> stays on host legacy path
+        let tool_node = make_single_leaf(HashMap::from([(
+            "tool_allowlist".into(),
+            serde_json::json!(["search"]),
+        )]));
+        assert!(
+            !executor.delegate_to_crates(&tool_node),
+            "tool-enabled node must stay on host legacy path"
+        );
+
+        // 3. Multi-model strategy -> stays on host legacy path
+        let mut consensus_node = make_single_leaf(HashMap::new());
+        consensus_node.strategy = StrategyKind::Consensus;
+        assert!(
+            !executor.delegate_to_crates(&consensus_node),
+            "consensus strategy must stay on host legacy path"
+        );
+
+        // 4. Subgraph node -> stays on host legacy path
+        let mut subgraph_node = make_single_leaf(HashMap::new());
+        subgraph_node.subgraph = Some(crate::types::ExecutionSubgraph {
+            nodes: vec![],
+            edges: vec![],
+            entry_node_id: Uuid::new_v4(),
+            exit_node_id: Uuid::new_v4(),
+        });
+        assert!(
+            !executor.delegate_to_crates(&subgraph_node),
+            "subgraph node must stay on host legacy path"
+        );
+    }
 }

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use crate::types::{ExecutionGraph, Quota};
+use crate::types::{ExecutionGraph, NanoUSD, Quota};
 
 pub mod cancelling_stream;
 pub mod guard;
@@ -23,7 +23,7 @@ pub trait ResourceManager: Send + Sync {
     /// Records actual measured usage (e.g. from a stream meter) so quota
     /// accounting reflects reality rather than only estimates. No-op by
     /// default for implementers that only track estimates.
-    async fn record_usage(&self, _cost_millicosts: u64, _tokens: u64) {}
+    async fn record_usage(&self, _cost: NanoUSD, _tokens: u64) {}
 }
 
 pub struct DefaultResourceManager {
@@ -83,8 +83,8 @@ impl ResourceManager for DefaultResourceManager {
         Ok(())
     }
 
-    async fn record_usage(&self, cost_millicosts: u64, tokens: u64) {
-        self.used_cost.fetch_add(cost_millicosts, Ordering::Relaxed);
+    async fn record_usage(&self, cost: NanoUSD, tokens: u64) {
+        self.used_cost.fetch_add(cost.as_nanos(), Ordering::Relaxed);
         self.used_tokens.fetch_add(tokens, Ordering::Relaxed);
     }
 

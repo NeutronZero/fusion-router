@@ -252,7 +252,7 @@ fn test_streaming_metrics_increment() {
         prompt_tokens: 10,
         completion_tokens: 20,
         total_tokens: 30,
-        cost_millicosts: 5,
+        cost: fusion_router::types::NanoUSD::from_nanos(5_000_000),
         ttfb_ms: Some(200),
         total_duration_ms: Some(5000),
     };

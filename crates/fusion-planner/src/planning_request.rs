@@ -39,11 +39,12 @@ pub struct RequirementsSnapshot {
     pub required_capabilities: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelCatalogSnapshot {
     pub catalog: ModelCatalog,
 }
 
+#[derive(Debug, Clone, Default)]
 pub struct CapabilityCatalogSnapshot {
     pub catalog: CapabilityCatalog,
 }
@@ -54,8 +55,8 @@ pub struct PlanningRequest {
     pub requested_model: Option<String>,
     pub requirements: RequirementsSnapshot,
     pub policies: PolicySnapshot,
-    pub capability_catalog: CapabilityCatalog,
-    pub model_catalog: ModelCatalog,
+    pub capability_catalog: CapabilityCatalogSnapshot,
+    pub model_catalog: ModelCatalogSnapshot,
     pub telemetry: RoutingTelemetrySnapshot,
 }
 

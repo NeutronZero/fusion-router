@@ -43,11 +43,26 @@ pub fn workflow_to_types(ir: &WorkflowIR) -> Result<TypesWorkflowIR, String> {
             config.insert("capability".to_string(), serde_json::json!(cap));
         }
         config.insert("semantic_kind".to_string(), serde_json::json!(format!("{:?}", node.kind())));
+        let model = node.config().get("model").and_then(|v| v.as_str()).map(String::from);
+        let strategy = if let Some(strat_str) = node.config().get("strategy").and_then(|v| v.as_str()) {
+            match strat_str {
+                "Consensus" => crate::types::StrategyKind::Consensus,
+                "Reflection" => crate::types::StrategyKind::Reflection,
+                "Chain" => crate::types::StrategyKind::Chain,
+                "Debate" => crate::types::StrategyKind::Debate,
+                "ReAct" => crate::types::StrategyKind::ReAct,
+                "Fusion" => crate::types::StrategyKind::Fusion,
+                "Single" => crate::types::StrategyKind::Single,
+                custom => crate::types::StrategyKind::Custom(custom.to_string()),
+            }
+        } else {
+            crate::types::StrategyKind::Single
+        };
         nodes.push(crate::types::IRNode {
             id: uuid_for(node.id()),
             kind: node_kind_of(&node.kind()),
-            strategy: crate::types::StrategyKind::Single,
-            model: None,
+            strategy,
+            model,
             config,
         });
     }

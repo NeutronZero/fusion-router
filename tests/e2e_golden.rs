@@ -65,7 +65,7 @@ async fn test_e2e_golden_speed_workflow() {
     let planning_ir = planner.plan_with_intent("Quick fix", ExecutionIntent::Speed)
         .expect("Planner must produce WorkflowIR");
 
-    assert_eq!(planning_ir.nodes().len(), 2, "Speed intent must produce 2 nodes");
+    assert_eq!(planning_ir.nodes().len(), 1, "Speed intent must produce 1 node");
 
     let exec_ir = workflow_to_types(&planning_ir).expect("Adapter");
     let compiler = CompilerEngine::new();
@@ -73,14 +73,14 @@ async fn test_e2e_golden_speed_workflow() {
         .expect("Compiler");
 
     assert_eq!(report.passes_executed.len(), 5);
-    assert_eq!(graph.nodes.len(), 2);
+    assert_eq!(graph.nodes.len(), 1);
 
     let provider: Arc<dyn fusion_runtime::ChatProvider> = Arc::new(MockProvider::default_response());
     let runtime = RuntimeEngine::new(provider);
     let outcome = runtime.run(Arc::new(graph)).await.expect("Runtime");
 
     assert!(outcome.success);
-    assert_eq!(outcome.outputs.len(), 2);
+    assert_eq!(outcome.outputs.len(), 1);
 }
 
 #[tokio::test]
@@ -110,11 +110,11 @@ async fn test_e2e_golden_quality_workflow() {
 
 #[tokio::test]
 async fn test_e2e_dead_node_elimination() {
-    // Build a 2-node IR (A → B) and inject an orphan node C with no edges.
-    // After compilation, graph must contain only A and B.
+    // Build a 3-node IR (Balanced) and inject an orphan node D with no edges.
+    // After compilation, graph must contain only the 3 live nodes.
     let capability_system = CapabilitySystem::new();
     let planner = PlannerService::new(capability_system);
-    let planning_ir = planner.plan_with_intent("Quick fix", ExecutionIntent::Speed)
+    let planning_ir = planner.plan_with_intent("Quick fix", ExecutionIntent::Balanced)
         .expect("Planner");
     let mut exec_ir = workflow_to_types(&planning_ir).expect("Adapter");
 
@@ -127,13 +127,13 @@ async fn test_e2e_dead_node_elimination() {
         model: None,
         config: HashMap::new(),
     });
-    assert_eq!(exec_ir.nodes.len(), 3, "IR must have 3 nodes (2 live + 1 orphan)");
+    assert_eq!(exec_ir.nodes.len(), 4, "IR must have 4 nodes (3 live + 1 orphan)");
 
     let compiler = CompilerEngine::new();
     let (_report, graph) = compiler.compile_and_lower("dead node test", &exec_ir).await
         .expect("Compiler");
 
-    assert_eq!(graph.nodes.len(), 2, "orphan must be eliminated from graph");
+    assert_eq!(graph.nodes.len(), 3, "orphan must be eliminated from graph");
     assert!(!graph.nodes.iter().any(|n| n.id == orphan_id),
         "orphan node must not appear in execution graph");
 }

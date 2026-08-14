@@ -6,8 +6,7 @@
 //! 3. Precedence: Deny > Approval > Allow rule evaluation.
 //! 4. Non-Destructive: Original graph node semantics remain intact.
 
-use fusion_router::compiler::passes::policy::PolicyCompilerPass;
-use fusion_router::compiler::passes::CompilerPass;
+use fusion_compiler::{CompilerPass, PolicyCompilerPass};
 use fusion_router::policy::ast::PolicyParser;
 use fusion_router::policy::ir::{PolicyEffect, PolicyIR};
 use fusion_router::policy::precedence::PolicyPrecedenceEngine;
@@ -58,7 +57,7 @@ async fn policy_invariant_idempotence() {
 
     let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
     let ir = PolicyIR::from_ast(&ast).unwrap();
-    let pass = PolicyCompilerPass::new(ir);
+    let pass = PolicyCompilerPass::new(ir.into());
 
     let (input_ir, _) = create_sample_ir();
 
@@ -122,7 +121,7 @@ async fn policy_invariant_non_destructive_preservation() {
 
     let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
     let ir = PolicyIR::from_ast(&ast).unwrap();
-    let pass = PolicyCompilerPass::new(ir);
+    let pass = PolicyCompilerPass::new(ir.into());
 
     let (input_ir, original_node_id) = create_sample_ir();
     let output_ir = pass.apply(input_ir).await.unwrap();

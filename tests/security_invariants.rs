@@ -185,7 +185,7 @@ fn clean_workflow(plan_id: &str, node_id: &str, capability: &str) -> Value {
         "edges": [],
         "metadata": {
             "policy_applied": [],
-            "estimated_cost": 0.1,
+            "estimated_cost": 100_000_000,
             "estimated_tokens": 100
         }
     })
@@ -248,7 +248,7 @@ async fn law5_execution_plane_rejects_dangling_edge() {
         }],
         "metadata": {
             "policy_applied": [],
-            "estimated_cost": 0.1,
+            "estimated_cost": 100_000_000,
             "estimated_tokens": 100
         }
     });
@@ -270,7 +270,7 @@ async fn law5_execution_plane_rejects_over_budget() {
         &uuid::Uuid::new_v4().to_string(),
         "web.fetch",
     );
-    workflow["metadata"]["estimated_cost"] = json!(10_000.0);
+    workflow["metadata"]["estimated_cost"] = json!(10_000_000_000_000u64);
 
     let (status, body) = post_workflow(&addr, workflow).await;
     assert_eq!(status, 400, "over-budget workflow must be rejected: {body}");

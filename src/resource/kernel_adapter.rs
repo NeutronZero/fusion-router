@@ -82,7 +82,7 @@ impl fusion_kernel::resource::ResourceManager for KernelResourceManager {
     }
 
     async fn record_usage(&self, cost_nanos: fusion_core::NanoUSD, tokens: u64) {
-        self.inner.record_usage(cost_nanos.as_nanos() as u64, tokens).await
+        self.inner.record_usage(cost_nanos, tokens).await
     }
 }
 

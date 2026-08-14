@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def check_gate_01_planner_authority():
-    """Gate 01: Zero host planner implementations."""
+    """Gate 01: Canonical fusion-planner crate is single authoritative planning engine."""
     src_planner = ROOT / "src" / "planner"
     invalid_files = ["dynamic_planner.rs", "simple.rs"]
     for fname in invalid_files:
@@ -27,8 +27,16 @@ def check_gate_01_planner_authority():
         forbidden = ["fn build_quality(", "fn build_speed(", "fn build_balanced(", "fn build_exhaustive("]
         for fn in forbidden:
             if fn in content:
-                return False, f"Host fallback method '{fn}' still present"
-    return True, "No host fallback planner implementations"
+                return False, f"Host fallback method '{fn}' still present in intent_planner.rs"
+
+    crate_planner = ROOT / "crates" / "fusion-planner" / "src" / "lib.rs"
+    if crate_planner.exists():
+        content = crate_planner.read_text(encoding="utf-8")
+        forbidden_crate = ["fn build_quality(", "fn build_speed(", "fn build_balanced(", "fn build_exhaustive(", "fn plan_intent("]
+        for fn in forbidden_crate:
+            if fn in content:
+                return False, f"Hardcoded template '{fn}' still present in canonical fusion-planner crate"
+    return True, "Canonical snapshot-driven planner in fusion-planner"
 
 
 def check_gate_02_compiler_authority():
@@ -96,13 +104,20 @@ def check_gate_06_policy_authority():
 
 
 def check_gate_07_capability_authority():
-    """Gate 07: Single authoritative CapabilityRegistry/PluginManager source."""
+    """Gate 07: Single authoritative CapabilityRegistry/PluginManager source and startup lifecycle."""
     plugin_manager = ROOT / "src" / "plugin" / "manager.rs"
-    if plugin_manager.exists():
-        content = plugin_manager.read_text(encoding="utf-8")
-        if "pub struct PluginManager" in content:
-            return True, "PluginManager is single authoritative source"
-    return True, "Single CapabilityRegistry authority"
+    if not plugin_manager.exists():
+        return False, "src/plugin/manager.rs does not exist"
+    content = plugin_manager.read_text(encoding="utf-8")
+    if "pub struct PluginManager" not in content:
+        return False, "PluginManager struct not found"
+
+    main_rs = ROOT / "src" / "main.rs"
+    if main_rs.exists():
+        main_content = main_rs.read_text(encoding="utf-8")
+        if "load_manifests(" not in main_content or "freeze_capability_registry(" not in main_content:
+            return False, "PluginManager startup lifecycle not executed in main.rs"
+    return True, "PluginManager authority with executed startup lifecycle"
 
 
 def check_gate_08_streaming_authority():
@@ -123,14 +138,21 @@ def check_gate_08_streaming_authority():
 
 
 def check_gate_09_monetary_authority():
-    """Gate 09: Zero internal f64/millicost monetary fields in crates or SDKs."""
+    """Gate 09: Zero internal f64/millicost monetary fields across repository."""
     monetary_rs = ROOT / "crates" / "fusion-core" / "src" / "monetary.rs"
     if not monetary_rs.exists():
         return False, "NanoUSD type file does not exist"
 
-    f64_fields = ["estimated_cost", "total_cost", "max_daily_cost", "cost_per", "max_cost"]
+    # Verify zero occurrences of legacy cost_millicosts in any rust file
+    for rs_file in ROOT.rglob("*.rs"):
+        if "/target/" in str(rs_file).replace("\\", "/"):
+            continue
+        content = rs_file.read_text(encoding="utf-8")
+        if "cost_millicosts" in content:
+            rel_path = rs_file.relative_to(ROOT)
+            return False, f"Legacy field 'cost_millicosts' found in {rel_path}"
 
-    # Excluded crates: fusion-core (canonical), fusion-plugin-api (external API contract)
+    f64_fields = ["estimated_cost", "total_cost", "max_daily_cost", "cost_per", "max_cost"]
     excluded_crates = {"fusion-core", "fusion-plugin-api"}
 
     crates_dir = ROOT / "crates"
@@ -149,8 +171,6 @@ def check_gate_09_monetary_authority():
                 stripped = line.strip()
                 if stripped.startswith("//") or stripped.startswith("#[cfg(test)]"):
                     continue
-                # Only flag struct field declarations (pub field: type)
-                # Not method signatures (pub fn field(...)) or function params
                 if not re.match(r'^pub\s+\w+\s*:\s*', stripped):
                     continue
                 for field in f64_fields:
@@ -158,7 +178,7 @@ def check_gate_09_monetary_authority():
                         rel_path = rs_file.relative_to(ROOT)
                         return False, f"f64 monetary field '{field}' in {rel_path}"
 
-    return True, "NanoUSD is canonical integer monetary type"
+    return True, "NanoUSD is canonical integer monetary type across all crates and host"
 
 
 def check_gate_10_fallback_elimination():
@@ -182,8 +202,10 @@ def check_gate_10_fallback_elimination():
                 continue
             if "passthrough" in stripped.lower():
                 return False, "Strategy compiler contains passthrough in code"
+        if "Unregistered custom strategy" not in content:
+            return False, "Fail-closed custom strategy validation missing"
 
-    return True, "Zero strategy passthroughs or fallbacks"
+    return True, "Zero strategy passthroughs and fail-closed custom strategy validation"
 
 
 def check_gate_11_deterministic_compilation():

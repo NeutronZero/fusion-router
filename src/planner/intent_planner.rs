@@ -138,7 +138,13 @@ impl IntentPlanner {
         }
     }
 
-    fn plan_from_crates(&self, intent: &ExecutionIntent, model: &str) -> Option<WorkflowIR> {
+    fn plan_from_crates(
+        &self,
+        intent: &ExecutionIntent,
+        model: &str,
+        requirements: &Requirements,
+        policies: &[Policy],
+    ) -> Result<WorkflowIR, String> {
         let crates_intent = match intent {
             ExecutionIntent::Quality => fusion_planner::ExecutionIntent::Quality,
             ExecutionIntent::Speed => fusion_planner::ExecutionIntent::Speed,
@@ -149,80 +155,46 @@ impl IntentPlanner {
                 fusion_planner::ExecutionIntent::Constrained { max_cost: cost }
             }
         };
+
+        let mut policy_declarations = Vec::new();
+        for p in policies {
+            policy_declarations.push(fusion_planner::PolicyDeclarationSnapshot {
+                id: p.name.clone(),
+                name: p.name.clone(),
+                rule: format!("{:?}", p.actions),
+            });
+        }
+
         let req = fusion_planner::PlanningRequest {
             intent: crates_intent,
-            user_prompt: String::new(),
+            user_prompt: requirements.original_text.clone(),
             requested_model: Some(model.to_string()),
-            requirements: fusion_planner::RequirementsSnapshot::default(),
-            policies: fusion_planner::PolicySnapshot::default(),
-            capability_catalog: fusion_kernel::CapabilityCatalog::new(),
-            model_catalog: Self::to_fusion_core_catalog(&self.model_catalog),
+            requirements: fusion_planner::RequirementsSnapshot {
+                complexity: format!("{:?}", requirements.complexity),
+                execution_intent: None,
+                required_capabilities: vec![],
+            },
+            policies: fusion_planner::PolicySnapshot {
+                version: 1,
+                policies: policy_declarations,
+                created_at: 0,
+            },
+            capability_catalog: fusion_planner::CapabilityCatalogSnapshot::new(fusion_kernel::CapabilityCatalog::new()),
+            model_catalog: fusion_planner::ModelCatalogSnapshot::new(Self::to_fusion_core_catalog(&self.model_catalog)),
             telemetry: fusion_planner::RoutingTelemetrySnapshot::default(),
         };
         let planner = fusion_planner::IntentPlanner::new(Self::to_fusion_core_catalog(&self.model_catalog));
-        let contract = planner.plan(&req).ok()?;
-        let mut plan = crate::ir::adapter::workflow_to_types(&contract).ok()?;
-
-        let is_speed = matches!(intent, ExecutionIntent::Speed)
-            || matches!(intent, ExecutionIntent::Constrained { max_cost_usd: Some(v), .. } if *v < 0.02);
-        if is_speed {
-            let keep = plan.nodes.first().map(|node| node.id);
-            plan.nodes.retain(|node| Some(node.id) == keep);
-            plan.edges.clear();
-        }
-
-        let intent_for_model = match intent {
-            ExecutionIntent::Quality => ExecutionIntent::Quality,
-            ExecutionIntent::Speed => ExecutionIntent::Speed,
-            ExecutionIntent::Balanced => ExecutionIntent::Balanced,
-            ExecutionIntent::Exhaustive => ExecutionIntent::Exhaustive,
-            ExecutionIntent::Constrained { max_cost_usd, .. } => ExecutionIntent::Constrained {
-                max_latency_ms: None,
-                max_cost_usd: *max_cost_usd,
-                max_tokens: None,
-                min_confidence: None,
-            },
+        let contract = match planner.plan(&req) {
+            Ok(c) => c,
+            Err(e) => return Err(format!("fusion_planner error: {:?}", e)),
         };
-        for (index, node) in plan.nodes.iter_mut().enumerate() {
-            let step = match node.kind {
-                IRNodeKind::Judge => "judge",
-                IRNodeKind::Review => "review",
-                _ => "generate",
-            };
-            node.model = Some(self.resolve_model_for_step(step, &intent_for_model, model));
-            node.strategy = if index == 3 {
-                StrategyKind::Single
-            } else if index == 4 {
-                StrategyKind::Reflection
-            } else if matches!(intent, ExecutionIntent::Exhaustive) && index == 5 {
-                StrategyKind::Consensus
-            } else {
-                StrategyKind::Single
-            };
-            if matches!(node.kind, IRNodeKind::Review) && index != 4 && !(is_speed) {
-                node.kind = IRNodeKind::Judge;
-            }
-            if matches!(intent, ExecutionIntent::Exhaustive) && index == 5 {
-                node.kind = IRNodeKind::Judge;
+        let mut ir = crate::ir::adapter::workflow_to_types(&contract).map_err(|e| format!("adapter error: {}", e))?;
+        for node in &mut ir.nodes {
+            if node.model.is_none() {
+                node.model = Some(model.to_string());
             }
         }
-
-        let (policy, cost, tokens) = match intent {
-            ExecutionIntent::Quality => ("intent:quality", 0.05, 5000),
-            ExecutionIntent::Speed => ("intent:speed", 0.01, 1000),
-            ExecutionIntent::Balanced => ("intent:balanced", 0.03, 3000),
-            ExecutionIntent::Exhaustive => ("intent:exhaustive", 0.08, 8000),
-            ExecutionIntent::Constrained { max_cost_usd, .. }
-                if max_cost_usd.is_some_and(|v| v < 0.02) =>
-            {
-                ("intent:speed", 0.01, 1000)
-            }
-            ExecutionIntent::Constrained { .. } => ("intent:balanced", 0.03, 3000),
-        };
-        plan.metadata.policy_applied = vec![policy.to_string()];
-        plan.metadata.estimated_cost = NanoUSD::from_nanos((cost * 1_000_000_000.0) as u64);
-        plan.metadata.estimated_tokens = tokens;
-        Some(plan)
+        Ok(ir)
     }
 }
 
@@ -231,7 +203,7 @@ impl Planner for IntentPlanner {
     async fn plan(
         &self,
         requirements: &Requirements,
-        _policies: &[Policy],
+        policies: &[Policy],
         _evidence: Option<&EvidenceSnapshot>,
     ) -> WorkflowIR {
         let model = self.select_model(requirements);
@@ -243,8 +215,8 @@ impl Planner for IntentPlanner {
                 ComplexityLevel::Medium | ComplexityLevel::Low => ExecutionIntent::Speed,
             }
         });
-        self.plan_from_crates(&intent, &model)
-            .unwrap_or_else(|| panic!("Planning failure in fusion-planner for intent {:?}", intent))
+        self.plan_from_crates(&intent, &model, requirements, policies)
+            .unwrap_or_else(|e| panic!("Planning failure in fusion-planner for intent {:?}: {}", intent, e))
     }
 }
 

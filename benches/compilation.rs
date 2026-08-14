@@ -3,13 +3,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use fusion_router::compiler::passes::{
-    BudgetOptimisationPass, ConstraintValidationPass, ControlFlowValidationPass, ModelResolutionPass,
-};
-use fusion_router::compiler::{Compiler, DefaultCompiler};
+use fusion_router::compiler::{build_compiler, Compiler};
 use fusion_router::resource::DefaultResourceManager;
 use fusion_router::types::{
-    IRMetadata, IRNode, IRNodeKind, IREdge, Quota, StrategyKind, WorkflowIR,
+    IRMetadata, IRNode, IRNodeKind, IREdge, NanoUSD, Quota, StrategyKind, WorkflowIR,
 };
 
 fn build_large_ir(node_count: usize) -> WorkflowIR {
@@ -41,7 +38,7 @@ fn build_large_ir(node_count: usize) -> WorkflowIR {
         edges,
         metadata: IRMetadata {
             policy_applied: vec![],
-            estimated_cost: node_count as f64 * 0.01,
+            estimated_cost: NanoUSD::from_micros((node_count * 10) as u64).unwrap_or(NanoUSD::ZERO),
             estimated_tokens: node_count as u64 * 100,
         },
     }
@@ -51,21 +48,14 @@ fn bench_compilation(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     let quota = Quota {
-        max_daily_cost: 1_000_000.0,
+        max_daily_cost: NanoUSD::from_nanos(1_000_000_000_000_000),
         max_daily_tokens: 1_000_000_000,
         max_concurrent: 100,
         provider_limits: Default::default(),
     };
     let resource_manager = Arc::new(DefaultResourceManager::new(quota));
 
-    let compiler = DefaultCompiler {
-        passes: vec![
-            Box::new(ConstraintValidationPass),
-            Box::new(ControlFlowValidationPass),
-            Box::new(BudgetOptimisationPass { resource_manager }),
-            Box::new(ModelResolutionPass { model_catalog: Default::default(), model_requirements: None }),
-        ],
-    };
+    let compiler = build_compiler(Default::default(), resource_manager, None);
 
     c.bench_function("compile_10_nodes", |b| {
         let ir = build_large_ir(10);

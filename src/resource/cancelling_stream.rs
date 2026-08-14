@@ -101,7 +101,7 @@ impl MeteredStream {
                     prompt_tokens: 0,
                     completion_tokens: 0,
                     total_tokens: 0,
-                    cost_millicosts: 0,
+                    cost: crate::types::NanoUSD::ZERO,
                     ttfb_ms: None,
                     total_duration_ms: None,
                 });

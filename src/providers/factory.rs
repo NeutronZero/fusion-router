@@ -50,11 +50,11 @@ pub fn resolve_api_key(
         }
     }
 
-    // 3. Placeholder in debug/unsafe-dev
-    if cfg!(debug_assertions) || unsafe_dev {
+    // 3. Placeholder in unsafe-dev
+    if unsafe_dev {
         tracing::warn!(
             provider = %provider_name,
-            "no API key configured; using placeholder (debug/--unsafe-dev only)"
+            "no API key configured; using placeholder (--unsafe-dev only)"
         );
         return Ok(format!("test-key-{}", provider_name));
     }

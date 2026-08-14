@@ -255,12 +255,17 @@ async fn main() {
     }
     let ops_attestation_viewer = Arc::new(crate::operations::attestation_viewer::AttestationViewer::new(ops_verifier, ops_audit));
 
-    // Wire PluginManager startup lifecycle
+    // Wire PluginManager startup lifecycle: Discover -> Load -> Validate -> Initialize -> Register -> Activate
     let mut plugin_manager = crate::plugin::PluginManager::new();
-    tracing::info!("plugin manager initialized (Discover -> Load -> Validate -> Initialize -> Register -> Activate)");
-    // Phase E: plugin lifecycle runs here. For now, the manager starts empty.
-    // Future: discover plugin directories, load manifests, validate compatibility,
-    // initialize WASM modules, register strategies/providers/tools, activate.
+    plugin_manager.load_manifests("plugins");
+    if let Err(e) = plugin_manager.register_capability_plugin(&fusion_plugin_echo::EchoPlugin::new()) {
+        tracing::warn!("Failed to register built-in echo capability plugin: {e}");
+    }
+    let frozen_capability_registry = plugin_manager.freeze_capability_registry();
+    tracing::info!(
+        capabilities = frozen_capability_registry.list().len(),
+        "plugin manager startup lifecycle executed (Discover -> Load -> Validate -> Initialize -> Register -> Activate)"
+    );
     let _plugin_manager = plugin_manager;
 
     let ops_state = crate::operations::handlers::OperationsState {

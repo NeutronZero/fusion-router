@@ -17,7 +17,20 @@ use fusion_types::*;
 ///
 /// The pass does not transform the IR structurally — it only rejects invalid
 /// configurations at compile time rather than allowing runtime fallback.
-pub struct StrategyLoweringPass;
+#[derive(Default)]
+pub struct StrategyLoweringPass {
+    registered_custom: HashSet<String>,
+}
+
+impl StrategyLoweringPass {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_registered_custom(registered_custom: HashSet<String>) -> Self {
+        Self { registered_custom }
+    }
+}
 
 #[async_trait::async_trait]
 impl crate::CompilerPass for StrategyLoweringPass {
@@ -26,18 +39,6 @@ impl crate::CompilerPass for StrategyLoweringPass {
     }
 
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, crate::CompilerError> {
-        let supported: HashSet<StrategyKind> = [
-            StrategyKind::Single,
-            StrategyKind::Consensus,
-            StrategyKind::Reflection,
-            StrategyKind::Chain,
-            StrategyKind::Debate,
-            StrategyKind::ReAct,
-            StrategyKind::Fusion,
-        ]
-        .into_iter()
-        .collect();
-
         for node in &ir.nodes {
             match &node.strategy {
                 StrategyKind::Single => { /* baseline — always valid */ }
@@ -72,6 +73,13 @@ impl crate::CompilerPass for StrategyLoweringPass {
                             pass: "strategy_lowering".into(),
                             node_id: Some(node.id),
                             message: "Custom strategy must have a non-empty name".into(),
+                        });
+                    }
+                    if !self.registered_custom.contains(name) {
+                        return Err(crate::CompilerError::ValidationError {
+                            pass: "strategy_lowering".into(),
+                            node_id: Some(node.id),
+                            message: format!("Unregistered custom strategy '{}' has no registered StrategyCompiler delegate; compilation failed closed", name),
                         });
                     }
                 }
@@ -300,8 +308,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn custom_named_valid() {
-        let pass = StrategyLoweringPass;
+    async fn custom_unregistered_rejected() {
+        let pass = StrategyLoweringPass::new();
+        let ir = ir_with_strategy(
+            StrategyKind::Custom("unregistered_strat".into()),
+            HashMap::new(),
+        );
+        let err = pass.apply(ir).await.unwrap_err();
+        assert!(err.to_string().contains("Unregistered custom strategy"));
+    }
+
+    #[tokio::test]
+    async fn custom_registered_valid() {
+        let mut set = HashSet::new();
+        set.insert("my_strategy".into());
+        let pass = StrategyLoweringPass::with_registered_custom(set);
         let ir = ir_with_strategy(
             StrategyKind::Custom("my_strategy".into()),
             HashMap::new(),

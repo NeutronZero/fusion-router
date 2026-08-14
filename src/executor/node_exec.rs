@@ -129,7 +129,7 @@ impl DefaultExecutor {
     /// node with a tool allowlist) stays on the legacy src executor path,
     /// which owns the Law 7 tool-call machinery and runtime strategy
     /// expansion until crates parity exists for those (6.6 debt).
-    fn delegate_to_crates(&self, node: &ExecutionNode) -> bool {
+    pub(crate) fn delegate_to_crates(&self, node: &ExecutionNode) -> bool {
         node.subgraph.is_none()
             && node.strategy == StrategyKind::Single
             && !node.config.contains_key("tool_allowlist")

@@ -1,6 +1,6 @@
 use std::time::Instant;
 use crate::providers::ModelPricing;
-use crate::types::ChatStreamChunk;
+use crate::types::{ChatStreamChunk, NanoUSD};
 
 #[derive(Debug, Clone)]
 pub struct StreamMeter {
@@ -9,7 +9,7 @@ pub struct StreamMeter {
     first_chunk_at: Option<Instant>,
     last_chunk_at: Option<Instant>,
     stream_started_at: Instant,
-    cost_millicosts: u64,
+    cost: NanoUSD,
     finalized: bool,
 }
 
@@ -21,7 +21,7 @@ impl StreamMeter {
             first_chunk_at: None,
             last_chunk_at: None,
             stream_started_at: Instant::now(),
-            cost_millicosts: 0,
+            cost: NanoUSD::ZERO,
             finalized: false,
         }
     }
@@ -68,7 +68,7 @@ impl StreamMeter {
             prompt_tokens: self.prompt_tokens,
             completion_tokens: self.completion_tokens,
             total_tokens: self.prompt_tokens + self.completion_tokens,
-            cost_millicosts: self.cost_millicosts,
+            cost: self.cost,
             ttfb_ms,
             total_duration_ms,
         }
@@ -82,17 +82,15 @@ impl StreamMeter {
         self.completion_tokens
     }
 
-    pub fn cost_millicosts(&self) -> u64 {
-        self.cost_millicosts
+    pub fn cost(&self) -> NanoUSD {
+        self.cost
     }
 
     fn update_cost(&mut self, pricing: Option<&ModelPricing>) {
         if let Some(p) = pricing {
-            let prompt_cost =
-                (self.prompt_tokens as f64 / 1_000_000.0 * p.input_cost_per_1k * 1000.0) as u64;
-            let completion_cost =
-                (self.completion_tokens as f64 / 1_000_000.0 * p.output_cost_per_1k * 1000.0) as u64;
-            self.cost_millicosts = prompt_cost + completion_cost;
+            let prompt_nanos = (self.prompt_tokens as f64 * p.input_cost_per_1k * 1_000_000.0) as u64;
+            let completion_nanos = (self.completion_tokens as f64 * p.output_cost_per_1k * 1_000_000.0) as u64;
+            self.cost = NanoUSD::from_nanos(prompt_nanos + completion_nanos);
         }
     }
 }
@@ -102,13 +100,14 @@ pub struct StreamMeterReport {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
-    pub cost_millicosts: u64,
+    pub cost: NanoUSD,
     pub ttfb_ms: Option<u64>,
     pub total_duration_ms: Option<u64>,
 }
 
 fn estimate_tokens(s: &str) -> u64 {
-    (s.len() as f64 / 4.0).ceil() as u64
+    let char_count = s.chars().count() as u64;
+    (char_count + 3) / 4
 }
 
 #[cfg(test)]
@@ -117,30 +116,37 @@ mod tests {
     use crate::types::Usage;
 
     #[test]
-    fn test_initial_state() {
-        let meter = StreamMeter::new();
-        assert_eq!(meter.prompt_tokens(), 0);
-        assert_eq!(meter.completion_tokens(), 0);
-        assert!(meter.first_chunk_at.is_none());
-        assert!(meter.last_chunk_at.is_none());
+    fn test_estimate_tokens() {
+        assert_eq!(estimate_tokens(""), 0);
+        assert_eq!(estimate_tokens("a"), 1);
+        assert_eq!(estimate_tokens("hello world"), 3);
     }
 
     #[test]
-    fn test_record_chunk_accumulates_tokens() {
+    fn test_record_chunk_accumulates_content() {
         let mut meter = StreamMeter::new();
-        let chunk = ChatStreamChunk {
-            content: Some("Hello world".to_string()),
+        let chunk1 = ChatStreamChunk {
+            content: Some("Hello ".to_string()),
             finish_reason: None,
             usage: None,
         };
-        meter.record_chunk(&chunk, None);
-        assert_eq!(meter.completion_tokens(), 3);
-        assert_eq!(meter.prompt_tokens(), 0);
+        let chunk2 = ChatStreamChunk {
+            content: Some("world!".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        meter.record_chunk(&chunk1, None);
+        assert_eq!(meter.completion_tokens(), 2);
+        meter.record_chunk(&chunk2, None);
+        assert_eq!(meter.completion_tokens(), 4);
     }
 
     #[test]
-    fn test_record_chunk_sets_first_chunk_at() {
+    fn test_first_and_last_chunk_timing() {
         let mut meter = StreamMeter::new();
+        assert!(meter.first_chunk_at.is_none());
+        assert!(meter.last_chunk_at.is_none());
+
         let chunk = ChatStreamChunk {
             content: Some("a".to_string()),
             finish_reason: None,
@@ -186,7 +192,7 @@ mod tests {
         };
         meter.record_chunk(&chunk, Some(&pricing));
         let report = meter.finalize(Some(&pricing));
-        assert!(report.cost_millicosts > 0);
+        assert!(report.cost > NanoUSD::ZERO);
     }
 
     #[test]
@@ -241,6 +247,6 @@ mod tests {
         let report2 = meter.finalize(Some(&pricing));
         assert_eq!(report1.completion_tokens, report2.completion_tokens);
         assert_eq!(report1.total_tokens, report2.total_tokens);
-        assert_eq!(report1.cost_millicosts, report2.cost_millicosts);
+        assert_eq!(report1.cost, report2.cost);
     }
 }
