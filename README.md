@@ -18,6 +18,17 @@ Architecture is **converged**: authoritative logic lives under `crates/`. The ho
 
 ---
 
+## Why FusionRouter? (vs. LiteLLM / OpenRouter)
+
+Traditional LLM proxy routers perform dynamic, point-to-point dispatch based on runtime heuristics. FusionRouter compiles entire multi-model workflows into **deterministic execution graphs** before running them:
+
+- **Provable Determinism**: Identical inputs yield byte-identical canonical execution plans (`child_id v5` hashing, zero runtime entropy in planning/compilation).
+- **Compile-Time Financial & Policy Gates**: Hard spending envelopes and policy rules are validated during compilation. All accounting uses exact integer `NanoUSD` ($10^{-9}\text{ USD}$) arithmetic to eliminate floating-point drift.
+- **First-Class Deliberative Orchestration**: Built-in consensus, reflection, debate, chain, and ReAct subgraphs execute natively on an asynchronous DAG scheduler with topological dependency resolution.
+- **Fail-Closed Tool Execution**: Tool invocations are strictly allowlisted and sandboxed by default (ADR-037).
+
+---
+
 ## Quick start
 
 ### Prerequisites

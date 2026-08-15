@@ -971,7 +971,7 @@ impl Compiler for DefaultCompiler {
 /// policy pass appended at the end.
 ///
 /// Mandatory order (without policy):
-///   constraint_validation → control_flow_validation →
+///   constraint_validation → control_flow_validation → strategy_lowering →
 ///   dead_node_elimination → model_resolution → budget_optimisation
 ///
 /// When `policy_ir` is `Some`, the policy pass is appended last.

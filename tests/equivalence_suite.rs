@@ -435,3 +435,179 @@ async fn test_intent_planner_equivalence() {
     assert_eq!(monolith_constrained_high.nodes.len(), 3);
     assert_eq!(crate_constrained_high.nodes().len(), 3);
 }
+
+#[tokio::test]
+async fn test_dead_node_elimination_pass_equivalence() {
+    use fusion_compiler::DeadNodeEliminationPass;
+
+    let pass = DeadNodeEliminationPass;
+
+    // 1. Single node, no edges -> preserved
+    let n1 = Uuid::new_v4();
+    let edgeless_ir = WorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![IRNode {
+            id: n1,
+            kind: IRNodeKind::Generate,
+            strategy: StrategyKind::Single,
+            model: Some("gpt-4o".into()),
+            config: HashMap::new(),
+        }],
+        edges: vec![],
+        metadata: fusion_types::IRMetadata {
+            policy_version: 0,
+            policy_applied: vec![],
+            estimated_cost: fusion_types::NanoUSD::ZERO,
+            estimated_tokens: 100,
+        },
+    };
+    let out = pass.apply(edgeless_ir).await.expect("apply edgeless");
+    assert_eq!(out.nodes.len(), 1, "Edgeless single node must not be eliminated");
+
+    // 2. Connected DAG with 1 orphaned node -> orphan pruned
+    let n_root = Uuid::new_v4();
+    let n_child = Uuid::new_v4();
+    let n_orphan = Uuid::new_v4();
+    let orphan_ir = WorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![
+            IRNode { id: n_root, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: Some("gpt-4o".into()), config: HashMap::new() },
+            IRNode { id: n_child, kind: IRNodeKind::Review, strategy: StrategyKind::Single, model: Some("claude-3-5".into()), config: HashMap::new() },
+            IRNode { id: n_orphan, kind: IRNodeKind::Transform, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+        ],
+        edges: vec![IREdge { from: n_root, to: n_child, condition: None }],
+        metadata: fusion_types::IRMetadata {
+            policy_version: 0,
+            policy_applied: vec![],
+            estimated_cost: fusion_types::NanoUSD::ZERO,
+            estimated_tokens: 200,
+        },
+    };
+    let out_orphan = pass.apply(orphan_ir).await.expect("apply orphan");
+    assert_eq!(out_orphan.nodes.len(), 2, "Orphaned node must be eliminated");
+    assert!(out_orphan.nodes.iter().any(|n| n.id == n_root));
+    assert!(out_orphan.nodes.iter().any(|n| n.id == n_child));
+    assert!(!out_orphan.nodes.iter().any(|n| n.id == n_orphan));
+}
+
+#[tokio::test]
+async fn test_budget_optimisation_pass_equivalence() {
+    use fusion_compiler::BudgetOptimisationPass;
+    use fusion_kernel::resource::{StubResourceManager, Quota};
+    use std::sync::Arc;
+
+    // 1. Ample budget -> accepted
+    let rm_ample = Arc::new(StubResourceManager::new(Quota {
+        max_daily_cost: fusion_core::NanoUSD::from_nanos(100_000_000_000), // $100
+        max_daily_tokens: 1_000_000,
+    }));
+    let pass_ample = BudgetOptimisationPass { resource_manager: rm_ample };
+    let ir_small = WorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![IRNode { id: Uuid::new_v4(), kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() }],
+        edges: vec![],
+        metadata: fusion_types::IRMetadata {
+            policy_version: 0,
+            policy_applied: vec![],
+            estimated_cost: fusion_types::NanoUSD::from_nanos(10_000_000), // $0.01
+            estimated_tokens: 500,
+        },
+    };
+    assert!(pass_ample.apply(ir_small.clone()).await.is_ok(), "Small IR must pass within ample budget");
+
+    // 2. Exhausted daily quota -> rejected
+    let rm_exhausted = Arc::new(StubResourceManager::new(Quota {
+        max_daily_cost: fusion_core::NanoUSD::ZERO,
+        max_daily_tokens: 0,
+    }));
+    let pass_exhausted = BudgetOptimisationPass { resource_manager: rm_exhausted };
+    let err = pass_exhausted.apply(ir_small).await;
+    assert!(err.is_err(), "Budget pass must reject when ResourceManager cannot afford IR");
+}
+
+#[test]
+fn test_budget_envelope_spend_accumulation_equivalence() {
+    use fusion_types::{BudgetEnvelope, BudgetExceededError};
+    use fusion_core::NanoUSD;
+
+    let envelope = BudgetEnvelope::new(NanoUSD::from_nanos(50_000_000), 5_000, 3);
+
+    // Initial spend
+    assert!(envelope.record_and_check(NanoUSD::from_nanos(20_000_000), 2_000).is_ok());
+    assert_eq!(envelope.spent_cost().as_nanos(), 20_000_000);
+    assert_eq!(envelope.spent_tokens(), 2_000);
+
+    // Shared thread clone
+    let cloned = envelope.clone();
+    assert!(cloned.record_and_check(NanoUSD::from_nanos(20_000_000), 2_000).is_ok());
+    assert_eq!(envelope.spent_cost().as_nanos(), 40_000_000);
+    assert_eq!(envelope.spent_tokens(), 4_000);
+
+    // Cost limit breach
+    let err = envelope.record_and_check(NanoUSD::from_nanos(20_000_000), 100).unwrap_err();
+    assert_eq!(err, BudgetExceededError::Cost { spent: 60_000_000, max: 50_000_000 });
+
+    // Iteration limits
+    let iter_env = BudgetEnvelope::new(NanoUSD::from_nanos(100_000_000), 100_000, 2);
+    assert!(iter_env.increment_iteration().is_ok());
+    assert!(iter_env.increment_iteration().is_ok());
+    assert_eq!(iter_env.increment_iteration().unwrap_err(), BudgetExceededError::Iterations { current: 3, max: 2 });
+}
+
+#[test]
+fn test_strategy_expansion_equivalence() {
+    use fusion_compiler::strategy_expansion::expanded_subgraph;
+    use fusion_types::{ExecutionNode, ExecutionNodeKind, RetryPolicy};
+
+    let node_consensus = ExecutionNode {
+        id: Uuid::new_v4(),
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Consensus,
+        model: "gpt-4o".into(),
+        retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+        fallback: None,
+        config: HashMap::from([("members".into(), serde_json::json!(["gpt-4o", "claude-3-5-sonnet"]))]),
+        subgraph: None,
+    };
+
+    let consensus_subgraph = expanded_subgraph(&node_consensus).expect("expanded consensus subgraph");
+    // Consensus with 2 generator models + 1 judge = 3 nodes, 2 edges
+    assert_eq!(consensus_subgraph.nodes.len(), 3, "Consensus must expand to N generators + 1 judge");
+    assert_eq!(consensus_subgraph.edges.len(), 2, "Each generator must connect to the judge");
+
+    let node_reflection = ExecutionNode {
+        id: Uuid::new_v4(),
+        kind: ExecutionNodeKind::LLMGenerate,
+        strategy: StrategyKind::Reflection,
+        model: "gpt-4o".into(),
+        retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+        fallback: None,
+        config: HashMap::new(),
+        subgraph: None,
+    };
+
+    let reflection_subgraph = expanded_subgraph(&node_reflection).expect("expanded reflection subgraph");
+    // Reflection: Generator -> Reviewer (2 nodes, 1 edge)
+    assert_eq!(reflection_subgraph.nodes.len(), 2, "Reflection must expand to generator + reviewer");
+    assert_eq!(reflection_subgraph.edges.len(), 1, "Generator must connect to reviewer");
+}
+
+#[test]
+fn test_capability_system_equivalence() {
+    use fusion_kernel::{CapabilityCatalog, CapabilitySystem};
+
+    let catalog = CapabilityCatalog::new();
+    assert!(catalog.supports("Vision"));
+    assert!(catalog.supports("MCP"));
+    assert!(catalog.supports("ToolCalling"));
+    assert!(catalog.supports("Reasoning"));
+    assert!(!catalog.supports("NonExistentCapability"));
+
+    let system = CapabilitySystem::new();
+    assert!(system.supports("Vision"));
+    assert!(system.supports("ToolUse"));
+    assert!(system.supports("Reasoning"));
+    assert!(system.supports("Search"));
+    assert!(!system.supports("NonExistentCapability"));
+}
+

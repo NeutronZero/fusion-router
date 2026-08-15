@@ -39,7 +39,49 @@ async fn test_performance_slo_certification_suite() {
     assert!(compiler_dur_ms < 20, "Compiler latency must be < 20ms (actual: {compiler_dur_ms}ms)");
     assert_eq!(report.passes_executed.len(), 5);
 
-    // 3. Replay Engine Latency SLO Target (< 20 ms)
+    // 3. Scheduler Latency SLO Target (< 5 ms)
+    let _start_lower = Instant::now();
+    let graph = std::sync::Arc::new(
+        fusion_compiler::lower_to_graph(exec_ir.clone()).expect("Lower to graph"),
+    );
+    let scheduler = fusion_scheduler::DefaultScheduler::new();
+    struct FastMockExecutor;
+    #[async_trait::async_trait]
+    impl fusion_scheduler::Executor for FastMockExecutor {
+        async fn execute_node(
+            &self,
+            _node: &fusion_types::ExecutionNode,
+            _ctx: &fusion_types::NodeExecContext,
+        ) -> fusion_types::NodeExecutionResult {
+            fusion_types::NodeExecutionResult {
+                state: fusion_types::NodeState::Succeeded,
+                usage: Some(fusion_types::Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                }),
+                latency_ms: 0,
+                output: Some(serde_json::json!({"status": "ok"})),
+            }
+        }
+    }
+    let start_scheduler = Instant::now();
+    let sched_outcome = scheduler.run(graph.clone(), &FastMockExecutor).await.expect("Scheduler run");
+    let scheduler_dur_ms = start_scheduler.elapsed().as_millis();
+    assert!(scheduler_dur_ms < 5, "Scheduler latency must be < 5ms (actual: {scheduler_dur_ms}ms)");
+    assert!(sched_outcome.success);
+
+    // 4. Runtime Overhead SLO Target (< 10 ms overhead above provider call)
+    let mock_provider: std::sync::Arc<dyn fusion_runtime::ChatProvider> =
+        std::sync::Arc::new(fusion_runtime::MockProvider::default_response());
+    let runtime_engine = fusion_runtime::RuntimeEngine::new(mock_provider);
+    let start_runtime = Instant::now();
+    let runtime_outcome = runtime_engine.run(graph).await.expect("Runtime run");
+    let runtime_dur_ms = start_runtime.elapsed().as_millis();
+    assert!(runtime_dur_ms < 10, "Runtime overhead must be < 10ms (actual: {runtime_dur_ms}ms)");
+    assert!(runtime_outcome.success);
+
+    // 5. Replay Engine Latency SLO Target (< 20 ms)
     let record = ExecutionRecord {
         execution_id: ExecutionId::new(),
         session_id: "s-slo".to_string(),
@@ -71,3 +113,4 @@ async fn test_performance_slo_certification_suite() {
     assert!(replay_dur_ms < 20, "Replay latency must be < 20ms (actual: {replay_dur_ms}ms)");
     assert!(res.is_deterministic);
 }
+
