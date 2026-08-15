@@ -1,12 +1,9 @@
-//! Bridge between the src provider/tool interfaces and `fusion_runtime`
+//! Bridge between the src provider interfaces and `fusion_runtime`
 //! (Phase 6.4 executor delegation).
 //!
 //! - `FusionChatProvider` adapts `crate::providers::ChatProvider` to the
 //!   `fusion_runtime::ChatProvider` contract, preserving the failure wording
 //!   (`"Provider error: …"`) the src executor has always surfaced.
-//! - `FusionTool` adapts `crate::tools::Tool` to `fusion_runtime::Tool` so
-//!   the src tool registry can be handed to `fusion_runtime::ProviderExecutor`
-//!   (Law 7 / ADR-037 allowlist enforcement stays in the runtime loop).
 //!
 //! The bridge is cheap: no provider state, only `Arc` clones, so it may be
 //! rebuilt per node execution without meaningful overhead.
@@ -132,54 +129,9 @@ impl fusion_runtime::ChatProvider for FusionChatProvider {
     }
 }
 
-/// Adapts a src `Tool` to the `fusion_runtime::Tool` contract.
-pub struct FusionTool {
-    inner: Arc<dyn crate::tools::Tool + Send + Sync>,
-}
-
-impl FusionTool {
-    pub fn new(inner: Arc<dyn crate::tools::Tool + Send + Sync>) -> Self {
-        Self { inner }
-    }
-}
-
-#[async_trait]
-impl fusion_runtime::Tool for FusionTool {
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    fn description(&self) -> &str {
-        self.inner.description()
-    }
-
-    async fn execute(&self, arguments: serde_json::Value) -> Result<serde_json::Value, String> {
-        self.inner.execute(arguments).await
-    }
-}
-
-/// Registers every tool from a src `ToolRegistry` into a fresh
-/// `fusion_runtime::ToolRegistry` (Law 7: the runtime only executes
-/// allowlisted, registered tools — registration itself is inert).
-pub fn connect_tools(src: Option<Arc<crate::tools::ToolRegistry>>) -> fusion_runtime::ToolRegistry {
-    let mut registry = fusion_runtime::ToolRegistry::new();
-    if let Some(src) = src {
-        for name in src.list() {
-            if let Some(tool) = src.get(name) {
-                registry.register(Arc::new(FusionTool::new(tool.clone())));
-            }
-        }
-    }
-    registry
-}
-
 /// Re-exports the `fusion_runtime::ChatProvider` trait alias so callers do
 /// not need to spell the fully-qualified path twice.
 pub use fusion_runtime::ChatProvider as FusionRuntimeChatProvider;
-
-/// Marker string used by the crates scheduler for client-cancelled nodes.
-/// Retry loops must never retry these (the scheduler already raced the token).
-pub const CANCELLED_MARKER: &str = "Cancelled by client";
 
 #[cfg(test)]
 mod tests {
@@ -271,14 +223,5 @@ mod tests {
             .await
             .expect_err("must fail");
         assert_eq!(err, "Provider error: provider exploded");
-    }
-
-    #[tokio::test]
-    async fn connect_tools_registers_all_src_tools() {
-        let mut src = crate::tools::ToolRegistry::new();
-        src.register(Arc::new(crate::tools::builtin::CalculatorTool));
-        let registry = connect_tools(Some(Arc::new(src)));
-        assert!(registry.contains("calculator"));
-        assert_eq!(registry.names(), vec!["calculator".to_string()]);
     }
 }
