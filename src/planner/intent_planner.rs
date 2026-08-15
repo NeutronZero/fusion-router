@@ -103,11 +103,12 @@ impl IntentPlanner {
             (avg_latency_ms, error_rate.clamp(0.0, 1.0), healthy)
         }).unwrap_or((0, 0.0, 0));
 
+        let requested_strategy_str = requirements.requested_strategy.as_ref().map(|s| s.kind.clone());
         let req = fusion_planner::PlanningRequest {
             intent: crates_intent.clone(),
             user_prompt: requirements.original_text.clone(),
-            requested_model: None,
-            requested_strategy: None,
+            requested_model: requirements.requested_model.clone(),
+            requested_strategy: requested_strategy_str,
             strategy_config: None,
             requirements: fusion_planner::RequirementsSnapshot {
                 complexity: format!("{:?}", requirements.complexity),
@@ -179,6 +180,7 @@ mod tests {
             output_preferences: None,
             model_requirements: None,
             requested_strategy: None,
+            requested_model: None,
         }
     }
 

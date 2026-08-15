@@ -18,6 +18,7 @@ pub trait Compiler: Send + Sync {
 
 pub struct DefaultCompiler {
     pub passes: Vec<Box<dyn CompilerPass + Send + Sync>>,
+    pub custom_compilers: std::collections::HashMap<String, std::sync::Arc<dyn fusion_compiler::strategy_compiler::StrategyCompiler>>,
 }
 
 /// Phase 6 adapts a `fusion_compiler` pass onto the host-side `CompilerPass`
@@ -71,7 +72,7 @@ pub fn build_compiler(
             ir.into(),
         )))));
     }
-    DefaultCompiler { passes }
+    DefaultCompiler { passes, custom_compilers: std::collections::HashMap::new() }
 }
 
 #[async_trait]
@@ -102,7 +103,7 @@ impl Compiler for DefaultCompiler {
         // (`fusion_compiler::lower_to_graph`), which attaches compile-time
         // strategy subgraphs (Consensus) — the same production path the
         // workspace tests exercise.
-        fusion_compiler::lower_to_graph(current)
+        fusion_compiler::lower_to_graph_with_compilers(current, &self.custom_compilers)
     }
 }
 
@@ -154,6 +155,7 @@ mod tests {
         let ir = test_ir();
         let compiler = DefaultCompiler {
             passes: vec![Box::new(FailPass)],
+            custom_compilers: std::collections::HashMap::new(),
         };
 
         let result = compiler.compile(ir).await;

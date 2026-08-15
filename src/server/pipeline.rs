@@ -80,6 +80,7 @@ impl PipelineStep<ContextSnapshot, Requirements> for RequirementsExtractionStep 
         reqs.execution_intent = ctx.request.execution.clone();
         reqs.output_preferences = ctx.request.output.clone();
         reqs.requested_strategy = ctx.request.strategy.clone();
+        reqs.requested_model = Some(ctx.request.model.clone());
         ctx.requirements = Some(reqs.clone());
         Ok(reqs)
     }

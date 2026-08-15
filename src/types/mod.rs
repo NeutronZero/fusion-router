@@ -128,6 +128,8 @@ pub struct Requirements {
     pub output_preferences: Option<OutputPreferences>,
     #[serde(default)]
     pub requested_strategy: Option<RequestStrategy>,
+    #[serde(default)]
+    pub requested_model: Option<String>,
     #[serde(default, skip)]
     pub model_requirements: Option<crate::providers::ModelRequirements>,
 }

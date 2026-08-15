@@ -275,6 +275,7 @@ mod tests {
             output_preferences: None,
             model_requirements: None,
             requested_strategy: None,
+            requested_model: None,
         };
         reqs.execution_intent = request.execution.clone();
         reqs.output_preferences = request.output.clone();

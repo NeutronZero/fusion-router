@@ -15,6 +15,10 @@ pub fn expanded_subgraph(node: &ExecutionNode) -> Option<ExecutionSubgraph> {
 }
 
 /// Returns the prebuilt subgraph for a strategy node, allowing custom strategy compiler delegate.
+///
+/// For `Custom` strategies, a delegate compiler **must** be provided. Calling
+/// with `None` for a `Custom` node returns `None` — the fallback
+/// `expand_custom` path is only available through `compile_custom_subgraph`.
 pub fn expanded_subgraph_with_custom(
     node: &ExecutionNode,
     custom_compiler: Option<&dyn crate::strategy_compiler::StrategyCompiler>,
@@ -28,12 +32,38 @@ pub fn expanded_subgraph_with_custom(
         StrategyKind::ReAct => Some(expand_react(node)),
         StrategyKind::Fusion => Some(expand_fusion(node)),
         StrategyKind::Custom(custom_name) => {
-            if let Some(compiler) = custom_compiler {
-                Some(compiler.compile_subgraph(node, custom_name))
-            } else {
-                Some(expand_custom(node, custom_name))
-            }
+            custom_compiler.map(|c| c.compile_subgraph(node, custom_name))
         }
+    }
+}
+
+/// Expand a `Custom` strategy node using a registered compiler delegate.
+///
+/// Returns `None` if the name is empty. Panics if no compiler is provided —
+/// Custom strategies must always go through a registered delegate.
+pub fn compile_custom_subgraph(
+    node: &ExecutionNode,
+    custom_name: &str,
+    compiler: &dyn crate::strategy_compiler::StrategyCompiler,
+) -> ExecutionSubgraph {
+    compiler.compile_subgraph(node, custom_name)
+}
+
+/// Expand all strategies (including Custom) using a map of registered compilers.
+///
+/// This is the structurally-mandatory entry point for `lower_to_graph`.
+pub fn expanded_subgraph_with_compilers(
+    node: &ExecutionNode,
+    custom_compilers: &std::collections::HashMap<String, std::sync::Arc<dyn crate::strategy_compiler::StrategyCompiler>>,
+) -> Option<ExecutionSubgraph> {
+    match &node.strategy {
+        StrategyKind::Custom(custom_name) => {
+            custom_compilers.get(custom_name).map(|c| {
+                let arc: &dyn crate::strategy_compiler::StrategyCompiler = c.as_ref();
+                compile_custom_subgraph(node, custom_name, arc)
+            })
+        }
+        _ => expanded_subgraph(node),
     }
 }
 
@@ -381,20 +411,34 @@ mod tests {
 
     #[test]
     fn total_strategy_expansion_all_variants() {
-        let variants = vec![
+        let built_in = vec![
             StrategyKind::Consensus,
             StrategyKind::Reflection,
             StrategyKind::Chain,
             StrategyKind::Debate,
             StrategyKind::ReAct,
             StrategyKind::Fusion,
-            StrategyKind::Custom("my_custom".into()),
         ];
 
-        for kind in variants {
+        for kind in built_in {
             let node = make_node(kind.clone());
             let sg = expanded_subgraph(&node).expect(&format!("Strategy {kind:?} must expand"));
             assert!(!sg.nodes.is_empty(), "Expanded subgraph for {kind:?} must not be empty");
         }
+
+        // Custom requires a registered delegate — expanded_subgraph returns None.
+        let custom_node = make_node(StrategyKind::Custom("my_custom".into()));
+        assert!(expanded_subgraph(&custom_node).is_none(), "Custom without delegate must return None");
+
+        // With a delegate, Custom expands via expanded_subgraph_with_custom.
+        struct MockCustomCompiler;
+        impl crate::strategy_compiler::StrategyCompiler for MockCustomCompiler {
+            fn compile_subgraph(&self, node: &ExecutionNode, _name: &str) -> ExecutionSubgraph {
+                expand_custom(node, _name)
+            }
+        }
+        let sg = expanded_subgraph_with_custom(&custom_node, Some(&MockCustomCompiler))
+            .expect("Custom with delegate must expand");
+        assert!(!sg.nodes.is_empty(), "Expanded subgraph for Custom must not be empty");
     }
 }

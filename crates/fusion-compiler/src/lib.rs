@@ -328,6 +328,16 @@ fn three_color_cycle_detect(edges: &[(uuid::Uuid, uuid::Uuid)]) -> Result<(), uu
 // ---------------------------------------------------------------------------
 
 pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
+    lower_to_graph_with_compilers(ir, &std::collections::HashMap::new())
+}
+
+/// Lower a `WorkflowIR` to an `ExecutionGraph`, using registered custom
+/// strategy compilers for `Custom` nodes. This is the structurally-mandatory
+/// entry point — `Custom` strategies require a registered delegate.
+pub fn lower_to_graph_with_compilers(
+    ir: WorkflowIR,
+    custom_compilers: &std::collections::HashMap<String, std::sync::Arc<dyn strategy_compiler::StrategyCompiler>>,
+) -> Result<ExecutionGraph, CompilerError> {
     let mut exec_nodes = Vec::new();
     let mut exec_edges = Vec::new();
 
@@ -358,7 +368,8 @@ pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
         };
         // Phase 3.5: attach prebuilt subgraph for non-Single strategies so the
         // Phase 4 runtime subgraph path is the production path for Consensus.
-        node.subgraph = strategy_expansion::expanded_subgraph(&node);
+        // Custom strategies require a registered delegate compiler.
+        node.subgraph = strategy_expansion::expanded_subgraph_with_compilers(&node, custom_compilers);
         exec_nodes.push(node);
     }
 
@@ -398,6 +409,7 @@ pub struct CompilerEngine {
     passes: Vec<Box<dyn CompilerPass>>,
     resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>,
     score_sources: score::ScoreSources,
+    custom_compilers: std::collections::HashMap<String, std::sync::Arc<dyn strategy_compiler::StrategyCompiler>>,
 }
 
 impl CompilerEngine {
@@ -413,7 +425,7 @@ impl CompilerEngine {
             Box::new(ModelResolutionPass::new(ModelCatalog::default())),
             Box::new(BudgetOptimisationPass { resource_manager: resource_manager.clone() }),
         ];
-        Self { passes, resource_manager, score_sources: score::ScoreSources::default() }
+        Self { passes, resource_manager, score_sources: score::ScoreSources::default(), custom_compilers: std::collections::HashMap::new() }
     }
 
     pub fn with_model_catalog(model_catalog: ModelCatalog) -> Self {
@@ -425,12 +437,19 @@ impl CompilerEngine {
             Box::new(ModelResolutionPass::new(model_catalog)),
             Box::new(BudgetOptimisationPass { resource_manager: rm.clone() }),
         ];
-        Self { passes, resource_manager: rm, score_sources: score::ScoreSources::default() }
+        Self { passes, resource_manager: rm, score_sources: score::ScoreSources::default(), custom_compilers: std::collections::HashMap::new() }
     }
 
     /// Creates an engine with an empty pass list and the given resource manager.
     pub fn with_resource_manager_custom(resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>) -> Self {
-        Self { passes: Vec::new(), resource_manager, score_sources: score::ScoreSources::default() }
+        Self { passes: Vec::new(), resource_manager, score_sources: score::ScoreSources::default(), custom_compilers: std::collections::HashMap::new() }
+    }
+
+    /// Register a custom strategy compiler delegate. The compiler is used during
+    /// `lower_to_graph` to expand `Custom` strategy nodes.
+    pub fn register_custom_compiler(mut self, name: impl Into<String>, compiler: std::sync::Arc<dyn strategy_compiler::StrategyCompiler>) -> Self {
+        self.custom_compilers.insert(name.into(), compiler);
+        self
     }
 
     /// Replaces the pluggable route scorers (defaults are static/offline).
@@ -559,7 +578,7 @@ impl CompilerEngine {
 
         let provider_comparison = Self::build_provider_comparison(&route_scores);
 
-        let graph = lower_to_graph(current_ir).map_err(|e| PlatformError::Compiler {
+        let graph = lower_to_graph_with_compilers(current_ir, &self.custom_compilers).map_err(|e| PlatformError::Compiler {
             code: "LOWER_ERROR".to_string(),
             message: format!("Failed to lower IR to graph: {}", e),
             recovery_suggestion: "Check IR validity".to_string(),

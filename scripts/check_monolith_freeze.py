@@ -65,21 +65,22 @@ def check_gate_02_compiler_authority():
 
 
 def check_gate_03_strategy_authority():
-    """Gate 03: Zero host strategy execution in src/executor."""
+    """Gate 03: Zero host strategy execution in the entire src/executor tree."""
     src_executor = ROOT / "src" / "executor"
+    # Files that are only compiled inside #[cfg(test)] modules.
+    test_only_files = {"tool_loop.rs"}
     forbidden = ["resolve_strategy", "expanded_subgraph", "execute_legacy", "execute_native_tool_calls",
                  "provider.chat_completion", "subgraph traversal", "strategy execution"]
-    for rs_file in src_executor.glob("*.rs"):
-        if rs_file.name == "mod.rs":
+    for rs_file in src_executor.rglob("*.rs"):
+        if rs_file.name in test_only_files:
             continue
-        if rs_file.name == "tool_loop.rs":
-            # tool_loop is compiled only by the executor unit-test module.
-            continue
+        rel = rs_file.relative_to(ROOT)
         content = rs_file.read_text(encoding="utf-8")
+        # Split at the first #[cfg(test)] to isolate production code.
         production = content.split("#[cfg(test)]", 1)[0]
         for marker in forbidden:
             if marker in production:
-                return False, f"Host executor semantic marker '{marker}' remains in {rs_file.name}"
+                return False, f"Host executor semantic marker '{marker}' remains in {rel}"
     return True, "Host executor contains only runtime delegation adapters"
 
 
@@ -235,6 +236,24 @@ def check_gate_10_fallback_elimination():
                 return False, "Strategy compiler contains passthrough in code"
         if "Unregistered custom strategy" not in content:
             return False, "Fail-closed custom strategy validation missing"
+
+    # Verify Custom strategy has no generic fallback in expansion.
+    if strat_exp.exists():
+        content = strat_exp.read_text(encoding="utf-8")
+        # The only allowed expansion for Custom is via a registered delegate.
+        if "expand_custom(node, custom_name)" in content.split("pub fn expanded_subgraph_with_custom")[1].split("}")[0] if "expanded_subgraph_with_custom" in content else "":
+            return False, "Custom strategy still has a generic fallback expansion"
+
+    # No production expanded_subgraph() calls outside crates/ and tests.
+    for rs_file in (ROOT / "src").rglob("*.rs"):
+        rel = rs_file.relative_to(ROOT)
+        normalized = str(rel).replace("\\", "/")
+        if normalized.startswith("target/"):
+            continue
+        content = rs_file.read_text(encoding="utf-8")
+        production = content.split("#[cfg(test)]", 1)[0]
+        if "expanded_subgraph(" in production:
+            return False, f"Production expanded_subgraph() call in {rel}"
 
     return True, "Zero strategy passthroughs and fail-closed custom strategy validation"
 

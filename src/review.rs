@@ -28,7 +28,7 @@ use crate::strategies::single::SingleStrategy;
 use crate::strategies::Strategy;
 use crate::tools::builtin::{CalculatorTool, FileReadTool};
 use crate::tools::{HTTPRequestTool, ShellCommandTool, ToolRegistry};
-use crate::types::{ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata, ReservationId, RetryPolicy, StrategyKind};
+use crate::types::{GraphMetadata, ReservationId, StrategyKind};
 
 /// Builds the same provider registry the main server uses.
 pub fn build_provider_registry(
@@ -238,31 +238,33 @@ pub async fn run(args: ReviewArgs) -> anyhow::Result<()> {
     node_config.insert("tool_allowlist".into(), serde_json::json!(["file_read", "calculator"]));
 
     let judge_model = member_models.last().cloned().unwrap_or_else(|| "zen/deepseek-v4-flash-free".into());
-    let mut node = ExecutionNode {
-        id: Uuid::new_v4(),
-        kind: ExecutionNodeKind::LLMGenerate,
-        strategy: StrategyKind::Consensus,
-        model: judge_model.clone(),
-        retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
-        fallback: None,
-        config: node_config,
-        subgraph: None,
-    };
-    // Phase 6: compile-time expansion comes from the crates compiler
-    // (Consensus) — same production path as `build_compiler`.
-    let subgraph = fusion_compiler::strategy_expansion::expanded_subgraph(&node)
-        .ok_or_else(|| anyhow::anyhow!("consensus expansion produced no subgraph"))?;
-    node.subgraph = Some(subgraph);
 
-    let graph = ExecutionGraph {
-        graph_id: Uuid::new_v4(),
-        nodes: vec![node],
+    // Build a minimal WorkflowIR and compile through the standard pipeline
+    // (Phase 6) — strategy expansion is handled by lower_to_graph, not by
+    // direct expanded_subgraph calls from the host.
+    let node_id = Uuid::new_v4();
+    let ir = fusion_types::WorkflowIR {
+        plan_id: Uuid::new_v4(),
+        nodes: vec![fusion_types::IRNode {
+            id: node_id,
+            kind: fusion_types::IRNodeKind::Generate,
+            strategy: StrategyKind::Consensus,
+            model: Some(judge_model.clone()),
+            config: node_config,
+        }],
         edges: vec![],
-        metadata: GraphMetadata { estimated_cost: crate::types::NanoUSD::ZERO, estimated_tokens: 0, policy_version: 0, max_depth: 0, node_count: 1 },
-        total_tokens: 0,
-        total_cost: crate::types::NanoUSD::ZERO,
-        primitive_graph_hash: 0,
+        metadata: fusion_types::IRMetadata {
+            policy_version: 0,
+            policy_applied: vec![],
+            estimated_cost: crate::types::NanoUSD::ZERO,
+            estimated_tokens: 0,
+        },
     };
+    let mut graph = fusion_compiler::lower_to_graph(ir)
+        .map_err(|e| anyhow::anyhow!("consensus expansion failed: {}", e))?;
+    // Attach the review-specific metadata that lower_to_graph doesn't set.
+    graph.graph_id = Uuid::new_v4();
+    graph.metadata = GraphMetadata { estimated_cost: crate::types::NanoUSD::ZERO, estimated_tokens: 0, policy_version: 0, max_depth: 0, node_count: 1 };
 
     tracing::info!(
         members = ?member_models,
