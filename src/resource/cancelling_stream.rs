@@ -47,6 +47,7 @@ pub struct MeteredStream {
     meter: Arc<Mutex<StreamMeter>>,
     guard: Option<ResourceGuard>,
     pricing: Option<ModelPricing>,
+    budget_envelope: Option<fusion_types::BudgetEnvelope>,
     on_finish: Option<StreamFinishHook>,
 }
 
@@ -61,9 +62,34 @@ impl Stream for MeteredStream {
         }
         match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
+                let mut breached = false;
+                let mut breach_err = None;
+
                 if let Ok(mut meter) = self.meter.lock() {
                     meter.record_chunk(&chunk, self.pricing.as_ref());
+
+                    // Active mid-stream budget enforcement against envelope
+                    if let Some(ref envelope) = self.budget_envelope {
+                        let cur_cost = meter.cost();
+                        let cur_tokens = meter.prompt_tokens() + meter.completion_tokens();
+                        if let Err(e) = envelope.record_and_check(cur_cost, cur_tokens) {
+                            tracing::warn!(error = ?e, "Mid-stream budget ceiling breached; terminating stream");
+                            breached = true;
+                            breach_err = Some(e);
+                        }
+                    }
                 }
+
+                if breached {
+                    self.cancel.cancel();
+                    self.release_guard();
+                    self.fire_finish_hook();
+                    return Poll::Ready(Some(Err(anyhow::anyhow!(
+                        "Mid-stream budget exceeded: {:?}",
+                        breach_err
+                    ))));
+                }
+
                 Poll::Ready(Some(Ok(chunk)))
             }
             Poll::Ready(Some(Err(e))) => {
@@ -72,9 +98,6 @@ impl Stream for MeteredStream {
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(None) => {
-                // `fire_finish_hook` finalizes the meter exactly once
-                // (meter.finalize is idempotent), so there is no separate
-                // finalize here — finalizing twice would double-report usage.
                 self.release_guard();
                 self.fire_finish_hook();
                 Poll::Ready(None)
@@ -85,6 +108,11 @@ impl Stream for MeteredStream {
 }
 
 impl MeteredStream {
+    pub fn with_budget_envelope(mut self, envelope: fusion_types::BudgetEnvelope) -> Self {
+        self.budget_envelope = Some(envelope);
+        self
+    }
+
     fn release_guard(&mut self) {
         if let Some(guard) = self.guard.take() {
             drop(guard);
@@ -144,6 +172,7 @@ pub fn metered_stream_with_finish(
         meter: meter_clone,
         guard: Some(guard),
         pricing,
+        budget_envelope: None,
         on_finish: Some(on_finish),
     };
     (stream, meter)
@@ -289,4 +318,38 @@ mod tests {
         drop(stream);
         assert_eq!(fires.load(Ordering::SeqCst), 1, "hook fires exactly once");
     }
+
+    #[test]
+    fn test_metered_stream_enforces_mid_stream_budget_breach() {
+        let cancel = CancellationToken::new();
+        let guard = make_test_guard();
+        let chunk1 = ChatStreamChunk {
+            content: Some("Short text".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        let chunk2 = ChatStreamChunk {
+            content: Some(" A very long continuation that exceeds the token budget envelope".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> = Box::pin(
+            stream::iter(vec![Ok(chunk1), Ok(chunk2)]),
+        );
+        let (stream, _meter) = metered_stream(inner, guard, cancel.clone(), None);
+
+        // Set an envelope with max 5 tokens
+        let envelope = fusion_types::BudgetEnvelope::new(crate::types::NanoUSD::from_nanos(100_000_000), 5, 10);
+        let mut stream = stream.with_budget_envelope(envelope);
+
+        // First chunk (~3 tokens) passes
+        let res1 = block_on(stream.next()).unwrap();
+        assert!(res1.is_ok());
+
+        // Second chunk breaches budget (total > 5 tokens) and causes immediate error and cancellation
+        let res2 = block_on(stream.next()).unwrap();
+        assert!(res2.is_err(), "Must error when mid-stream budget breached");
+        assert!(cancel.is_cancelled(), "Token must be cancelled on mid-stream breach");
+    }
 }
+
