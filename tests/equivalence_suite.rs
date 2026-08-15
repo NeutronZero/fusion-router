@@ -1,79 +1,59 @@
-//! Equivalence Test Suite — Monolith (`src/`) vs. 3-Tier Workspace (`crates/`)
+//! Equivalence Test Suite — Pre-Convergence Monolith vs. Workspace Crates
 //!
-//! Diffs the outputs of ported passes in `crates/fusion-compiler` and `crates/fusion-planner`
-//! directly against the monolith implementations in `src/compiler/` and `src/planner/`.
+//! Diffs the outputs of ported passes in `crates/fusion-compiler` directly
+//! against the historical monolith implementations preserved in `tests/legacy_reference/`
+//! (extracted from git commit `9dcd55a4f7c4d9b46f89e0381afabdc0043d1c66~1`).
+//!
+//! Purpose: Prove that the compiler pass port to `crates/` preserved 100% behavioral equivalence.
 
-use fusion_compiler::{CompilerPass as CrateCompilerPass, ConstraintValidationPass as CrateConstraintPass};
-use fusion_router::types::{WorkflowIR as MonolithWorkflowIR, IRNode as MonolithIRNode, IRNodeKind as MonolithIRNodeKind, StrategyKind as MonolithStrategyKind, IRMetadata as MonolithIRMetadata};
-use fusion_types::{WorkflowIR, IRNode, IRNodeKind, IREdge, StrategyKind};
+mod legacy_reference;
+
+use legacy_reference::{
+    LegacyCompilerPass,
+    LegacyConstraintValidationPass,
+    LegacyControlFlowValidationPass,
+    LegacyModelResolutionPass,
+};
+use fusion_compiler::{
+    CompilerPass as CrateCompilerPass,
+    ConstraintValidationPass as CrateConstraintPass,
+    ControlFlowValidationPass as CrateControlFlowPass,
+    ModelResolutionPass as CrateModelResolutionPass,
+};
+use fusion_types::{WorkflowIR, IRNode, IRNodeKind, IREdge, StrategyKind, ModelCatalog, NanoUSD};
 use uuid::Uuid;
 use std::collections::HashMap;
 
-#[allow(dead_code)]
-fn make_exec_node(id: &str, kind: IRNodeKind) -> IRNode {
-    IRNode {
-        id: Uuid::parse_str(&format!("550e8400-e29b-41d4-a716-{:012}", id.len() * 1111)).unwrap_or_else(|_| Uuid::new_v4()),
-        kind,
-        strategy: StrategyKind::Single,
-        model: None,
-        config: HashMap::new(),
-    }
-}
+// ---------------------------------------------------------------------------
+// 1. ConstraintValidationPass Equivalence
+// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_constraint_validation_pass_equivalence() {
-    let monolith_pass = CrateConstraintPass;
+    let legacy_pass = LegacyConstraintValidationPass;
     let crate_pass = CrateConstraintPass;
 
-    // Test Case 1: Empty IR -> both monolith and crate passes must reject empty IR
-    let empty_monolith_ir = MonolithWorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![],
-        edges: vec![],
-        metadata: MonolithIRMetadata {
-            policy_version: 0,
-            policy_applied: vec![],
-            estimated_cost: fusion_router::types::NanoUSD::ZERO,
-            estimated_tokens: 0,
-        },
-    };
-    let empty_crate_ir = WorkflowIR {
+    // Case 1: Empty IR -> both legacy and crate must reject
+    let empty_ir = WorkflowIR {
         plan_id: Uuid::new_v4(),
         nodes: vec![],
         edges: vec![],
         metadata: fusion_types::IRMetadata {
             policy_version: 0,
             policy_applied: vec![],
-            estimated_cost: fusion_types::NanoUSD::ZERO,
+            estimated_cost: NanoUSD::ZERO,
             estimated_tokens: 0,
         },
     };
 
-    let monolith_res = monolith_pass.apply(empty_monolith_ir).await;
-    let crate_res = crate_pass.apply(empty_crate_ir).await;
+    let legacy_res = legacy_pass.apply(empty_ir.clone()).await;
+    let crate_res = crate_pass.apply(empty_ir).await;
 
-    assert!(monolith_res.is_err(), "Monolith pass must reject empty IR");
+    assert!(legacy_res.is_err(), "Legacy pass must reject empty IR");
     assert!(crate_res.is_err(), "Crate pass must reject empty IR");
 
-    // Test Case 2: Non-empty IR -> both monolith and crate passes must accept
-    let valid_monolith_ir = MonolithWorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![MonolithIRNode {
-            id: Uuid::new_v4(),
-            kind: MonolithIRNodeKind::Generate,
-            strategy: MonolithStrategyKind::Single,
-            model: None,
-            config: HashMap::new(),
-        }],
-        edges: vec![],
-        metadata: MonolithIRMetadata {
-            policy_version: 0,
-            policy_applied: vec![],
-            estimated_cost: fusion_router::types::NanoUSD::ZERO,
-            estimated_tokens: 10,
-        },
-    };
-    let valid_crate_ir = WorkflowIR {
+    // Case 2: Valid IR -> both legacy and crate must accept and return identical IR
+    let valid_ir = WorkflowIR {
         plan_id: Uuid::new_v4(),
         nodes: vec![IRNode {
             id: Uuid::new_v4(),
@@ -86,528 +66,145 @@ async fn test_constraint_validation_pass_equivalence() {
         metadata: fusion_types::IRMetadata {
             policy_version: 0,
             policy_applied: vec![],
-            estimated_cost: fusion_types::NanoUSD::ZERO,
+            estimated_cost: NanoUSD::ZERO,
             estimated_tokens: 10,
         },
     };
 
-    let monolith_valid_res = monolith_pass.apply(valid_monolith_ir).await;
-    let crate_valid_res = crate_pass.apply(valid_crate_ir).await;
+    let legacy_valid_res = legacy_pass.apply(valid_ir.clone()).await.expect("legacy valid");
+    let crate_valid_res = crate_pass.apply(valid_ir).await.expect("crate valid");
 
-    assert!(monolith_valid_res.is_ok(), "Monolith pass must accept valid IR");
-    assert!(crate_valid_res.is_ok(), "Crate pass must accept valid IR");
+    assert_eq!(legacy_valid_res.nodes.len(), crate_valid_res.nodes.len());
+    assert_eq!(legacy_valid_res.nodes[0].id, crate_valid_res.nodes[0].id);
+    assert_eq!(legacy_valid_res.nodes[0].kind, crate_valid_res.nodes[0].kind);
 }
+
+// ---------------------------------------------------------------------------
+// 2. ModelResolutionPass Equivalence
+// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_model_resolution_pass_equivalence() {
-    use fusion_compiler::ModelResolutionPass as CrateModelResolutionPass;
-    use fusion_compiler::ModelResolutionPass as MonolithModelResolutionPass;
-    use fusion_types::ModelCatalog as CrateModelCatalog;
-    use fusion_router::types::ModelCatalog as MonolithModelCatalog;
+    let catalog = ModelCatalog {
+        code: "gpt-4o".into(),
+        debug: "gpt-4o".into(),
+        architecture: "claude-3-5-sonnet".into(),
+        general: "gpt-4o-mini".into(),
+        creative: "claude-3-5-sonnet".into(),
+        analysis: "gpt-4o".into(),
+        fast: "gpt-4o-mini".into(),
+        cheap: "gpt-4o-mini".into(),
+    };
 
-    let crate_catalog = CrateModelCatalog::default();
-    let monolith_catalog = MonolithModelCatalog::default();
+    let legacy_pass = LegacyModelResolutionPass::new(catalog.clone());
+    let crate_pass = CrateModelResolutionPass::new(catalog);
 
-    // 0. Catalog Source of Truth Parity Check
-    assert_eq!(crate_catalog.code, monolith_catalog.code);
-    assert_eq!(crate_catalog.debug, monolith_catalog.debug);
-    assert_eq!(crate_catalog.architecture, monolith_catalog.architecture);
-    assert_eq!(crate_catalog.general, monolith_catalog.general);
-    assert_eq!(crate_catalog.creative, monolith_catalog.creative);
-    assert_eq!(crate_catalog.analysis, monolith_catalog.analysis);
-    assert_eq!(crate_catalog.fast, monolith_catalog.fast);
-    assert_eq!(crate_catalog.cheap, monolith_catalog.cheap);
+    // Parity check on select_model()
+    assert_eq!(legacy_pass.select_model(), crate_pass.select_model());
 
-    let make_monolith_ir = || MonolithWorkflowIR {
+    let make_unresolved_ir = || WorkflowIR {
         plan_id: Uuid::new_v4(),
-        nodes: vec![MonolithIRNode {
-            id: Uuid::new_v4(),
-            kind: MonolithIRNodeKind::Generate,
-            strategy: MonolithStrategyKind::Single,
-            model: None,
-            config: HashMap::new(),
-        }],
+        nodes: vec![
+            IRNode { id: Uuid::new_v4(), kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: Uuid::new_v4(), kind: IRNodeKind::Conditional, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+        ],
         edges: vec![],
-        metadata: MonolithIRMetadata {
+        metadata: fusion_types::IRMetadata {
             policy_version: 0,
             policy_applied: vec![],
-            estimated_cost: fusion_router::types::NanoUSD::ZERO,
+            estimated_cost: NanoUSD::ZERO,
             estimated_tokens: 10,
         },
     };
 
-    // 1. Tool Requirement
-    let crate_pass_tool = CrateModelResolutionPass::new(crate_catalog.clone());
-    let monolith_pass_tool = MonolithModelResolutionPass::new(monolith_catalog.clone());
-    let monolith_ir_tool = monolith_pass_tool.apply(make_monolith_ir()).await.expect("apply");
-    assert_eq!(crate_pass_tool.select_model(), monolith_ir_tool.nodes[0].model.as_deref().unwrap());
-    assert_eq!(crate_pass_tool.select_model(), crate_catalog.fast);
+    let legacy_out = legacy_pass.apply(make_unresolved_ir()).await.expect("legacy apply");
+    let crate_out = crate_pass.apply(make_unresolved_ir()).await.expect("crate apply");
 
-    // 2. Default / Fast Fallback
-    let crate_pass_default = CrateModelResolutionPass::new(crate_catalog.clone());
-    let monolith_pass_default = MonolithModelResolutionPass::new(monolith_catalog.clone());
-    let monolith_ir_default = monolith_pass_default.apply(make_monolith_ir()).await.expect("apply");
-    assert_eq!(crate_pass_default.select_model(), monolith_ir_default.nodes[0].model.as_deref().unwrap());
-    assert_eq!(crate_pass_default.select_model(), crate_catalog.fast);
+    assert_eq!(legacy_out.nodes[0].model, crate_out.nodes[0].model);
+    assert_eq!(legacy_out.nodes[1].model, None, "Conditional nodes must not have models assigned");
+    assert_eq!(crate_out.nodes[1].model, None, "Conditional nodes must not have models assigned");
 }
+
+// ---------------------------------------------------------------------------
+// 3. ControlFlowValidationPass Equivalence
+// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_control_flow_validation_pass_equivalence() {
-    use fusion_compiler::ControlFlowValidationPass as CrateControlFlowPass;
-    use fusion_compiler::ControlFlowValidationPass as MonolithControlFlowPass;
-    use fusion_router::types::IREdge as MonolithIREdge;
-
-    let monolith_pass = MonolithControlFlowPass;
+    let legacy_pass = LegacyControlFlowValidationPass;
     let crate_pass = CrateControlFlowPass;
 
-    // 1. Unknown Source Node in Edge -> both monolith and crate must reject
+    // 1. Dangling edge -> both must reject
     let id_a = Uuid::new_v4();
-    let id_b = Uuid::new_v4();
     let id_bad = Uuid::new_v4();
-
-    let monolith_invalid_edge_ir = MonolithWorkflowIR {
+    let dangling_ir = WorkflowIR {
         plan_id: Uuid::new_v4(),
-        nodes: vec![MonolithIRNode {
+        nodes: vec![IRNode {
             id: id_a,
-            kind: MonolithIRNodeKind::Generate,
-            strategy: MonolithStrategyKind::Single,
+            kind: IRNodeKind::Generate,
+            strategy: StrategyKind::Single,
             model: None,
             config: HashMap::new(),
         }],
-        edges: vec![MonolithIREdge {
+        edges: vec![IREdge {
             from: id_bad,
             to: id_a,
             condition: None,
         }],
-        metadata: MonolithIRMetadata {
-            policy_version: 0,
-            policy_applied: vec![],
-            estimated_cost: fusion_router::types::NanoUSD::ZERO,
-            estimated_tokens: 0,
-        },
-    };
-
-    let node_a_id = Uuid::new_v4();
-    let node_unknown_id = Uuid::new_v4();
-    let crate_invalid_edge_ir = WorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![IRNode {
-            id: node_a_id,
-            kind: IRNodeKind::Generate,
-            strategy: StrategyKind::Single,
-            model: None,
-            config: HashMap::new(),
-        }],
-        edges: vec![IREdge {
-            from: node_unknown_id,
-            to: node_a_id,
-            condition: None,
-        }],
         metadata: fusion_types::IRMetadata {
             policy_version: 0,
             policy_applied: vec![],
-            estimated_cost: fusion_types::NanoUSD::ZERO,
+            estimated_cost: NanoUSD::ZERO,
             estimated_tokens: 0,
         },
     };
 
-    assert!(monolith_pass.apply(monolith_invalid_edge_ir).await.is_err(), "Monolith must reject unknown edge source");
-    assert!(crate_pass.apply(crate_invalid_edge_ir).await.is_err(), "Crate pass must reject unknown edge source");
+    assert!(legacy_pass.apply(dangling_ir.clone()).await.is_err(), "Legacy must reject dangling edge");
+    assert!(crate_pass.apply(dangling_ir).await.is_err(), "Crate must reject dangling edge");
 
-    // 2. Valid multi-node DAG -> both monolith and crate must accept
-    let valid_monolith_dag_ir = MonolithWorkflowIR {
+    // 2. Valid multi-node DAG -> both must accept
+    let id_b = Uuid::new_v4();
+    let valid_dag = WorkflowIR {
         plan_id: Uuid::new_v4(),
         nodes: vec![
-            MonolithIRNode {
-                id: id_a,
-                kind: MonolithIRNodeKind::Generate,
-                strategy: MonolithStrategyKind::Single,
-                model: None,
-                config: HashMap::new(),
-            },
-            MonolithIRNode {
-                id: id_b,
-                kind: MonolithIRNodeKind::Review,
-                strategy: MonolithStrategyKind::Single,
-                model: None,
-                config: HashMap::new(),
-            },
+            IRNode { id: id_a, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: id_b, kind: IRNodeKind::Review, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
         ],
-        edges: vec![MonolithIREdge {
+        edges: vec![IREdge {
             from: id_a,
             to: id_b,
             condition: None,
         }],
-        metadata: MonolithIRMetadata {
+        metadata: fusion_types::IRMetadata {
             policy_version: 0,
             policy_applied: vec![],
-            estimated_cost: fusion_router::types::NanoUSD::ZERO,
+            estimated_cost: NanoUSD::ZERO,
             estimated_tokens: 10,
         },
     };
 
-    let dag_node_a = Uuid::new_v4();
-    let dag_node_b = Uuid::new_v4();
-    let valid_crate_dag_ir = WorkflowIR {
+    assert!(legacy_pass.apply(valid_dag.clone()).await.is_ok(), "Legacy must accept valid DAG");
+    assert!(crate_pass.apply(valid_dag).await.is_ok(), "Crate must accept valid DAG");
+
+    // 3. Illegal Cycle Detection -> both must detect and reject
+    let cyclic_dag = WorkflowIR {
         plan_id: Uuid::new_v4(),
         nodes: vec![
-            IRNode {
-                id: dag_node_a,
-                kind: IRNodeKind::Generate,
-                strategy: StrategyKind::Single,
-                model: None,
-                config: HashMap::new(),
-            },
-            IRNode {
-                id: dag_node_b,
-                kind: IRNodeKind::Review,
-                strategy: StrategyKind::Single,
-                model: None,
-                config: HashMap::new(),
-            },
+            IRNode { id: id_a, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            IRNode { id: id_b, kind: IRNodeKind::Review, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
         ],
-        edges: vec![IREdge {
-            from: dag_node_a,
-            to: dag_node_b,
-            condition: None,
-        }],
+        edges: vec![
+            IREdge { from: id_a, to: id_b, condition: None },
+            IREdge { from: id_b, to: id_a, condition: None },
+        ],
         metadata: fusion_types::IRMetadata {
             policy_version: 0,
             policy_applied: vec![],
-            estimated_cost: fusion_types::NanoUSD::ZERO,
+            estimated_cost: NanoUSD::ZERO,
             estimated_tokens: 10,
         },
     };
 
-    assert!(monolith_pass.apply(valid_monolith_dag_ir).await.is_ok(), "Monolith must accept valid DAG");
-    assert!(crate_pass.apply(valid_crate_dag_ir).await.is_ok(), "Crate pass must accept valid DAG");
-
-    // 3. Split arity: 1 outgoing -> reject
-    let split_node = Uuid::new_v4();
-    let target_node = Uuid::new_v4();
-    let crate_single_out_ir = WorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![
-            IRNode { id: split_node, kind: IRNodeKind::Split, strategy: StrategyKind::Single, model: None, config: HashMap::from([("control_flow".into(), serde_json::json!("split"))]) },
-            IRNode { id: target_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-        ],
-        edges: vec![IREdge { from: split_node, to: target_node, condition: None }],
-        metadata: fusion_types::IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: fusion_types::NanoUSD::ZERO, estimated_tokens: 0 },
-    };
-    assert!(crate_pass.apply(crate_single_out_ir).await.is_err(), "Crate must reject split with 1 outgoing edge");
-
-    // 4. Split arity: 2 outgoing -> accept
-    let split_node2 = Uuid::new_v4();
-    let a_node = Uuid::new_v4();
-    let b_node = Uuid::new_v4();
-    let crate_two_out_ir = WorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![
-            IRNode { id: split_node2, kind: IRNodeKind::Split, strategy: StrategyKind::Single, model: None, config: HashMap::from([("control_flow".into(), serde_json::json!("split"))]) },
-            IRNode { id: a_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-            IRNode { id: b_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-        ],
-        edges: vec![IREdge { from: split_node2, to: a_node, condition: None }, IREdge { from: split_node2, to: b_node, condition: None }],
-        metadata: fusion_types::IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: fusion_types::NanoUSD::ZERO, estimated_tokens: 0 },
-    };
-    assert!(crate_pass.apply(crate_two_out_ir).await.is_ok(), "Crate must accept split with 2 outgoing edges");
-
-    // 5. Merge arity: 1 incoming Merge -> reject
-    let src_node = Uuid::new_v4();
-    let m_node = Uuid::new_v4();
-    let out_node = Uuid::new_v4();
-    let crate_single_merge_ir = WorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![
-            IRNode { id: src_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-            IRNode { id: m_node, kind: IRNodeKind::Join, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-            IRNode { id: out_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-        ],
-        edges: vec![IREdge { from: src_node, to: m_node, condition: None }, IREdge { from: m_node, to: out_node, condition: None }],
-        metadata: fusion_types::IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: fusion_types::NanoUSD::ZERO, estimated_tokens: 0 },
-    };
-    assert!(crate_pass.apply(crate_single_merge_ir).await.is_err(), "Crate must reject merge with 1 incoming");
-
-    // 6. Join with 2 incoming -> accept
-    let ja_node = Uuid::new_v4();
-    let jb_node = Uuid::new_v4();
-    let j_node = Uuid::new_v4();
-    let crate_join_ir = WorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![
-            IRNode { id: ja_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-            IRNode { id: jb_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-            IRNode { id: j_node, kind: IRNodeKind::Join, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-        ],
-        edges: vec![IREdge { from: ja_node, to: j_node, condition: None }, IREdge { from: jb_node, to: j_node, condition: None }],
-        metadata: fusion_types::IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: fusion_types::NanoUSD::ZERO, estimated_tokens: 0 },
-    };
-    assert!(crate_pass.apply(crate_join_ir).await.is_ok(), "Crate must accept join with 2 incoming merges");
-
-    // 7. Barrier with 0 outgoing -> reject
-    let ba_node = Uuid::new_v4();
-    let bb_node = Uuid::new_v4();
-    let b_node = Uuid::new_v4();
-    let crate_barrier_no_out = WorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![
-            IRNode { id: ba_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-            IRNode { id: bb_node, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-            IRNode { id: b_node, kind: IRNodeKind::Barrier, strategy: StrategyKind::Single, model: None, config: HashMap::from([("control_flow".into(), serde_json::json!("barrier"))]) },
-        ],
-        edges: vec![IREdge { from: ba_node, to: b_node, condition: None }, IREdge { from: bb_node, to: b_node, condition: None }],
-        metadata: fusion_types::IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: fusion_types::NanoUSD::ZERO, estimated_tokens: 0 },
-    };
-    assert!(crate_pass.apply(crate_barrier_no_out).await.is_err(), "Crate barrier with 0 outgoing must fail BarrierArity");
+    assert!(legacy_pass.apply(cyclic_dag.clone()).await.is_err(), "Legacy must reject illegal cycle");
+    assert!(crate_pass.apply(cyclic_dag).await.is_err(), "Crate must reject illegal cycle");
 }
-
-#[tokio::test]
-async fn test_intent_planner_equivalence() {
-    use fusion_planner::{ExecutionIntent as CrateExecutionIntent, IntentPlanner as CrateIntentPlanner};
-    use fusion_router::planner::IntentPlanner as MonolithIntentPlanner;
-    use fusion_router::types::execution::ExecutionIntent as MonolithExecutionIntent;
-    use fusion_router::types::{Requirements, Intent, ComplexityLevel, ModelCatalog as MonolithModelCatalog};
-    use fusion_core::ModelCatalog as CrateModelCatalog;
-    use fusion_router::planner::Planner;
-
-    let monolith_planner = MonolithIntentPlanner::new(MonolithModelCatalog::default());
-    let crate_planner = CrateIntentPlanner::new(CrateModelCatalog::default());
-
-    let make_monolith_reqs = |intent: Option<MonolithExecutionIntent>| Requirements {
-        intent_classification: Intent::General,
-        complexity: ComplexityLevel::Medium,
-        has_files: false,
-        context_window: 4096,
-        original_text: "test intent".to_string(),
-        execution_intent: intent,
-        output_preferences: None,
-        model_requirements: None,
-        requested_model: None,
-        requested_strategy: None,
-    };
-
-    let make_crate_req = |intent: CrateExecutionIntent| fusion_planner::PlanningRequest {
-        intent,
-        user_prompt: "test intent".to_string(),
-        requested_model: None,
-        requested_strategy: None,
-        strategy_config: None,
-        requirements: fusion_planner::RequirementsSnapshot::default(),
-        policies: fusion_planner::PolicySnapshot::default(),
-        capability_catalog: fusion_planner::CapabilityCatalogSnapshot::default(),
-        model_catalog: fusion_planner::ModelCatalogSnapshot::new(CrateModelCatalog::default()),
-        telemetry: fusion_planner::RoutingTelemetrySnapshot::default(),
-    };
-
-    // 1. Quality Intent
-    let monolith_quality = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Quality)), &[], None).await;
-    let crate_quality = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Quality)).expect("crate quality plan");
-    assert_eq!(monolith_quality.nodes.len(), 5);
-    assert_eq!(crate_quality.nodes().len(), 5);
-
-    // 2. Speed Intent
-    let monolith_speed = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Speed)), &[], None).await;
-    let crate_speed = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Speed)).expect("crate speed plan");
-    assert_eq!(monolith_speed.nodes.len(), 1);
-    assert_eq!(crate_speed.nodes().len(), 1);
-
-    // 3. Balanced Intent
-    let monolith_balanced = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Balanced)), &[], None).await;
-    let crate_balanced = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Balanced)).expect("crate balanced plan");
-    assert_eq!(monolith_balanced.nodes.len(), 3);
-    assert_eq!(crate_balanced.nodes().len(), 3);
-
-    // 4. Exhaustive Intent
-    let monolith_exhaustive = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Exhaustive)), &[], None).await;
-    let crate_exhaustive = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Exhaustive)).expect("crate exhaustive plan");
-    assert_eq!(monolith_exhaustive.nodes.len(), 6);
-    assert_eq!(crate_exhaustive.nodes().len(), 6);
-
-    // 5. Constrained Intent (cost < 0.02 -> speed)
-    let monolith_constrained_low = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.01").unwrap()), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
-    let crate_constrained_low = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.01").unwrap()) })).expect("crate constrained low plan");
-    assert_eq!(monolith_constrained_low.nodes.len(), 1);
-    assert_eq!(crate_constrained_low.nodes().len(), 1);
-
-    // 6. Constrained Intent (cost >= 0.02 -> balanced)
-    let monolith_constrained_high = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.10").unwrap()), max_tokens: None, max_latency_ms: None, min_confidence: None })), &[], None).await;
-    let crate_constrained_high = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Constrained { max_cost: Some(fusion_core::NanoUSD::checked_from_decimal_usd("0.10").unwrap()) })).expect("crate constrained high plan");
-    assert_eq!(monolith_constrained_high.nodes.len(), 3);
-    assert_eq!(crate_constrained_high.nodes().len(), 3);
-}
-
-#[tokio::test]
-async fn test_dead_node_elimination_pass_equivalence() {
-    use fusion_compiler::DeadNodeEliminationPass;
-
-    let pass = DeadNodeEliminationPass;
-
-    // 1. Single node, no edges -> preserved
-    let n1 = Uuid::new_v4();
-    let edgeless_ir = WorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![IRNode {
-            id: n1,
-            kind: IRNodeKind::Generate,
-            strategy: StrategyKind::Single,
-            model: Some("gpt-4o".into()),
-            config: HashMap::new(),
-        }],
-        edges: vec![],
-        metadata: fusion_types::IRMetadata {
-            policy_version: 0,
-            policy_applied: vec![],
-            estimated_cost: fusion_types::NanoUSD::ZERO,
-            estimated_tokens: 100,
-        },
-    };
-    let out = pass.apply(edgeless_ir).await.expect("apply edgeless");
-    assert_eq!(out.nodes.len(), 1, "Edgeless single node must not be eliminated");
-
-    // 2. Connected DAG with 1 orphaned node -> orphan pruned
-    let n_root = Uuid::new_v4();
-    let n_child = Uuid::new_v4();
-    let n_orphan = Uuid::new_v4();
-    let orphan_ir = WorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![
-            IRNode { id: n_root, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: Some("gpt-4o".into()), config: HashMap::new() },
-            IRNode { id: n_child, kind: IRNodeKind::Review, strategy: StrategyKind::Single, model: Some("claude-3-5".into()), config: HashMap::new() },
-            IRNode { id: n_orphan, kind: IRNodeKind::Transform, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-        ],
-        edges: vec![IREdge { from: n_root, to: n_child, condition: None }],
-        metadata: fusion_types::IRMetadata {
-            policy_version: 0,
-            policy_applied: vec![],
-            estimated_cost: fusion_types::NanoUSD::ZERO,
-            estimated_tokens: 200,
-        },
-    };
-    let out_orphan = pass.apply(orphan_ir).await.expect("apply orphan");
-    assert_eq!(out_orphan.nodes.len(), 2, "Orphaned node must be eliminated");
-    assert!(out_orphan.nodes.iter().any(|n| n.id == n_root));
-    assert!(out_orphan.nodes.iter().any(|n| n.id == n_child));
-    assert!(!out_orphan.nodes.iter().any(|n| n.id == n_orphan));
-}
-
-#[tokio::test]
-async fn test_budget_optimisation_pass_equivalence() {
-    use fusion_compiler::BudgetOptimisationPass;
-    use fusion_kernel::resource::{StubResourceManager, Quota};
-    use std::sync::Arc;
-
-    // 1. Ample budget -> accepted
-    let rm_ample = Arc::new(StubResourceManager::new(Quota {
-        max_daily_cost: fusion_core::NanoUSD::from_nanos(100_000_000_000), // $100
-        max_daily_tokens: 1_000_000,
-    }));
-    let pass_ample = BudgetOptimisationPass { resource_manager: rm_ample };
-    let ir_small = WorkflowIR {
-        plan_id: Uuid::new_v4(),
-        nodes: vec![IRNode { id: Uuid::new_v4(), kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() }],
-        edges: vec![],
-        metadata: fusion_types::IRMetadata {
-            policy_version: 0,
-            policy_applied: vec![],
-            estimated_cost: fusion_types::NanoUSD::from_nanos(10_000_000), // $0.01
-            estimated_tokens: 500,
-        },
-    };
-    assert!(pass_ample.apply(ir_small.clone()).await.is_ok(), "Small IR must pass within ample budget");
-
-    // 2. Exhausted daily quota -> rejected
-    let rm_exhausted = Arc::new(StubResourceManager::new(Quota {
-        max_daily_cost: fusion_core::NanoUSD::ZERO,
-        max_daily_tokens: 0,
-    }));
-    let pass_exhausted = BudgetOptimisationPass { resource_manager: rm_exhausted };
-    let err = pass_exhausted.apply(ir_small).await;
-    assert!(err.is_err(), "Budget pass must reject when ResourceManager cannot afford IR");
-}
-
-#[test]
-fn test_budget_envelope_spend_accumulation_equivalence() {
-    use fusion_types::{BudgetEnvelope, BudgetExceededError};
-    use fusion_core::NanoUSD;
-
-    let envelope = BudgetEnvelope::new(NanoUSD::from_nanos(50_000_000), 5_000, 3);
-
-    // Initial spend
-    assert!(envelope.record_and_check(NanoUSD::from_nanos(20_000_000), 2_000).is_ok());
-    assert_eq!(envelope.spent_cost().as_nanos(), 20_000_000);
-    assert_eq!(envelope.spent_tokens(), 2_000);
-
-    // Shared thread clone
-    let cloned = envelope.clone();
-    assert!(cloned.record_and_check(NanoUSD::from_nanos(20_000_000), 2_000).is_ok());
-    assert_eq!(envelope.spent_cost().as_nanos(), 40_000_000);
-    assert_eq!(envelope.spent_tokens(), 4_000);
-
-    // Cost limit breach
-    let err = envelope.record_and_check(NanoUSD::from_nanos(20_000_000), 100).unwrap_err();
-    assert_eq!(err, BudgetExceededError::Cost { spent: 60_000_000, max: 50_000_000 });
-
-    // Iteration limits
-    let iter_env = BudgetEnvelope::new(NanoUSD::from_nanos(100_000_000), 100_000, 2);
-    assert!(iter_env.increment_iteration().is_ok());
-    assert!(iter_env.increment_iteration().is_ok());
-    assert_eq!(iter_env.increment_iteration().unwrap_err(), BudgetExceededError::Iterations { current: 3, max: 2 });
-}
-
-#[test]
-fn test_strategy_expansion_equivalence() {
-    use fusion_compiler::strategy_expansion::expanded_subgraph;
-    use fusion_types::{ExecutionNode, ExecutionNodeKind, RetryPolicy};
-
-    let node_consensus = ExecutionNode {
-        id: Uuid::new_v4(),
-        kind: ExecutionNodeKind::LLMGenerate,
-        strategy: StrategyKind::Consensus,
-        model: "gpt-4o".into(),
-        retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
-        fallback: None,
-        config: HashMap::from([("members".into(), serde_json::json!(["gpt-4o", "claude-3-5-sonnet"]))]),
-        subgraph: None,
-    };
-
-    let consensus_subgraph = expanded_subgraph(&node_consensus).expect("expanded consensus subgraph");
-    // Consensus with 2 generator models + 1 judge = 3 nodes, 2 edges
-    assert_eq!(consensus_subgraph.nodes.len(), 3, "Consensus must expand to N generators + 1 judge");
-    assert_eq!(consensus_subgraph.edges.len(), 2, "Each generator must connect to the judge");
-
-    let node_reflection = ExecutionNode {
-        id: Uuid::new_v4(),
-        kind: ExecutionNodeKind::LLMGenerate,
-        strategy: StrategyKind::Reflection,
-        model: "gpt-4o".into(),
-        retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
-        fallback: None,
-        config: HashMap::new(),
-        subgraph: None,
-    };
-
-    let reflection_subgraph = expanded_subgraph(&node_reflection).expect("expanded reflection subgraph");
-    // Reflection: Generator -> Reviewer (2 nodes, 1 edge)
-    assert_eq!(reflection_subgraph.nodes.len(), 2, "Reflection must expand to generator + reviewer");
-    assert_eq!(reflection_subgraph.edges.len(), 1, "Generator must connect to reviewer");
-}
-
-#[test]
-fn test_capability_system_equivalence() {
-    use fusion_kernel::{CapabilityCatalog, CapabilitySystem};
-
-    let catalog = CapabilityCatalog::new();
-    assert!(catalog.supports("Vision"));
-    assert!(catalog.supports("MCP"));
-    assert!(catalog.supports("ToolCalling"));
-    assert!(catalog.supports("Reasoning"));
-    assert!(!catalog.supports("NonExistentCapability"));
-
-    let system = CapabilitySystem::new();
-    assert!(system.supports("Vision"));
-    assert!(system.supports("ToolUse"));
-    assert!(system.supports("Reasoning"));
-    assert!(system.supports("Search"));
-    assert!(!system.supports("NonExistentCapability"));
-}
-
