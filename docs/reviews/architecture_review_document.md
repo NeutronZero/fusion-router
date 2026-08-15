@@ -298,9 +298,9 @@ Tools executed by the runtime must adhere to strict trust boundaries:
 ### Streaming Model & Deliberative DAG Execution (Gate 08)
 Because FusionRouter compiles multi-model workflows into deliberative execution graphs (e.g. 3-member consensus judged by an arbiter, or iterative reflection loops), streaming intermediate raw tokens prior to exit-node validation would break deliberative integrity.
 - **Architectural Parity (Gate 08)**: All requests (`stream: true` and `stream: false`) execute through the identical compiled `ExecutionGraph`, DAG scheduler, and fail-closed budget checks.
-- **SSE Transport Adapter**: In v0.14.5, `stream: true` completes authoritative DAG execution and then serializes the validated exit node output into OpenAI/Anthropic-compatible SSE chunks (`stream_completed_response`).
-- **Real-Time Metering & Budget Cutoff**: `MeteredStream` (`src/resource/cancelling_stream.rs`) tracks chunks in integer `NanoUSD` and enforces fail-closed mid-stream cancellation when budget envelope ceilings are breached.
-- **Roadmap v0.15**: Direct token-level stream multiplexing for single-node bypasses and streaming intermediate deliberation feeds is slated for the v0.15 distributed runtime sprint.
+- **SSE Transport Adapter (Current v0.14.5)**: `stream: true` executes the authoritative DAG to completion under upfront budget reservations, then serializes the validated exit-node output into OpenAI/Anthropic-compatible SSE chunks via `stream_completed_response`.
+- **Streaming Resource Meter (`MeteredStream`)**: Implemented and unit-tested in `src/resource/cancelling_stream.rs` with integer `NanoUSD` tracking and fail-closed mid-stream cancellation. In v0.14.5 it serves as the verified streaming primitive and will be wired into live provider connections in v0.15.
+- **Roadmap v0.15**: Direct token-level intermediate stream multiplexing and live provider chunk piping via `MeteredStream` are slated for the v0.15 distributed runtime sprint.
 
 ---
 
