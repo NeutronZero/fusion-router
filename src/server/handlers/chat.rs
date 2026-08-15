@@ -63,6 +63,9 @@ pub async fn chat_completions(
         }
         Err(e) => {
             let status = e.status_code();
+            crate::telemetry::metrics::FusionMetrics::instance()
+                .errors_total
+                .inc();
             tracing::error!(request_id = %request_id, stage = ?e.stage(), error = %e, "pipeline failed");
             (
                 status,
@@ -158,6 +161,10 @@ pub(crate) async fn process_request(
     request: &ChatCompletionRequest,
     request_id: Uuid,
 ) -> Result<ChatCompletionResponse, RouterError> {
+    let started = std::time::Instant::now();
+    let metrics = crate::telemetry::metrics::FusionMetrics::instance();
+    metrics.requests_total.inc();
+
     let cancellation_token = tokio_util::sync::CancellationToken::new();
     let mut pctx = PipelineContext::new(request_id, request.clone(), cancellation_token);
 
@@ -227,9 +234,14 @@ pub(crate) async fn process_request(
         "graph compiled"
     );
 
-    crate::telemetry::metrics::FusionMetrics::instance()
-        .graph_hash_count
-        .inc();
+    metrics.graph_hash_count.inc();
+    if graph.primitive_graph_hash != 0 {
+        tracing::debug!(
+            request_id = %request_id,
+            graph_hash = graph.primitive_graph_hash,
+            "compiled graph content hash"
+        );
+    }
 
     // 6. Resource Reservation with RAII Guard
     let step_reserve = ResourceReservationStep {
@@ -257,6 +269,21 @@ pub(crate) async fn process_request(
     );
 
     // 8. Telemetry Recording
+    metrics
+        .request_duration_seconds
+        .with_label_values(&["chat"])
+        .observe(started.elapsed().as_secs_f64());
+    metrics
+        .provider_latency_seconds
+        .with_label_values(&[state.provider.name()])
+        .observe((result.total_latency_ms as f64) / 1000.0);
+    if result.total_tokens > 0 {
+        metrics.tokens_total.inc_by(result.total_tokens as u64);
+    }
+    if !result.success {
+        metrics.errors_total.inc();
+    }
+
     if result.success {
         let record = ExecutionRecord {
             record_id: Uuid::new_v4(),
