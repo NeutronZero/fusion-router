@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use fusion_core::{ExecutionId, NanoUSD, PlatformError, ProviderId};
+use fusion_core::{ExecutionId, PlatformError, ProviderId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +164,7 @@ pub trait InternalEngineService: Send + Sync {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use fusion_core::NanoUSD;
 
     #[test]
     fn test_execution_bundle_export_import_roundtrip() {

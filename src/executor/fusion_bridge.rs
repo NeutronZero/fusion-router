@@ -77,6 +77,7 @@ impl FusionChatProvider {
             content,
             usage: response.usage.clone(),
             tool_calls: response.native_tool_calls.clone().unwrap_or_default(),
+            tool_results: Vec::new(),
         }
     }
 }
@@ -100,6 +101,7 @@ impl fusion_runtime::ChatProvider for FusionChatProvider {
                         content,
                         usage: None,
                         tool_calls: Vec::new(),
+                        tool_results: Vec::new(),
                     });
                 }
             }

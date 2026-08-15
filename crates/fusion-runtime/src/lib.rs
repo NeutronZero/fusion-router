@@ -44,6 +44,8 @@ pub struct ChatResponse {
     /// Provider-native tool calls. Executed by the runtime ONLY when they are
     /// allowlisted (Law 7 / ADR-037: fail closed by default).
     pub tool_calls: Vec<ToolCall>,
+    /// Accumulated tool execution results from the agentic loop.
+    pub tool_results: Vec<serde_json::Value>,
 }
 
 /// Trait for LLM chat providers. Implementors dispatch requests to actual
@@ -79,6 +81,7 @@ impl ChatProvider for MockProvider {
                 total_tokens: 75,
             }),
             tool_calls: vec![],
+            tool_results: Vec::new(),
         })
     }
 }
@@ -114,6 +117,7 @@ impl ChatProvider for SpyProvider {
                 total_tokens: 75,
             }),
             tool_calls: vec![],
+            tool_results: Vec::new(),
         })
     }
 }
@@ -402,6 +406,7 @@ impl ProviderExecutor {
             .and_then(|v| v.as_u64())
             .unwrap_or(8) as usize;
         let mut request = request;
+        let mut all_tool_results: Vec<serde_json::Value> = Vec::new();
 
         for iteration in 0..=max_iterations {
             if let Some(rm) = &self.resource_manager {
@@ -434,7 +439,12 @@ impl ProviderExecutor {
                 }
             }
             if response.tool_calls.is_empty() {
-                return Ok(response);
+                return Ok(ChatResponse {
+                    content: response.content,
+                    usage: response.usage,
+                    tool_calls: response.tool_calls,
+                    tool_results: all_tool_results,
+                });
             }
 
             if iteration == max_iterations {
@@ -464,21 +474,42 @@ impl ProviderExecutor {
             let mut results: Vec<serde_json::Value> = Vec::new();
             for call in &response.tool_calls {
                 if !allowlist.contains(&call.name) {
-                    return Err(format!(
-                        "tool '{}' not allowed for node {} (fail closed: allowlist)",
-                        call.name, node.id
-                    ));
+                    let entry = serde_json::json!({
+                        "name": call.name,
+                        "arguments": call.arguments,
+                        "executed": false,
+                        "error": true,
+                        "reason": format!("tool '{}' not allowed for node {} (fail closed: allowlist)", call.name, node.id),
+                    });
+                    all_tool_results.push(entry.clone());
+                    results.push(entry);
+                    continue;
                 }
-                let tool = self.tools.get(&call.name).ok_or_else(|| {
-                    format!("tool '{}' not registered (node {})", call.name, node.id)
-                })?;
+                let tool = match self.tools.get(&call.name) {
+                    Some(t) => t,
+                    None => {
+                        let entry = serde_json::json!({
+                            "name": call.name,
+                            "arguments": call.arguments,
+                            "executed": false,
+                            "error": true,
+                            "reason": format!("tool '{}' not registered (node {})", call.name, node.id),
+                        });
+                        all_tool_results.push(entry.clone());
+                        results.push(entry);
+                        continue;
+                    }
+                };
                 let outcome = tool.execute(call.arguments.clone()).await;
-                results.push(serde_json::json!({
+                let entry = serde_json::json!({
                     "name": call.name,
                     "arguments": call.arguments,
+                    "executed": !outcome.is_err(),
                     "error": outcome.is_err(),
                     "result": outcome.unwrap_or_else(|e| serde_json::json!({ "error": e })),
-                }));
+                });
+                all_tool_results.push(entry.clone());
+                results.push(entry);
             }
 
             request.messages.push(ChatMessage {
@@ -537,14 +568,18 @@ impl Executor for ProviderExecutor {
             let request = self.build_request(node, ctx);
             match self.roundtrip(node, request).await {
                 Ok(response) => {
+                    let mut output = serde_json::json!({
+                        "content": response.content,
+                        "node_id": node.id.to_string(),
+                    });
+                    if !response.tool_results.is_empty() {
+                        output["tool_calls"] = serde_json::json!(response.tool_results);
+                    }
                     return NodeExecutionResult {
                         state: NodeState::Succeeded,
                         usage: response.usage,
                         latency_ms: start.elapsed().as_millis() as u64,
-                        output: Some(serde_json::json!({
-                            "content": response.content,
-                            "node_id": node.id.to_string(),
-                        })),
+                        output: Some(output),
                     };
                 }
                 Err(e) => {

@@ -11,7 +11,7 @@ use fusion_kernel::CapabilitySystem;
 use fusion_planner::{ExecutionIntent, PlannerService};
 use fusion_runtime::{MockProvider, RuntimeEngine};
 use fusion_router::ir::adapter::workflow_to_types;
-use fusion_types::{IRNode, IRNodeKind, StrategyKind, IREdge};
+use fusion_types::{IRNode, IRNodeKind, StrategyKind};
 use std::collections::HashMap;
 
 #[tokio::test]
@@ -39,7 +39,7 @@ async fn test_e2e_golden_workflow() {
     assert_eq!(report.passes_executed.len(), 5, "Must execute exactly 5 compiler passes");
     assert_eq!(report.pass_diffs.len(), 5);
     for diff in &report.pass_diffs {
-        assert!(diff.duration_ms >= 0, "pass {} timing must be non-negative", diff.pass_name);
+        let _ = diff.duration_ms;
     }
 
     assert_eq!(graph.nodes.len(), 3, "Execution graph must have 3 nodes");
@@ -55,7 +55,6 @@ async fn test_e2e_golden_workflow() {
     assert!(outcome.success, "Golden workflow must succeed");
     assert_eq!(outcome.outputs.len(), 3, "All 3 nodes must produce outputs");
     assert!(outcome.total_tokens > 0, "Must report token usage");
-    assert!(outcome.total_latency_ms >= 0, "Must report latency");
 }
 
 #[tokio::test]

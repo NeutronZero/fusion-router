@@ -5,7 +5,6 @@ pub mod resolver;
 pub mod workflow;
 
 pub use intent_planner::IntentPlanner;
-pub use workflow::WorkflowPlanner;
 
 use crate::types::{EvidenceSnapshot, Policy, Requirements, WorkflowIR};
 

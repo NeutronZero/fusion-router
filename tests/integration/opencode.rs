@@ -456,7 +456,6 @@ async fn test_health_ready_endpoints() {
 #[tokio::test]
 async fn test_executions_and_operations_auth_enforcement() {
     use std::collections::HashMap;
-    use fusion_router::capability::InMemoryCapabilityRegistry;
     use fusion_router::events::BroadcastEventBus;
     use fusion_router::executor::DefaultExecutor;
     use fusion_router::operations::{

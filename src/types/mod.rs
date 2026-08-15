@@ -20,7 +20,7 @@ pub use fusion_types::{
     StrategyKind,
     // Execution graph
     ExecutionGraph, ExecutionNode, ExecutionNodeKind, ExecutionEdge, GraphMetadata,
-    RetryPolicy, FallbackConfig, ExecutionSubgraph,
+    RetryPolicy, FallbackConfig,
     // Runtime state
     NodeState, ExecutionResult, ReservationId, NodeExecutionResult, ExecutionRecord, NodeExecContext,
     // Shared value objects
@@ -33,10 +33,6 @@ pub use fusion_types::{
     // Execution intent
     ExecutionIntent, OutputPreferences,
 };
-
-// Re-export Requirements WITHOUT model_requirements conflict
-// fusion_types::Requirements doesn't have model_requirements (it stays here)
-pub use fusion_types::Requirements as BaseRequirements;
 
 // ---------------------------------------------------------------------------
 // HTTP/API types (stay in src/ — depend on providers/resource)

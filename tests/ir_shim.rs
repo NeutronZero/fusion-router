@@ -1,4 +1,4 @@
-use fusion_router::ir::{
+use fusion_ir::{
     WorkflowBuilder, WorkflowEdge, WorkflowEdgeKind, WorkflowIR, WorkflowNode, WorkflowNodeKind,
     WORKFLOW_IR_VERSION,
 };

@@ -4,12 +4,12 @@
 //! directly against the monolith implementations in `src/compiler/` and `src/planner/`.
 
 use fusion_compiler::{CompilerPass as CrateCompilerPass, ConstraintValidationPass as CrateConstraintPass};
-use fusion_compiler::{CompilerPass as MonolithCompilerPass, ConstraintValidationPass as MonolithConstraintPass};
 use fusion_router::types::{WorkflowIR as MonolithWorkflowIR, IRNode as MonolithIRNode, IRNodeKind as MonolithIRNodeKind, StrategyKind as MonolithStrategyKind, IRMetadata as MonolithIRMetadata};
 use fusion_types::{WorkflowIR, IRNode, IRNodeKind, IREdge, StrategyKind};
 use uuid::Uuid;
 use std::collections::HashMap;
 
+#[allow(dead_code)]
 fn make_exec_node(id: &str, kind: IRNodeKind) -> IRNode {
     IRNode {
         id: Uuid::parse_str(&format!("550e8400-e29b-41d4-a716-{:012}", id.len() * 1111)).unwrap_or_else(|_| Uuid::new_v4()),
@@ -22,7 +22,7 @@ fn make_exec_node(id: &str, kind: IRNodeKind) -> IRNode {
 
 #[tokio::test]
 async fn test_constraint_validation_pass_equivalence() {
-    let monolith_pass = MonolithConstraintPass;
+    let monolith_pass = CrateConstraintPass;
     let crate_pass = CrateConstraintPass;
 
     // Test Case 1: Empty IR -> both monolith and crate passes must reject empty IR
@@ -104,7 +104,6 @@ async fn test_model_resolution_pass_equivalence() {
     use fusion_compiler::ModelResolutionPass as MonolithModelResolutionPass;
     use fusion_types::ModelCatalog as CrateModelCatalog;
     use fusion_router::types::ModelCatalog as MonolithModelCatalog;
-    use fusion_router::providers::ModelRequirements as MonolithModelRequirements;
 
     let crate_catalog = CrateModelCatalog::default();
     let monolith_catalog = MonolithModelCatalog::default();
@@ -383,6 +382,7 @@ async fn test_intent_planner_equivalence() {
         execution_intent: intent,
         output_preferences: None,
         model_requirements: None,
+        requested_model: None,
         requested_strategy: None,
     };
 

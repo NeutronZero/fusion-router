@@ -1,6 +1,5 @@
 use fusion_planner::{PolicyDeclarationSnapshot, PolicySnapshot};
 use parking_lot::RwLock;
-use std::sync::Arc;
 
 /// Authoritative policy registry emitting versioned immutable snapshots.
 ///

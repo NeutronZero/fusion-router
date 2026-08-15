@@ -40,7 +40,35 @@ impl IntentPlanner {
             vec![("n1".into(), WorkflowNodeKind::Task, capability, strat.clone())]
         } else {
             let mut capabilities = req.requirements.required_capabilities.clone();
-            if capabilities.is_empty() { capabilities.push("CodeGeneration".to_string()); }
+            if capabilities.is_empty() {
+                match intent {
+                    ExecutionIntent::Speed => capabilities.push("CodeGeneration".into()),
+                    ExecutionIntent::Balanced => {
+                        capabilities.extend(["CodeGeneration".into(), "CodeGeneration".into(), "CodeReview".into()]);
+                    }
+                    ExecutionIntent::Quality => {
+                        capabilities.extend([
+                            "CodeGeneration".into(), "CodeReview".into(),
+                            "CodeGeneration".into(), "CodeReview".into(),
+                            "CodeGeneration".into(),
+                        ]);
+                    }
+                    ExecutionIntent::Exhaustive => {
+                        capabilities.extend([
+                            "CodeGeneration".into(), "CodeReview".into(),
+                            "CodeGeneration".into(), "CodeReview".into(),
+                            "CodeGeneration".into(), "Judgment".into(),
+                        ]);
+                    }
+                    ExecutionIntent::Constrained { max_cost } => {
+                        if max_cost.as_ref().map_or(false, |c| c.as_nanos() >= 20_000_000) {
+                            capabilities.extend(["CodeGeneration".into(), "CodeGeneration".into(), "CodeReview".into()]);
+                        } else {
+                            capabilities.push("CodeGeneration".into());
+                        }
+                    }
+                }
+            }
             let limit = match intent {
                 ExecutionIntent::Speed => 1,
                 ExecutionIntent::Constrained { max_cost: Some(cost) } if cost.as_nanos() < 20_000_000 => 1,
@@ -140,7 +168,7 @@ impl IntentPlanner {
     /// Resolves target model per stage using snapshot constraints, capabilities, and telemetry.
     fn resolve_stage_model(
         &self,
-        capability: &str,
+        _capability: &str,
         kind: &WorkflowNodeKind,
         req: &PlanningRequest,
     ) -> String {
@@ -240,7 +268,7 @@ mod tests {
         let system = CapabilitySystem::new();
         let planner = PlannerService::new(system);
         let quality_ir = planner.plan_with_intent("Build web application", ExecutionIntent::Quality).expect("Plan");
-        assert_eq!(quality_ir.nodes().len(), 1);
+        assert_eq!(quality_ir.nodes().len(), 5);
 
         let speed_ir = planner.plan_with_intent("Quick fix", ExecutionIntent::Speed).expect("Plan");
         assert_eq!(speed_ir.nodes().len(), 1);
@@ -281,8 +309,8 @@ mod tests {
         };
 
         let ir = planner.plan(&req).expect("Plan");
-        assert_eq!(ir.nodes().len(), 1);
-        assert_eq!(ir.edges().len(), 0);
+        assert_eq!(ir.nodes().len(), 5);
+        assert_eq!(ir.edges().len(), 4);
         assert!(ir.metadata().policy_applied.contains(&"deny-unauth".to_string()));
         assert_eq!(ir.metadata().policy_version, 1);
         for node in ir.nodes() {

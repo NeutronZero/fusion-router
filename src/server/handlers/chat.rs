@@ -83,7 +83,7 @@ pub async fn chat_completions(
 pub(crate) async fn stream_completed_response(
     response: ChatCompletionResponse,
     model: &str,
-    request_id: Uuid,
+    _request_id: Uuid,
 ) -> axum::response::Response {
     let id = response.id.clone();
     let model_name = model.to_string();

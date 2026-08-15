@@ -411,8 +411,14 @@ use fusion_router::executor::{DefaultExecutor, Executor};
 
         async fn chat_completion(
             &self,
-            _request: &ChatCompletionRequest,
+            request: &ChatCompletionRequest,
         ) -> anyhow::Result<ChatCompletionResponse> {
+            let has_tool_result = request.messages.last().map_or(false, |m| m.role == "tool");
+            let native_tool_calls = if has_tool_result {
+                None
+            } else {
+                self.tool_calls.clone()
+            };
             Ok(ChatCompletionResponse {
                 id: "t".into(),
                 object: "chat.completion".into(),
@@ -431,7 +437,7 @@ use fusion_router::executor::{DefaultExecutor, Executor};
                     completion_tokens: 1,
                     total_tokens: 2,
                 }),
-                native_tool_calls: self.tool_calls.clone(),
+                native_tool_calls,
             })
         }
     }

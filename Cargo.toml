@@ -59,7 +59,7 @@ opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"], optional = t
 tracing-opentelemetry = { version = "0.28", optional = true }
 tonic = { version = "0.12", optional = true }
 anyhow = "1"
-meval = "0.2"
+fasteval = "0.2"
 parking_lot = "0.12"
 arc-swap = "1"
 prometheus = { version = "0.14", features = ["process"] }

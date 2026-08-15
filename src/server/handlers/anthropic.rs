@@ -9,7 +9,7 @@ use futures::stream::{self, BoxStream};
 use futures::StreamExt;
 use uuid::Uuid;
 
-use super::chat::{process_request, stream_completed_response};
+use super::chat::process_request;
 use super::state::AppState;
 use crate::types::*;
 

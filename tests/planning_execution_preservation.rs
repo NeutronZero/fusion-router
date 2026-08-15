@@ -1,7 +1,7 @@
 use fusion_core::NanoUSD;
 use fusion_ir::{WorkflowBuilder, WorkflowMetadata, WorkflowNodeKind};
 use fusion_router::ir::adapter::{uuid_for, workflow_to_types};
-use fusion_router::types::{IRNodeKind, WorkflowIR as TypesWorkflowIR};
+use fusion_router::types::IRNodeKind;
 
 /// Phase B conformance: validates that the compilation boundary preserves all
 /// semantic invariants defined in implementation_plan(1) Phase B.

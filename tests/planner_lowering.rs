@@ -1,5 +1,5 @@
 use fusion_router::intent::{intent_to_workflow, Budget, Constraints, IntentKind, NormalizedIntent};
-use fusion_router::ir::{WorkflowEdgeKind, WorkflowNodeKind, WorkflowIR, WORKFLOW_IR_VERSION};
+use fusion_ir::{WorkflowEdgeKind, WorkflowNodeKind, WorkflowIR, WORKFLOW_IR_VERSION};
 use uuid::Uuid;
 
 fn sample_intent() -> NormalizedIntent {

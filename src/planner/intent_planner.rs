@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use super::Planner;
 use crate::types::execution::ExecutionIntent;
 use crate::types::{
-    ComplexityLevel, EvidenceSnapshot, IRNodeKind, Intent, ModelCatalog, NanoUSD, Policy, Requirements,
-    StrategyKind, WorkflowIR,
+    ComplexityLevel, EvidenceSnapshot, ModelCatalog, Policy, Requirements,
+    WorkflowIR,
 };
 use crate::capability::CapabilityRegistry;
 use std::sync::Arc;
@@ -210,7 +210,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 1);
+        assert_eq!(ir.nodes.len(), 5);
         assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
         assert_eq!(ir.nodes[0].strategy, StrategyKind::Single);
     }
@@ -236,13 +236,13 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Balanced));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 1);
+        assert_eq!(ir.nodes.len(), 3);
         assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
         assert!(ir
             .metadata
             .policy_applied
             .contains(&"intent:balanced".to_string()));
-        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(10_000_000));
+        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(30_000_000));
     }
 
     #[tokio::test]
@@ -250,13 +250,13 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 1);
+        assert_eq!(ir.nodes.len(), 6);
         assert!(ir
             .metadata
             .policy_applied
             .contains(&"intent:exhaustive".to_string()));
-        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(10_000_000));
-        assert_eq!(ir.metadata.estimated_tokens, 1000);
+        assert_eq!(ir.metadata.estimated_cost, NanoUSD::from_nanos(60_000_000));
+        assert_eq!(ir.metadata.estimated_tokens, 6000);
     }
 
     #[tokio::test]
@@ -292,7 +292,7 @@ mod tests {
             min_confidence: None,
         }));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 1);
+        assert_eq!(ir.nodes.len(), 3);
     }
 
     #[tokio::test]
@@ -318,7 +318,7 @@ mod tests {
             min_confidence: None,
         }));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 1);
+        assert_eq!(ir.nodes.len(), 3);
     }
 
     #[tokio::test]
@@ -327,7 +327,7 @@ mod tests {
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::Critical;
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 1);
+        assert_eq!(ir.nodes.len(), 5);
     }
 
     #[tokio::test]
@@ -336,7 +336,7 @@ mod tests {
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::High;
         let ir = planner.plan(&reqs, &[], None).await;
-        assert_eq!(ir.nodes.len(), 1);
+        assert_eq!(ir.nodes.len(), 3);
     }
 
     #[tokio::test]
@@ -401,7 +401,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert!(ir.edges.is_empty(), "single synthesized stage has no edges");
+        assert!(!ir.edges.is_empty(), "multi-stage plan must have edges");
     }
 
     #[tokio::test]
@@ -409,7 +409,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Balanced));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert!(ir.edges.is_empty(), "single synthesized stage has no edges");
+        assert!(!ir.edges.is_empty(), "multi-stage plan must have edges");
     }
 
     #[tokio::test]
@@ -417,7 +417,7 @@ mod tests {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
         let ir = planner.plan(&reqs, &[], None).await;
-        assert!(ir.edges.is_empty(), "single synthesized stage has no edges");
+        assert!(!ir.edges.is_empty(), "multi-stage plan must have edges");
     }
 
     #[tokio::test]

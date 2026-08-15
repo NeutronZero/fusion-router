@@ -157,7 +157,7 @@ mod tests {
     use futures::StreamExt;
     use uuid::Uuid;
     use crate::resource::DefaultResourceManager;
-    use crate::types::{ExecutionGraph, GraphMetadata, NanoUSD, Quota};
+    use crate::types::{ExecutionGraph, GraphMetadata, Quota};
     use std::collections::HashMap;
 
     #[test]

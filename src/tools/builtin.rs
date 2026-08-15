@@ -47,7 +47,7 @@ impl Tool for CalculatorTool {
             ));
         }
 
-        let result = meval::eval_str(expr)
+        let result = fasteval::ez_eval(expr, &mut fasteval::EmptyNamespace)
             .map_err(|e| format!("Calculation error: {}", e))?;
 
         Ok(serde_json::json!({ "result": result }))

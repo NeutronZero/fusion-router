@@ -38,11 +38,28 @@ impl DefaultExecutor {
         let provider: Arc<dyn fusion_runtime::ChatProvider> = Arc::new(FusionChatProvider::new(self.provider.clone()).with_cache(self.cache.clone()));
         #[cfg(not(feature = "semantic-cache"))]
         let provider: Arc<dyn fusion_runtime::ChatProvider> = Arc::new(FusionChatProvider::new(self.provider.clone()));
-        let result = fusion_runtime::ProviderExecutor::new(provider).execute_node(node, ctx).await;
+        let mut exec = fusion_runtime::ProviderExecutor::new(provider)
+            .with_allow_auto_exec(self.allow_auto_exec);
+        if let Some(ref registry) = self.tool_registry {
+            let mut rt_registry = fusion_runtime::ToolRegistry::new();
+            for name in registry.list() {
+                if let Some(tool) = registry.get(name) {
+                    rt_registry.register(Arc::new(ToolAdapter(tool.clone())));
+                }
+            }
+            exec = exec.with_tools(rt_registry);
+        }
+        let result = exec.execute_node(node, ctx).await;
         if matches!(node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
             let mut result = result;
             if let Some(content) = result.output.as_ref().and_then(|v| v.get("content")).and_then(|v| v.as_str()) {
-                result.output = Some(serde_json::Value::String(content.to_string()));
+                if result.output.as_ref().and_then(|v| v.get("tool_calls")).is_some() {
+                    let mut new_output = serde_json::json!({ "content": content.to_string() });
+                    new_output["tool_calls"] = result.output.as_ref().unwrap().get("tool_calls").unwrap().clone();
+                    result.output = Some(new_output);
+                } else {
+                    result.output = Some(serde_json::Value::String(content.to_string()));
+                }
             }
             result
         } else { result }
@@ -53,5 +70,17 @@ impl DefaultExecutor {
 impl Executor for DefaultExecutor {
     async fn execute_node(&self, node: &ExecutionNode, ctx: &NodeExecContext) -> NodeExecutionResult {
         self.execute_runtime(node, ctx).await
+    }
+}
+
+/// Adapter bridging `crate::tools::Tool` to `fusion_runtime::Tool`.
+struct ToolAdapter(Arc<dyn crate::tools::Tool>);
+
+#[async_trait]
+impl fusion_runtime::Tool for ToolAdapter {
+    fn name(&self) -> &str { self.0.name() }
+    fn description(&self) -> &str { self.0.description() }
+    async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, String> {
+        self.0.execute(args).await
     }
 }
