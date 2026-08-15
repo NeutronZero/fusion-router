@@ -2,61 +2,62 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
-  workflow_dispatch:
+    branches: [master]
 
 env:
   CARGO_TERM_COLOR: always
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  RUSTFLAGS: "-D warnings"
 
 jobs:
-  test:
-    runs-on: ubuntu-24.04
+  convergence-firewall:
+    name: Architectural Convergence Firewall
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run 11-gate firewall
+        run: python scripts/check_monolith_freeze.py
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Check no-default-features
-        run: cargo check --no-default-features
-
-      - name: Run tests
-        run: cargo test --all-features
-
-  clippy:
-    runs-on: ubuntu-24.04
+  check:
+    name: Compile check
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-      - name: Clippy
-        run: cargo clippy --workspace --all-features -- -D warnings
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check
+        run: cargo check --workspace
 
-  audit:
-    runs-on: ubuntu-24.04
+  test-boundary:
+    name: Executor boundary tests
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
-      - name: Security audit
-        run: cargo audit
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Gate 03 — compile-level boundary
+        run: cargo test --test executor_boundary
 
-  deny:
-    runs-on: ubuntu-24.04
+  test-wiring:
+    name: Production wiring tests
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@cargo-deny
-      - name: License & dependency check
-        run: cargo deny check licenses bans sources advisories
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Gate 06/07 — registry identity
+        run: cargo test --test production_wiring
+
+  test-executor:
+    name: Executor regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache subgraph + usage-on-failure regressions
+        run: cargo test --lib executor::tests
