@@ -27,6 +27,9 @@ Traditional LLM proxy routers perform dynamic, point-to-point dispatch based on 
 - **First-Class Deliberative Orchestration**: Built-in consensus, reflection, debate, chain, and ReAct subgraphs execute natively on an asynchronous DAG scheduler with topological dependency resolution.
 - **Fail-Closed Tool Execution**: Tool invocations are strictly allowlisted and sandboxed by default (ADR-037).
 
+### Note on Deliberative Subgraphs & Streaming Transport (`stream: true`)
+Because FusionRouter compiles requests into deliberative execution graphs (e.g. 3-member consensus judged by an arbiter, or multi-turn reflection loops), streaming raw intermediate tokens before the judge or reviewer produces the validated exit-node result would violate deliberative consistency. In v0.14.5, `stream: true` executes the authoritative DAG to completion under full budget/policy verification, then emits OpenAI/Anthropic-compatible SSE chunks over the verified final output. Real-time intermediate token multiplexing is slated for the v0.15 distributed streaming sprint.
+
 ---
 
 ## Quick start

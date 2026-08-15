@@ -295,6 +295,13 @@ Tools executed by the runtime must adhere to strict trust boundaries:
 - **Explicit Allowlist**: Tool calls emitted by models are only executed if explicitly present in the node's `tool_allowlist` configuration array and registered in the `ToolRegistry`.
 - **Sandboxed Execution**: Unlisted or missing tools return a structured error response to the agentic loop, preventing unauthorized code execution or system escalation.
 
+### Streaming Model & Deliberative DAG Execution (Gate 08)
+Because FusionRouter compiles multi-model workflows into deliberative execution graphs (e.g. 3-member consensus judged by an arbiter, or iterative reflection loops), streaming intermediate raw tokens prior to exit-node validation would break deliberative integrity.
+- **Architectural Parity (Gate 08)**: All requests (`stream: true` and `stream: false`) execute through the identical compiled `ExecutionGraph`, DAG scheduler, and fail-closed budget checks.
+- **SSE Transport Adapter**: In v0.14.5, `stream: true` completes authoritative DAG execution and then serializes the validated exit node output into OpenAI/Anthropic-compatible SSE chunks (`stream_completed_response`).
+- **Real-Time Metering & Budget Cutoff**: `MeteredStream` (`src/resource/cancelling_stream.rs`) tracks chunks in integer `NanoUSD` and enforces fail-closed mid-stream cancellation when budget envelope ceilings are breached.
+- **Roadmap v0.15**: Direct token-level stream multiplexing for single-node bypasses and streaming intermediate deliberation feeds is slated for the v0.15 distributed runtime sprint.
+
 ---
 
 ## 6. Resource Management & Financial Accounting
