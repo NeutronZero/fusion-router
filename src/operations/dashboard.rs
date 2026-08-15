@@ -20,6 +20,12 @@ impl DefaultDashboardDataProvider {
     ) -> Self {
         Self { registry, module_cache }
     }
+
+    /// Returns `true` if `self` holds the same `CapabilityRegistry` instance as `other`.
+    /// Used by Gate 07 identity tests to verify single-instance wiring.
+    pub fn registry_is(&self, other: &Arc<dyn CapabilityRegistry>) -> bool {
+        Arc::ptr_eq(&self.registry, other)
+    }
 }
 
 impl DashboardDataProvider for DefaultDashboardDataProvider {

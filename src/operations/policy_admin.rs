@@ -19,6 +19,12 @@ impl PolicyAdmin {
         Self { registry, audit_log }
     }
 
+    /// Returns `true` if `self` holds the same `PolicyRegistry` instance as `other`.
+    /// Used by Gate 06 identity tests to verify single-instance wiring.
+    pub fn registry_is(&self, other: &Arc<PolicyRegistry>) -> bool {
+        Arc::ptr_eq(&self.registry, other)
+    }
+
     /// Returns the current policy snapshot from the registry.
     pub fn current_snapshot(&self) -> PolicySnapshot {
         self.registry.current_snapshot()

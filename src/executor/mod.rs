@@ -22,6 +22,18 @@ pub trait Executor: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    //! Host executor tests.
+    //!
+    //! Production executor semantics live in `fusion-runtime`. The tests
+    //! below are split into two sections:
+    //!
+    //! 1. **Architecture tests** — verify the delegation adapter surface
+    //!    (`DefaultExecutor → fusion_runtime::ProviderExecutor`).
+    //! 2. **Legacy fixture tests** — exercise old host-side strategy/tool-loop
+    //!    behaviour that has been moved to crates. These are retained for
+    //!    backwards-compatibility coverage and should eventually be migrated
+    //!    to `fusion-runtime` tests then deleted from the host.
+
     use super::*;
     use crate::providers::ChatProvider;
     use crate::strategies::consensus::ConsensusStrategy;
@@ -347,6 +359,13 @@ mod tests {
             "capturing-all"
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Legacy fixture tests — old host-side strategy/tool-loop behaviour.
+    // These tests exercise code paths that have been moved to fusion-runtime.
+    // They are retained for backwards-compatibility coverage and should
+    // eventually be migrated to fusion-runtime tests then deleted from here.
+    // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_consensus_judge_sees_member_outputs() {

@@ -9,3 +9,6 @@ mod plugins;
 
 #[path = "production_wiring/streaming.rs"]
 mod streaming;
+
+#[path = "production_wiring/identity.rs"]
+mod identity;
