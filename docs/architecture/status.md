@@ -1,7 +1,7 @@
 # FusionRouter Architecture Status
 
 > **Purpose:** Single entry point for contributors to understand the current project state.
-> **Last updated:** 2026-08-12
+> **Last updated:** 2026-08-15
 
 ---
 
