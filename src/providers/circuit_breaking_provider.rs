@@ -1,9 +1,9 @@
-use std::sync::Arc;
-use async_trait::async_trait;
-use futures::stream::BoxStream;
 use crate::providers::circuit_breaker::CircuitBreaker;
 use crate::providers::ChatProvider;
 use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk};
+use async_trait::async_trait;
+use futures::stream::BoxStream;
+use std::sync::Arc;
 
 pub struct CircuitBreakingProvider {
     inner: Arc<dyn ChatProvider + Send + Sync>,
@@ -37,9 +37,15 @@ impl ChatProvider for CircuitBreakingProvider {
         &self.name
     }
 
-    async fn chat_completion(&self, request: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
+    async fn chat_completion(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> anyhow::Result<ChatCompletionResponse> {
         if !self.breaker.can_execute() {
-            return Err(anyhow::anyhow!("Circuit breaker is OPEN for provider: {}", self.name));
+            return Err(anyhow::anyhow!(
+                "Circuit breaker is OPEN for provider: {}",
+                self.name
+            ));
         }
         match self.inner.chat_completion(request).await {
             Ok(response) => {
@@ -58,7 +64,10 @@ impl ChatProvider for CircuitBreakingProvider {
         request: &ChatCompletionRequest,
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ChatStreamChunk>>> {
         if !self.breaker.can_execute() {
-            return Err(anyhow::anyhow!("Circuit breaker is OPEN for provider: {}", self.name));
+            return Err(anyhow::anyhow!(
+                "Circuit breaker is OPEN for provider: {}",
+                self.name
+            ));
         }
         match self.inner.chat_stream(request).await {
             Ok(stream) => {
@@ -82,12 +91,26 @@ mod tests {
     struct MockOkProvider;
     #[async_trait]
     impl ChatProvider for MockOkProvider {
-        fn name(&self) -> &str { "mock-ok" }
-        async fn chat_completion(&self, _req: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
+        fn name(&self) -> &str {
+            "mock-ok"
+        }
+        async fn chat_completion(
+            &self,
+            _req: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
             Ok(ChatCompletionResponse {
-                id: "test".into(), object: "chat.completion".into(), created: 0,
+                id: "test".into(),
+                object: "chat.completion".into(),
+                created: 0,
                 model: "test".into(),
-                choices: vec![Choice { index: 0, message: ChatMessage { role: "assistant".into(), content: "ok".into() }, finish_reason: "stop".into() }],
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: "ok".into(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
                 native_tool_calls: None,
                 usage: None,
             })
@@ -97,19 +120,32 @@ mod tests {
     struct MockFailProvider;
     #[async_trait]
     impl ChatProvider for MockFailProvider {
-        fn name(&self) -> &str { "mock-fail" }
-        async fn chat_completion(&self, _req: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
+        fn name(&self) -> &str {
+            "mock-fail"
+        }
+        async fn chat_completion(
+            &self,
+            _req: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
             Err(anyhow::anyhow!("always fails"))
         }
     }
 
     #[tokio::test]
     async fn test_passes_through_success() {
-        let wrapped = CircuitBreakingProvider::new(Arc::new(MockOkProvider), 3, 2, 5, "test".into());
+        let wrapped =
+            CircuitBreakingProvider::new(Arc::new(MockOkProvider), 3, 2, 5, "test".into());
         let req = ChatCompletionRequest {
-            model: "test".into(), messages: vec![], stream: false,
-            temperature: None, max_tokens: None, tools: None, files: None,
-            execution: None, output: None, strategy: None,
+            model: "test".into(),
+            messages: vec![],
+            stream: false,
+            temperature: None,
+            max_tokens: None,
+            tools: None,
+            files: None,
+            execution: None,
+            output: None,
+            strategy: None,
         };
         let result = wrapped.chat_completion(&req).await;
         assert!(result.is_ok());
@@ -117,11 +153,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_opens_after_threshold() {
-        let wrapped = CircuitBreakingProvider::new(Arc::new(MockFailProvider), 3, 2, 5, "test".into());
+        let wrapped =
+            CircuitBreakingProvider::new(Arc::new(MockFailProvider), 3, 2, 5, "test".into());
         let req = ChatCompletionRequest {
-            model: "test".into(), messages: vec![], stream: false,
-            temperature: None, max_tokens: None, tools: None, files: None,
-            execution: None, output: None, strategy: None,
+            model: "test".into(),
+            messages: vec![],
+            stream: false,
+            temperature: None,
+            max_tokens: None,
+            tools: None,
+            files: None,
+            execution: None,
+            output: None,
+            strategy: None,
         };
         for _ in 0..3 {
             let result = wrapped.chat_completion(&req).await;
@@ -130,6 +174,10 @@ mod tests {
         let result = wrapped.chat_completion(&req).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Circuit breaker is OPEN"), "Expected circuit breaker error, got: {}", err);
+        assert!(
+            err.contains("Circuit breaker is OPEN"),
+            "Expected circuit breaker error, got: {}",
+            err
+        );
     }
 }

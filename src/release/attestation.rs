@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use crate::release::assessment::ReleaseAssessment;
 use crate::release::gate::GateError;
+use serde::{Deserialize, Serialize};
 
 pub const ATTESTATION_SCHEMA_VERSION: &str = "fusion.router.release.attestation.v1";
 

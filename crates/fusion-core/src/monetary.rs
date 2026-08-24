@@ -1,12 +1,14 @@
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
-use serde::{Deserialize, Serialize};
 
 /// Canonical monetary representation: NanoUSD ($10^-9 USD).
 /// 1 NanoUSD = 0.000000001 USD.
 /// 1 MicroUSD = 1,000 NanoUSD.
 /// 1 USD = 1,000,000,000 NanoUSD.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 pub struct NanoUSD(pub u64);
 
 impl NanoUSD {
@@ -80,7 +82,9 @@ impl NanoUSD {
         let dollars: u64 = if dollars_str.is_empty() {
             0
         } else {
-            dollars_str.parse::<u64>().map_err(|e| format!("invalid integer part: {e}"))?
+            dollars_str
+                .parse::<u64>()
+                .map_err(|e| format!("invalid integer part: {e}"))?
         };
 
         let mut nanos_from_frac: u64 = 0;
@@ -93,7 +97,9 @@ impl NanoUSD {
                 return Err("invalid characters in fractional part".to_string());
             }
             let padded_frac = format!("{:0<9}", frac_str);
-            nanos_from_frac = padded_frac.parse::<u64>().map_err(|e| format!("invalid fractional part: {e}"))?;
+            nanos_from_frac = padded_frac
+                .parse::<u64>()
+                .map_err(|e| format!("invalid fractional part: {e}"))?;
         }
 
         let total_nanos = dollars
@@ -164,9 +170,18 @@ mod tests {
 
     #[test]
     fn test_nanousd_parsing() {
-        assert_eq!(NanoUSD::checked_from_decimal_usd("0.05").unwrap(), NanoUSD(50_000_000));
-        assert_eq!(NanoUSD::checked_from_decimal_usd("1.0").unwrap(), NanoUSD(1_000_000_000));
-        assert_eq!(NanoUSD::checked_from_decimal_usd("0.000000001").unwrap(), NanoUSD(1));
+        assert_eq!(
+            NanoUSD::checked_from_decimal_usd("0.05").unwrap(),
+            NanoUSD(50_000_000)
+        );
+        assert_eq!(
+            NanoUSD::checked_from_decimal_usd("1.0").unwrap(),
+            NanoUSD(1_000_000_000)
+        );
+        assert_eq!(
+            NanoUSD::checked_from_decimal_usd("0.000000001").unwrap(),
+            NanoUSD(1)
+        );
         assert!(NanoUSD::checked_from_decimal_usd("0.0000000001").is_err());
     }
 

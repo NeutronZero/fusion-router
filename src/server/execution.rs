@@ -43,9 +43,8 @@ pub struct ExecutionPlane {
 
 /// Factory producing the mandatory pass pipeline, optionally with the policy
 /// pass appended (Law 2 / Law 5: deny ⇒ compile error).
-pub type CompilerFactory = Arc<
-    dyn Fn(Option<crate::policy::ir::PolicyIR>) -> Arc<dyn Compiler> + Send + Sync,
->;
+pub type CompilerFactory =
+    Arc<dyn Fn(Option<crate::policy::ir::PolicyIR>) -> Arc<dyn Compiler> + Send + Sync>;
 
 impl ExecutionPlane {
     pub fn new(
@@ -143,9 +142,10 @@ impl ExecutionPlane {
         )
         .await;
 
-        let policy_ir = self.policy_registry.policy_ir().map_err(|e| {
-            format!("policy configuration rejected: {e}")
-        })?;
+        let policy_ir = self
+            .policy_registry
+            .policy_ir()
+            .map_err(|e| format!("policy configuration rejected: {e}"))?;
         let compiler = (self.compiler_factory)(policy_ir);
         let graph = compiler
             .compile(request.workflow.clone())
@@ -454,7 +454,6 @@ mod tests {
         }
     }
 
-
     #[tokio::test]
     async fn test_execute_workflow_success_emits_events_and_outputs() {
         let bus = Arc::new(BroadcastEventBus::new(64));
@@ -462,7 +461,15 @@ mod tests {
             Arc::new(EchoProvider),
             HashMap::new(),
         ));
-        let plane = build_execution_plane(bus.clone(), executor, crate::types::ModelCatalog::default(), Arc::new(crate::resource::DefaultResourceManager::new(quota_for_tests())), Arc::new(crate::policy::PolicyRegistry::new()));
+        let plane = build_execution_plane(
+            bus.clone(),
+            executor,
+            crate::types::ModelCatalog::default(),
+            Arc::new(crate::resource::DefaultResourceManager::new(
+                quota_for_tests(),
+            )),
+            Arc::new(crate::policy::PolicyRegistry::new()),
+        );
         let mut bus_rx = bus.subscribe();
 
         let request = ExecuteWorkflowRequest {
@@ -512,7 +519,15 @@ mod tests {
             Arc::new(FailingProvider),
             HashMap::new(),
         ));
-        let plane = build_execution_plane(bus, executor, crate::types::ModelCatalog::default(), Arc::new(crate::resource::DefaultResourceManager::new(quota_for_tests())), Arc::new(crate::policy::PolicyRegistry::new()));
+        let plane = build_execution_plane(
+            bus,
+            executor,
+            crate::types::ModelCatalog::default(),
+            Arc::new(crate::resource::DefaultResourceManager::new(
+                quota_for_tests(),
+            )),
+            Arc::new(crate::policy::PolicyRegistry::new()),
+        );
 
         let request = ExecuteWorkflowRequest {
             trigger_name: "api-test".into(),
@@ -536,7 +551,15 @@ mod tests {
             Arc::new(EchoProvider),
             HashMap::new(),
         ));
-        let plane = build_execution_plane(bus, executor, crate::types::ModelCatalog::default(), Arc::new(crate::resource::DefaultResourceManager::new(quota_for_tests())), Arc::new(crate::policy::PolicyRegistry::new()));
+        let plane = build_execution_plane(
+            bus,
+            executor,
+            crate::types::ModelCatalog::default(),
+            Arc::new(crate::resource::DefaultResourceManager::new(
+                quota_for_tests(),
+            )),
+            Arc::new(crate::policy::PolicyRegistry::new()),
+        );
         let app = axum::Router::new()
             .route("/v1/executions", post(execute_workflow_handler))
             .with_state(plane);
@@ -642,6 +665,3 @@ mod tests {
         );
     }
 }
-
-
-

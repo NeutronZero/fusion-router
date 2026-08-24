@@ -22,16 +22,32 @@ mod tests {
     fn test_record_exceeds_cost() {
         let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 100, 5);
         assert!(env.record_and_check(NanoUSD::from_nanos(600), 30).is_ok());
-        let err = env.record_and_check(NanoUSD::from_nanos(500), 30).unwrap_err();
-        assert_eq!(err, BudgetExceededError::Cost { spent: 1100, max: 1000 });
+        let err = env
+            .record_and_check(NanoUSD::from_nanos(500), 30)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            BudgetExceededError::Cost {
+                spent: 1100,
+                max: 1000
+            }
+        );
     }
 
     #[test]
     fn test_record_exceeds_tokens() {
         let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 100, 5);
         assert!(env.record_and_check(NanoUSD::from_nanos(100), 80).is_ok());
-        let err = env.record_and_check(NanoUSD::from_nanos(100), 30).unwrap_err();
-        assert_eq!(err, BudgetExceededError::Tokens { spent: 110, max: 100 });
+        let err = env
+            .record_and_check(NanoUSD::from_nanos(100), 30)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            BudgetExceededError::Tokens {
+                spent: 110,
+                max: 100
+            }
+        );
     }
 
     #[test]
@@ -77,7 +93,13 @@ mod tests {
         assert_eq!(env.spent_tokens(), 200);
         // One more token should exceed
         let err = env.record_and_check(NanoUSD::ZERO, 1).unwrap_err();
-        assert_eq!(err, BudgetExceededError::Tokens { spent: 201, max: 200 });
+        assert_eq!(
+            err,
+            BudgetExceededError::Tokens {
+                spent: 201,
+                max: 200
+            }
+        );
     }
 
     #[test]

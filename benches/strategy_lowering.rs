@@ -42,7 +42,10 @@ fn bench_consensus(c: &mut Criterion) {
 
     for count in [2u32, 3, 5] {
         let strategy = ConsensusStrategy { count };
-        let ir = StrategyIR::Consensus { count, members: vec![] };
+        let ir = StrategyIR::Consensus {
+            count,
+            members: vec![],
+        };
 
         group.bench_function(format!("ConsensusStrategy/{}", count), |b| {
             b.iter(|| {
@@ -62,8 +65,9 @@ fn bench_fusion(c: &mut Criterion) {
     let ir = StrategyIR::Single;
 
     for n in [2usize, 3] {
-        let sub: Vec<Box<dyn Strategy>> =
-            (0..n).map(|_| Box::new(SingleStrategy) as Box<dyn Strategy>).collect();
+        let sub: Vec<Box<dyn Strategy>> = (0..n)
+            .map(|_| Box::new(SingleStrategy) as Box<dyn Strategy>)
+            .collect();
         let strategy = FusionStrategy::new(sub);
 
         group.bench_function(format!("FusionStrategy/{}_sub", n), |b| {
@@ -83,8 +87,9 @@ fn bench_chain(c: &mut Criterion) {
     let context = ctx();
 
     for n in [2usize, 3] {
-        let stages: Vec<Box<dyn Strategy>> =
-            (0..n).map(|_| Box::new(SingleStrategy) as Box<dyn Strategy>).collect();
+        let stages: Vec<Box<dyn Strategy>> = (0..n)
+            .map(|_| Box::new(SingleStrategy) as Box<dyn Strategy>)
+            .collect();
         let strategy = ChainStrategy { stages };
         let ir = StrategyIR::Chain {
             stages: vec![StrategyIR::Single; n],
@@ -147,7 +152,11 @@ fn bench_debate(c: &mut Criterion) {
             .map(|i| DebateRole {
                 name: format!("Debater_{}", i + 1),
                 model: "gpt-4".into(),
-                stance: if i == 0 { "Defend".into() } else { "Critique".into() },
+                stance: if i == 0 {
+                    "Defend".into()
+                } else {
+                    "Critique".into()
+                },
             })
             .collect();
         let strategy = DebateStrategy {

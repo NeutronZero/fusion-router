@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub mod backoff;
 pub mod http;
-pub mod websocket;
 pub mod stdio;
+pub mod websocket;
 
 pub use http::HttpTransport;
 
@@ -35,10 +35,7 @@ pub enum TransportError {
     #[error("Timeout error: {0}")]
     Timeout(String),
     #[error("HTTP error status {status}: {body}")]
-    Http {
-        status: u16,
-        body: String,
-    },
+    Http { status: u16, body: String },
     #[error("Serialization error: {0}")]
     Serialization(String),
 }
@@ -46,5 +43,11 @@ pub enum TransportError {
 #[async_trait]
 pub trait Transport: Send + Sync {
     async fn send(&self, req: TransportRequest) -> Result<TransportResponse, TransportError>;
-    async fn stream(&self, req: TransportRequest) -> Result<futures::stream::BoxStream<'static, Result<TransportEvent, TransportError>>, TransportError>;
+    async fn stream(
+        &self,
+        req: TransportRequest,
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<TransportEvent, TransportError>>,
+        TransportError,
+    >;
 }

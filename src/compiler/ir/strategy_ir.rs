@@ -15,9 +15,20 @@ pub enum StrategyIR {
         #[serde(default)]
         members: Vec<String>,
     },
-    Reflection { max_cycles: u32 },
-    Debate { roles: Vec<DebateRole> },
-    ReAct { max_iterations: u32 },
-    Chain { stages: Vec<StrategyIR> },
-    Custom { name: String, config: serde_json::Value },
+    Reflection {
+        max_cycles: u32,
+    },
+    Debate {
+        roles: Vec<DebateRole>,
+    },
+    ReAct {
+        max_iterations: u32,
+    },
+    Chain {
+        stages: Vec<StrategyIR>,
+    },
+    Custom {
+        name: String,
+        config: serde_json::Value,
+    },
 }

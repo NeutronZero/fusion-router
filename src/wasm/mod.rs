@@ -1,4 +1,4 @@
 mod runtime;
 
 #[allow(unused_imports)]
-pub use runtime::{WasmRuntime, WasmModule, WasmInstance};
+pub use runtime::{WasmInstance, WasmModule, WasmRuntime};

@@ -1,17 +1,9 @@
-use axum::{
-    extract::Request,
-    http::HeaderValue,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, http::HeaderValue, middleware::Next, response::Response};
 use uuid::Uuid;
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 
-pub async fn request_id_middleware(
-    mut req: Request,
-    next: Next,
-) -> Response {
+pub async fn request_id_middleware(mut req: Request, next: Next) -> Response {
     let request_id = req
         .headers()
         .get(REQUEST_ID_HEADER)
@@ -51,7 +43,11 @@ mod tests {
         });
 
         let client = reqwest::Client::new();
-        let res = client.get(format!("http://{}/", addr)).send().await.unwrap();
+        let res = client
+            .get(format!("http://{}/", addr))
+            .send()
+            .await
+            .unwrap();
         assert!(res.headers().contains_key("x-request-id"));
         assert_eq!(res.status(), StatusCode::OK);
     }

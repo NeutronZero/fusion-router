@@ -1,8 +1,8 @@
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use crate::events::projection::EventProjection;
 use crate::events::ExecutionEventEnvelope;
 use crate::release::gate::GateError;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineEntry {
@@ -64,7 +64,12 @@ impl EventProjection for TimelineProjection {
             .max(0) as u64;
 
         let event_type = format!("{:?}", envelope.payload);
-        let type_name = event_type.split('{').next().unwrap_or("Event").trim().to_string();
+        let type_name = event_type
+            .split('{')
+            .next()
+            .unwrap_or("Event")
+            .trim()
+            .to_string();
 
         self.model.entries.push(TimelineEntry {
             sequence_number: envelope.sequence_number,

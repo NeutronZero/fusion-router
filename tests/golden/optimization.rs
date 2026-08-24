@@ -1,21 +1,34 @@
-use fusion_router::compiler::ir::{PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind, BarrierFailurePolicy};
-use fusion_router::compiler::optimization::{DeadNodeEliminationPass, FanOutConsolidationPass, OptimizationPass, OptimizationPipeline};
+use fusion_router::compiler::ir::{
+    BarrierFailurePolicy, PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind,
+};
+use fusion_router::compiler::optimization::{
+    DeadNodeEliminationPass, FanOutConsolidationPass, OptimizationPass, OptimizationPipeline,
+};
 
 fn connected_graph() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("connected");
     g.add_node(PrimitiveNode {
         id: "entry".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "a".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "exit".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_edge("entry", "a", None);
@@ -27,12 +40,18 @@ fn graph_with_disconnected_node() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("disconnected");
     g.add_node(PrimitiveNode {
         id: "entry".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "orphan".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_edge("entry", "entry", None);
@@ -43,27 +62,42 @@ fn graph_with_unused_subtree() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("unused_subtree");
     g.add_node(PrimitiveNode {
         id: "entry".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "a".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "exit".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "x".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "y".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_edge("entry", "a", None);
@@ -76,17 +110,27 @@ fn graph_with_barrier() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("with_barrier");
     g.add_node(PrimitiveNode {
         id: "entry".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "barrier".into(),
-        kind: PrimitiveNodeKind::Barrier { min_completion: 1.0, timeout: std::time::Duration::from_secs(30), on_failure: fusion_router::compiler::ir::BarrierFailurePolicy::Abort },
+        kind: PrimitiveNodeKind::Barrier {
+            min_completion: 1.0,
+            timeout: std::time::Duration::from_secs(30),
+            on_failure: fusion_router::compiler::ir::BarrierFailurePolicy::Abort,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "a".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_edge("entry", "barrier", None);
@@ -98,12 +142,18 @@ fn graph_with_reducer() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("with_reducer");
     g.add_node(PrimitiveNode {
         id: "entry".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "reducer".into(),
-        kind: PrimitiveNodeKind::Reducer { mode: fusion_router::compiler::ir::ReducerMode::Consensus, model: "gpt-4".into() },
+        kind: PrimitiveNodeKind::Reducer {
+            mode: fusion_router::compiler::ir::ReducerMode::Consensus,
+            model: "gpt-4".into(),
+        },
         artifact_kind: None,
     });
     g.add_edge("entry", "reducer", None);
@@ -114,7 +164,10 @@ fn graph_with_feedback_loop() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("with_feedback");
     g.add_node(PrimitiveNode {
         id: "entry".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
@@ -130,7 +183,10 @@ fn graph_single_node() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("single");
     g.add_node(PrimitiveNode {
         id: "only".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g
@@ -152,7 +208,11 @@ fn test_removes_unused_subtree() {
     let result = pass.optimize(graph).unwrap();
     assert_eq!(result.nodes.len(), 3);
     for node in &result.nodes {
-        assert!(node.id == "entry" || node.id == "a" || node.id == "exit", "unexpected node {}", node.id);
+        assert!(
+            node.id == "entry" || node.id == "a" || node.id == "exit",
+            "unexpected node {}",
+            node.id
+        );
     }
 }
 
@@ -221,14 +281,20 @@ fn test_pipeline_integration() {
 #[test]
 fn test_goal_returns_graph_simplification() {
     let pass = DeadNodeEliminationPass::new();
-    assert_eq!(pass.goal(), fusion_router::compiler::optimization::OptimizationGoal::GraphSimplification);
+    assert_eq!(
+        pass.goal(),
+        fusion_router::compiler::optimization::OptimizationGoal::GraphSimplification
+    );
 }
 
 fn fanout_graph_adjacent() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("adjacent_fanouts");
     g.add_node(PrimitiveNode {
         id: "entry".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
@@ -243,7 +309,10 @@ fn fanout_graph_adjacent() -> PrimitiveGraph {
     });
     g.add_node(PrimitiveNode {
         id: "a".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_edge("entry", "fo1", None);
@@ -256,7 +325,10 @@ fn fanout_graph_single_consumer() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("single_consumer");
     g.add_node(PrimitiveNode {
         id: "entry".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
@@ -266,7 +338,10 @@ fn fanout_graph_single_consumer() -> PrimitiveGraph {
     });
     g.add_node(PrimitiveNode {
         id: "a".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_edge("entry", "fo", None);
@@ -278,7 +353,10 @@ fn fanout_graph_no_consolidation() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("no_change");
     g.add_node(PrimitiveNode {
         id: "entry".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
@@ -288,17 +366,26 @@ fn fanout_graph_no_consolidation() -> PrimitiveGraph {
     });
     g.add_node(PrimitiveNode {
         id: "a".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "b".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "c".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_edge("entry", "fo", None);
@@ -312,7 +399,10 @@ fn fanout_graph_with_barrier() -> PrimitiveGraph {
     let mut g = PrimitiveGraph::new("with_barrier_pass");
     g.add_node(PrimitiveNode {
         id: "entry".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
@@ -322,17 +412,27 @@ fn fanout_graph_with_barrier() -> PrimitiveGraph {
     });
     g.add_node(PrimitiveNode {
         id: "a".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "b".into(),
-        kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+        kind: PrimitiveNodeKind::LLMGenerate {
+            model: "gpt-4".into(),
+            role: None,
+        },
         artifact_kind: None,
     });
     g.add_node(PrimitiveNode {
         id: "barrier".into(),
-        kind: PrimitiveNodeKind::Barrier { min_completion: 1.0, timeout: std::time::Duration::from_secs(30), on_failure: BarrierFailurePolicy::Abort },
+        kind: PrimitiveNodeKind::Barrier {
+            min_completion: 1.0,
+            timeout: std::time::Duration::from_secs(30),
+            on_failure: BarrierFailurePolicy::Abort,
+        },
         artifact_kind: None,
     });
     g.add_edge("entry", "fo", None);
@@ -348,7 +448,11 @@ fn test_fanout_consolidation_adjacent_merged() {
     let pass = FanOutConsolidationPass::new();
     let graph = fanout_graph_adjacent();
     let result = pass.optimize(graph).unwrap();
-    let fanouts: Vec<_> = result.nodes.iter().filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. })).collect();
+    let fanouts: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. }))
+        .collect();
     assert_eq!(fanouts.len(), 1, "adjacent FanOuts should merge into one");
     if let PrimitiveNodeKind::FanOut { count } = &fanouts[0].kind {
         assert_eq!(count, &4, "merged FanOut should have max count");
@@ -360,8 +464,16 @@ fn test_fanout_consolidation_single_consumer_eliminated() {
     let pass = FanOutConsolidationPass::new();
     let graph = fanout_graph_single_consumer();
     let result = pass.optimize(graph).unwrap();
-    let fanouts: Vec<_> = result.nodes.iter().filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. })).collect();
-    assert_eq!(fanouts.len(), 0, "single-consumer FanOut should be eliminated");
+    let fanouts: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. }))
+        .collect();
+    assert_eq!(
+        fanouts.len(),
+        0,
+        "single-consumer FanOut should be eliminated"
+    );
     assert_eq!(result.nodes.len(), 2, "entry and a remain");
 }
 
@@ -370,7 +482,11 @@ fn test_fanout_consolidation_multi_consumer_unchanged() {
     let pass = FanOutConsolidationPass::new();
     let graph = fanout_graph_no_consolidation();
     let result = pass.optimize(graph).unwrap();
-    let fanouts: Vec<_> = result.nodes.iter().filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. })).collect();
+    let fanouts: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. }))
+        .collect();
     assert_eq!(fanouts.len(), 1, "multi-consumer FanOut preserved");
     assert_eq!(result.nodes.len(), 5);
 }
@@ -380,7 +496,11 @@ fn test_fanout_consolidation_barrier_preserved() {
     let pass = FanOutConsolidationPass::new();
     let graph = fanout_graph_with_barrier();
     let result = pass.optimize(graph).unwrap();
-    let barriers: Vec<_> = result.nodes.iter().filter(|n| matches!(n.kind, PrimitiveNodeKind::Barrier { .. })).collect();
+    let barriers: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, PrimitiveNodeKind::Barrier { .. }))
+        .collect();
     assert_eq!(barriers.len(), 1, "Barrier with multiple inputs preserved");
     assert_eq!(result.nodes.len(), 5);
 }
@@ -400,6 +520,10 @@ fn test_fanout_consolidation_pipeline_composition() {
     pipeline.add_pass(Box::new(FanOutConsolidationPass::new()));
     let graph = fanout_graph_adjacent();
     let result = pipeline.run(graph).unwrap();
-    let fanouts: Vec<_> = result.nodes.iter().filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. })).collect();
+    let fanouts: Vec<_> = result
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. }))
+        .collect();
     assert_eq!(fanouts.len(), 1);
 }

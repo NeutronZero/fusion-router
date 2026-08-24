@@ -6,13 +6,20 @@ use fusion_router::providers::openrouter::OpenRouterProvider;
 use fusion_router::providers::ChatProvider;
 use fusion_router::strategies::consensus::ConsensusStrategy;
 use fusion_router::strategies::Strategy;
-use fusion_router::types::{ChatCompletionRequest, ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind};
+use fusion_router::types::{
+    ChatCompletionRequest, ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind,
+};
 
 const CONSENSUS_COUNT: u32 = 3;
 
 fn roadmap_context() -> String {
-    std::fs::read_to_string(format!("{}/docs/repair-phase0-scope.md", env!("CARGO_MANIFEST_DIR")))
-        .unwrap_or_else(|_| "FusionRouter v0.9 roadmap: full roadmap document is unavailable.".to_string())
+    std::fs::read_to_string(format!(
+        "{}/docs/repair-phase0-scope.md",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap_or_else(|_| {
+        "FusionRouter v0.9 roadmap: full roadmap document is unavailable.".to_string()
+    })
 }
 
 #[tokio::main]
@@ -21,18 +28,24 @@ async fn main() -> anyhow::Result<()> {
         .expect("OPENROUTER_API_KEY must be set")
         .trim()
         .to_string();
-    let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(
-        OpenRouterProvider::new(api_key),
-    );
+    let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(OpenRouterProvider::new(api_key));
     let model = "deepseek/deepseek-chat";
 
     // ── Phase 1: Compiler Pipeline ────────────────────────────────────────
 
     println!("=== Compiler Manifest ================================================\n");
 
-    let strategy = ConsensusStrategy { count: CONSENSUS_COUNT };
+    let strategy = ConsensusStrategy {
+        count: CONSENSUS_COUNT,
+    };
     let ctx = CompilationContext::new();
-    let graph = strategy.lower(&StrategyIR::Consensus { count: CONSENSUS_COUNT, members: vec![] }, &ctx)?;
+    let graph = strategy.lower(
+        &StrategyIR::Consensus {
+            count: CONSENSUS_COUNT,
+            members: vec![],
+        },
+        &ctx,
+    )?;
     let hash = graph.compute_hash();
 
     let template = ExecutionNode {
@@ -40,7 +53,10 @@ async fn main() -> anyhow::Result<()> {
         kind: ExecutionNodeKind::LLMGenerate,
         strategy: StrategyKind::Consensus,
         model: "default".into(),
-        retry_policy: RetryPolicy { max_retries: 2, backoff_ms: 1000 },
+        retry_policy: RetryPolicy {
+            max_retries: 2,
+            backoff_ms: 1000,
+        },
         fallback: None,
         config: std::collections::HashMap::new(),
         subgraph: None,
@@ -58,7 +74,10 @@ async fn main() -> anyhow::Result<()> {
     println!("Node Count:        {}", graph.nodes.len());
     println!("Edge Count:        {}", graph.edges.len());
     println!("ExecutionGraph Node Count: {}", execution_graph.nodes.len());
-    println!("ExecutionGraph Primitive Hash: 0x{:x}", execution_graph.primitive_graph_hash);
+    println!(
+        "ExecutionGraph Primitive Hash: 0x{:x}",
+        execution_graph.primitive_graph_hash
+    );
     println!("Parallel Copies:   {}", CONSENSUS_COUNT);
     println!();
 
@@ -95,15 +114,20 @@ async fn main() -> anyhow::Result<()> {
         };
 
         let resp = provider.chat_completion(&request).await?;
-        let content = resp.choices.first()
+        let content = resp
+            .choices
+            .first()
             .map(|c| c.message.content.clone())
             .unwrap_or_default();
 
-        println!("{}\n", if content.len() > 500 {
-            format!("{}...\n[{} chars total]", &content[..500], content.len())
-        } else {
-            content.clone()
-        });
+        println!(
+            "{}\n",
+            if content.len() > 500 {
+                format!("{}...\n[{} chars total]", &content[..500], content.len())
+            } else {
+                content.clone()
+            }
+        );
 
         responses.push(((i + 1) as usize, content));
     }
@@ -117,7 +141,8 @@ async fn main() -> anyhow::Result<()> {
          Below are {} independent analyses. Evaluate each for accuracy, completeness, \
          and insight. Select the best one and explain why.\n\n{}",
         CONSENSUS_COUNT,
-        responses.iter()
+        responses
+            .iter()
             .map(|(id, content)| format!("<<<Analysis {}>>>\n{}", id, content))
             .collect::<Vec<_>>()
             .join("\n\n---\n\n")
@@ -140,7 +165,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let verdict = provider.chat_completion(&judge_request).await?;
-    let verdict_content = verdict.choices.first()
+    let verdict_content = verdict
+        .choices
+        .first()
         .map(|c| c.message.content.clone())
         .unwrap_or_default();
 
@@ -158,7 +185,10 @@ async fn main() -> anyhow::Result<()> {
     println!("\n--- Provenance ---");
     println!("Graph Hash:        0x{:x}", hash);
     println!("PrimitiveGraph v{}", PRIMITIVE_GRAPH_VERSION);
-    println!("ExecutionGraph Primitive Hash: 0x{:x}", execution_graph.primitive_graph_hash);
+    println!(
+        "ExecutionGraph Primitive Hash: 0x{:x}",
+        execution_graph.primitive_graph_hash
+    );
     println!("Strategy:          Consensus (x{})", CONSENSUS_COUNT);
     println!("Artifact:          Consensus");
 

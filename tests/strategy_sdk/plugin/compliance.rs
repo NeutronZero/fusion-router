@@ -1,7 +1,7 @@
-use std::sync::Arc;
 use fusion_router::compiler::registry::StrategyRegistry;
-use fusion_router::strategies::single::SingleStrategy;
 use fusion_router::strategies::consensus::ConsensusStrategy;
+use fusion_router::strategies::single::SingleStrategy;
+use std::sync::Arc;
 
 #[test]
 fn test_strategy_registry_compliance() {

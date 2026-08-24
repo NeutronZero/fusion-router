@@ -117,9 +117,10 @@ async fn anthropic_stream_completed_response(
 
     let total_chunks = chunks.len();
 
-    let stream: BoxStream<'static, Result<Event, std::convert::Infallible>> =
-        Box::pin(stream::iter(0..=total_chunks).enumerate().flat_map(
-            move |(i, _)| {
+    let stream: BoxStream<'static, Result<Event, std::convert::Infallible>> = Box::pin(
+        stream::iter(0..=total_chunks)
+            .enumerate()
+            .flat_map(move |(i, _)| {
                 let msg_id = msg_id.clone();
                 let model = model_name.clone();
                 let mut events: Vec<Result<Event, std::convert::Infallible>> = Vec::new();
@@ -198,8 +199,8 @@ async fn anthropic_stream_completed_response(
                 }
 
                 stream::iter(events)
-            },
-        ));
+            }),
+    );
 
     Sse::new(stream).into_response()
 }

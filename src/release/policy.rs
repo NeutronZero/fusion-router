@@ -1,8 +1,8 @@
+use crate::release::gate::{GateError, GateId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
-use crate::release::gate::{GateError, GateId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -81,11 +81,7 @@ impl PolicyDefinition {
                     GateId::Determinism1,
                     GateId::Plugin1,
                 ],
-                advisory: vec![
-                    GateId::Strategy1,
-                    GateId::Provider1,
-                    GateId::Connector1,
-                ],
+                advisory: vec![GateId::Strategy1, GateId::Provider1, GateId::Connector1],
             },
         );
         environments.insert(
@@ -126,10 +122,12 @@ impl PolicyDefinition {
 
 #[allow(dead_code)]
 pub fn load_policy_from_yaml(path: &Path) -> Result<PolicyDefinition, GateError> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| GateError::ExecutionFailed(format!("read policy file {}: {e}", path.display())))?;
-    serde_yaml::from_str(&content)
-        .map_err(|e| GateError::ExecutionFailed(format!("parse policy file {}: {e}", path.display())))
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        GateError::ExecutionFailed(format!("read policy file {}: {e}", path.display()))
+    })?;
+    serde_yaml::from_str(&content).map_err(|e| {
+        GateError::ExecutionFailed(format!("parse policy file {}: {e}", path.display()))
+    })
 }
 
 #[cfg(test)]
@@ -138,17 +136,34 @@ mod tests {
 
     #[test]
     fn test_release_environment_parsing() {
-        assert_eq!(ReleaseEnvironment::from_str("production"), ReleaseEnvironment::Production);
-        assert_eq!(ReleaseEnvironment::from_str("prod"), ReleaseEnvironment::Production);
-        assert_eq!(ReleaseEnvironment::from_str("staging"), ReleaseEnvironment::Staging);
-        assert_eq!(ReleaseEnvironment::from_str("development"), ReleaseEnvironment::Development);
-        assert_eq!(ReleaseEnvironment::from_str("canary"), ReleaseEnvironment::Custom("canary".into()));
+        assert_eq!(
+            ReleaseEnvironment::from_str("production"),
+            ReleaseEnvironment::Production
+        );
+        assert_eq!(
+            ReleaseEnvironment::from_str("prod"),
+            ReleaseEnvironment::Production
+        );
+        assert_eq!(
+            ReleaseEnvironment::from_str("staging"),
+            ReleaseEnvironment::Staging
+        );
+        assert_eq!(
+            ReleaseEnvironment::from_str("development"),
+            ReleaseEnvironment::Development
+        );
+        assert_eq!(
+            ReleaseEnvironment::from_str("canary"),
+            ReleaseEnvironment::Custom("canary".into())
+        );
     }
 
     #[test]
     fn test_default_policy_structure() {
         let policy = PolicyDefinition::default_policy();
-        let prod = policy.get_environment_policy(&ReleaseEnvironment::Production).unwrap();
+        let prod = policy
+            .get_environment_policy(&ReleaseEnvironment::Production)
+            .unwrap();
         assert!(prod.require.contains(&GateId::Sdk1));
         assert!(prod.require.contains(&GateId::Plugin1));
         assert!(prod.advisory.contains(&GateId::Provider1));

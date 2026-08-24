@@ -1,20 +1,18 @@
-use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, Json};
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 use crate::operations::TimeWindow;
 
-use super::dashboard::DashboardDataProvider;
-use super::runtime_inspector::RuntimeInspector;
-use super::policy_admin::PolicyAdmin;
 use super::attestation_viewer::AttestationViewer;
+use super::dashboard::DashboardDataProvider;
+use super::policy_admin::PolicyAdmin;
+use super::runtime_inspector::RuntimeInspector;
 
 #[cfg(test)]
 use {
-     crate::capability::InMemoryCapabilityRegistry,
-    super::dashboard::DefaultDashboardDataProvider,
-    super::MockPackageVerifier,
-    super::RuntimeModuleCache,
+    super::dashboard::DefaultDashboardDataProvider, super::MockPackageVerifier,
+    super::RuntimeModuleCache, crate::capability::InMemoryCapabilityRegistry,
 };
 
 #[derive(Clone)]
@@ -65,7 +63,10 @@ pub async fn registry_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.dashboard.registry_summary() {
         Ok(summary) => json_value(summary),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )),
     }
 }
 
@@ -74,7 +75,10 @@ pub async fn runtime_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.dashboard.runtime_summary() {
         Ok(summary) => json_value(summary),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )),
     }
 }
 
@@ -82,7 +86,10 @@ pub async fn metrics_handler(
     State(state): State<OperationsState>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let window_secs = params.get("window").and_then(|w| w.trim_end_matches('h').parse::<i64>().ok()).unwrap_or(1);
+    let window_secs = params
+        .get("window")
+        .and_then(|w| w.trim_end_matches('h').parse::<i64>().ok())
+        .unwrap_or(1);
     let now = chrono::Utc::now().timestamp();
     let window = TimeWindow {
         start_secs: now - window_secs * 3600,
@@ -90,7 +97,10 @@ pub async fn metrics_handler(
     };
     match state.dashboard.invocation_metrics(window) {
         Ok(metrics) => json_value(metrics),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )),
     }
 }
 
@@ -99,7 +109,10 @@ pub async fn policies_list_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.policy_admin.list_policies() {
         Ok(policies) => json_value(policies),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )),
     }
 }
 
@@ -109,7 +122,10 @@ pub async fn policies_create_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.policy_admin.create_policy(decl) {
         Ok(()) => Ok(Json(json!({"status": "created"}))),
-        Err(e) => Err((StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()})))),
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e.to_string()})),
+        )),
     }
 }
 
@@ -119,8 +135,14 @@ pub async fn policies_get_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.policy_admin.get_policy(&name) {
         Ok(Some(decl)) => json_value(decl),
-        Ok(None) => Err((StatusCode::NOT_FOUND, Json(json!({"error": format!("policy '{name}' not found")})))),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("policy '{name}' not found")})),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )),
     }
 }
 
@@ -131,7 +153,10 @@ pub async fn policies_update_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.policy_admin.update_policy(&name, decl) {
         Ok(()) => Ok(Json(json!({"status": "updated"}))),
-        Err(e) => Err((StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()})))),
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e.to_string()})),
+        )),
     }
 }
 
@@ -150,7 +175,10 @@ pub async fn attestations_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match state.attestation_viewer.list_packages() {
         Ok(statuses) => json_value(statuses),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )),
     }
 }
 

@@ -20,7 +20,11 @@ pub struct PolicyDiagnostic {
 }
 
 impl PolicyDiagnostic {
-    pub fn error(location: impl Into<String>, rule: Option<String>, message: impl Into<String>) -> Self {
+    pub fn error(
+        location: impl Into<String>,
+        rule: Option<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             severity: DiagnosticSeverity::Error,
             location: location.into(),
@@ -29,7 +33,11 @@ impl PolicyDiagnostic {
         }
     }
 
-    pub fn warning(location: impl Into<String>, rule: Option<String>, message: impl Into<String>) -> Self {
+    pub fn warning(
+        location: impl Into<String>,
+        rule: Option<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             severity: DiagnosticSeverity::Warning,
             location: location.into(),

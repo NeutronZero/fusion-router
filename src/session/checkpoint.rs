@@ -2,10 +2,10 @@
 //!
 //! Atomic checkpoint creation, compatibility checking on resume, and session recovery.
 
-use uuid::Uuid;
 use crate::session::store::SessionStore;
 use crate::session::types::{SessionId, SessionSnapshot};
 use crate::types::execution_context::ExecutionContext;
+use uuid::Uuid;
 
 pub struct CheckpointEngine;
 

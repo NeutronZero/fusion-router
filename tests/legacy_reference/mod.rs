@@ -7,12 +7,16 @@
 //! preserved 100% of historical compiler pass behavior.
 
 use async_trait::async_trait;
+use fusion_types::{CompilerError, IRNodeKind, ModelCatalog, WorkflowIR};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
-use fusion_types::{CompilerError, IRNodeKind, ModelCatalog, WorkflowIR};
 
 fn val_err(pass: &str, node_id: Option<Uuid>, msg: String) -> CompilerError {
-    CompilerError::ValidationError { pass: pass.to_string(), node_id, message: msg }
+    CompilerError::ValidationError {
+        pass: pass.to_string(),
+        node_id,
+        message: msg,
+    }
 }
 
 #[allow(dead_code)]
@@ -36,7 +40,11 @@ impl LegacyCompilerPass for LegacyConstraintValidationPass {
 
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
         if ir.nodes.is_empty() {
-            return Err(val_err("constraint_validation", None, "IR must have at least one node".into()));
+            return Err(val_err(
+                "constraint_validation",
+                None,
+                "IR must have at least one node".into(),
+            ));
         }
         Ok(ir)
     }
@@ -103,12 +111,18 @@ impl LegacyCompilerPass for LegacyControlFlowValidationPass {
         // Validate edge references
         for edge in &ir.edges {
             if !node_ids.contains(&edge.from) {
-                return Err(val_err("control_flow_validation", None,
-                    format!("Edge from {} references unknown source node", edge.from)));
+                return Err(val_err(
+                    "control_flow_validation",
+                    None,
+                    format!("Edge from {} references unknown source node", edge.from),
+                ));
             }
             if !node_ids.contains(&edge.to) {
-                return Err(val_err("control_flow_validation", None,
-                    format!("Edge to {} references unknown target node", edge.to)));
+                return Err(val_err(
+                    "control_flow_validation",
+                    None,
+                    format!("Edge to {} references unknown target node", edge.to),
+                ));
             }
         }
 
@@ -116,63 +130,88 @@ impl LegacyCompilerPass for LegacyControlFlowValidationPass {
         for node in &ir.nodes {
             match node.kind {
                 IRNodeKind::Conditional => {
-                    let outgoing: Vec<&fusion_types::IREdge> = ir.edges.iter()
-                        .filter(|e| e.from == node.id)
-                        .collect();
+                    let outgoing: Vec<&fusion_types::IREdge> =
+                        ir.edges.iter().filter(|e| e.from == node.id).collect();
                     if outgoing.is_empty() {
-                        return Err(val_err("control_flow_validation", Some(node.id),
-                            "Conditional node must have at least one outgoing edge".to_string()));
+                        return Err(val_err(
+                            "control_flow_validation",
+                            Some(node.id),
+                            "Conditional node must have at least one outgoing edge".to_string(),
+                        ));
                     }
                     if !outgoing.iter().any(|e| e.condition.is_some()) {
-                        return Err(val_err("control_flow_validation", Some(node.id),
-                            "Conditional node must have at least one edge with a condition".to_string()));
+                        return Err(val_err(
+                            "control_flow_validation",
+                            Some(node.id),
+                            "Conditional node must have at least one edge with a condition"
+                                .to_string(),
+                        ));
                     }
                 }
                 IRNodeKind::Loop => {
-                    let outgoing: Vec<&fusion_types::IREdge> = ir.edges.iter()
-                        .filter(|e| e.from == node.id)
-                        .collect();
+                    let outgoing: Vec<&fusion_types::IREdge> =
+                        ir.edges.iter().filter(|e| e.from == node.id).collect();
                     if outgoing.is_empty() {
-                        return Err(val_err("control_flow_validation", Some(node.id),
-                            "Loop node must have at least one outgoing edge".to_string()));
+                        return Err(val_err(
+                            "control_flow_validation",
+                            Some(node.id),
+                            "Loop node must have at least one outgoing edge".to_string(),
+                        ));
                     }
                     if !node.config.contains_key("max_iterations") {
-                        return Err(val_err("control_flow_validation", Some(node.id),
-                            "Loop node must have max_iterations in config".to_string()));
+                        return Err(val_err(
+                            "control_flow_validation",
+                            Some(node.id),
+                            "Loop node must have max_iterations in config".to_string(),
+                        ));
                     }
                 }
                 IRNodeKind::Split => {
-                    let outgoing: Vec<&fusion_types::IREdge> = ir.edges.iter()
-                        .filter(|e| e.from == node.id)
-                        .collect();
+                    let outgoing: Vec<&fusion_types::IREdge> =
+                        ir.edges.iter().filter(|e| e.from == node.id).collect();
                     if outgoing.len() < 2 {
-                        return Err(val_err("control_flow_validation", Some(node.id),
-                            format!("Split node must have at least 2 outgoing edges, got {}", outgoing.len())));
+                        return Err(val_err(
+                            "control_flow_validation",
+                            Some(node.id),
+                            format!(
+                                "Split node must have at least 2 outgoing edges, got {}",
+                                outgoing.len()
+                            ),
+                        ));
                     }
                 }
                 IRNodeKind::Join => {
-                    let incoming: Vec<&fusion_types::IREdge> = ir.edges.iter()
-                        .filter(|e| e.to == node.id)
-                        .collect();
+                    let incoming: Vec<&fusion_types::IREdge> =
+                        ir.edges.iter().filter(|e| e.to == node.id).collect();
                     if incoming.len() < 2 {
-                        return Err(val_err("control_flow_validation", Some(node.id),
-                            format!("Join node must have at least 2 incoming edges, got {}", incoming.len())));
+                        return Err(val_err(
+                            "control_flow_validation",
+                            Some(node.id),
+                            format!(
+                                "Join node must have at least 2 incoming edges, got {}",
+                                incoming.len()
+                            ),
+                        ));
                     }
                 }
                 IRNodeKind::Barrier => {
-                    let outgoing: Vec<&fusion_types::IREdge> = ir.edges.iter()
-                        .filter(|e| e.from == node.id)
-                        .collect();
-                    let incoming: Vec<&fusion_types::IREdge> = ir.edges.iter()
-                        .filter(|e| e.to == node.id)
-                        .collect();
+                    let outgoing: Vec<&fusion_types::IREdge> =
+                        ir.edges.iter().filter(|e| e.from == node.id).collect();
+                    let incoming: Vec<&fusion_types::IREdge> =
+                        ir.edges.iter().filter(|e| e.to == node.id).collect();
                     if incoming.is_empty() {
-                        return Err(val_err("control_flow_validation", Some(node.id),
-                            "Barrier node must have at least one incoming edge".to_string()));
+                        return Err(val_err(
+                            "control_flow_validation",
+                            Some(node.id),
+                            "Barrier node must have at least one incoming edge".to_string(),
+                        ));
                     }
                     if outgoing.is_empty() {
-                        return Err(val_err("control_flow_validation", Some(node.id),
-                            "Barrier node must have at least one outgoing edge".to_string()));
+                        return Err(val_err(
+                            "control_flow_validation",
+                            Some(node.id),
+                            "Barrier node must have at least one outgoing edge".to_string(),
+                        ));
                     }
                 }
                 _ => {}
@@ -187,22 +226,31 @@ impl LegacyCompilerPass for LegacyControlFlowValidationPass {
 
 impl LegacyControlFlowValidationPass {
     fn detect_illegal_cycles(&self, ir: &WorkflowIR) -> Result<(), CompilerError> {
-        let edges: Vec<(Uuid, Uuid)> = ir.edges.iter()
+        let edges: Vec<(Uuid, Uuid)> = ir
+            .edges
+            .iter()
             .filter(|e| e.condition.as_deref() != Some("loop"))
             .map(|e| (e.from, e.to))
             .collect();
 
         match three_color_cycle_detect(&edges) {
             Ok(()) => Ok(()),
-            Err(node_id) => Err(val_err("control_flow_validation", Some(node_id),
-                "Illegal cycle detected outside of loop back-edges".into())),
+            Err(node_id) => Err(val_err(
+                "control_flow_validation",
+                Some(node_id),
+                "Illegal cycle detected outside of loop back-edges".into(),
+            )),
         }
     }
 }
 
 fn three_color_cycle_detect(edges: &[(Uuid, Uuid)]) -> Result<(), Uuid> {
     #[derive(Clone, Copy, PartialEq)]
-    enum Color { White, Grey, Black }
+    enum Color {
+        White,
+        Grey,
+        Black,
+    }
 
     let mut colors: HashMap<Uuid, Color> = HashMap::new();
     let mut graph: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
@@ -222,7 +270,9 @@ fn three_color_cycle_detect(edges: &[(Uuid, Uuid)]) -> Result<(), Uuid> {
                 match colors.get(&next).unwrap_or(&Color::White) {
                     Color::Grey => return true,
                     Color::White => {
-                        if dfs(next, graph, colors) { return true; }
+                        if dfs(next, graph, colors) {
+                            return true;
+                        }
                     }
                     Color::Black => continue,
                 }
@@ -234,9 +284,10 @@ fn three_color_cycle_detect(edges: &[(Uuid, Uuid)]) -> Result<(), Uuid> {
 
     for node in graph.keys().copied().collect::<Vec<_>>() {
         if colors.get(&node).unwrap_or(&Color::White) == &Color::White
-            && dfs(node, &graph, &mut colors) {
-                return Err(node);
-            }
+            && dfs(node, &graph, &mut colors)
+        {
+            return Err(node);
+        }
     }
 
     Ok(())

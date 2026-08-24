@@ -15,37 +15,82 @@ use parking_lot::Mutex;
 #[non_exhaustive]
 pub enum ResolverError {
     UnregisteredCapability(CapabilityId),
-    NoCompatibleVersion { capability: String, requirement: String },
+    NoCompatibleVersion {
+        capability: String,
+        requirement: String,
+    },
     #[allow(dead_code)]
-    AmbiguousResolution { capability: String, matches: Vec<CapabilityId> },
-    UnresolvedDependency { capability: CapabilityId, dependency: CapabilityId },
+    AmbiguousResolution {
+        capability: String,
+        matches: Vec<CapabilityId>,
+    },
+    UnresolvedDependency {
+        capability: CapabilityId,
+        dependency: CapabilityId,
+    },
     CircularDependency,
-    PolicyDenied { capability: CapabilityId, reason: String },
-    LatencyExceeded { capability: CapabilityId, latency_ms: u64, max_ms: u64 },
+    PolicyDenied {
+        capability: CapabilityId,
+        reason: String,
+    },
+    LatencyExceeded {
+        capability: CapabilityId,
+        latency_ms: u64,
+        max_ms: u64,
+    },
     GraphValidationFailed(String),
 }
 
 impl std::fmt::Display for ResolverError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ResolverError::UnregisteredCapability(id) => write!(f, "capability not registered: {id}"),
-            ResolverError::NoCompatibleVersion { capability, requirement } => {
-                write!(f, "no compatible version for '{capability}' matching '{requirement}'")
+            ResolverError::UnregisteredCapability(id) => {
+                write!(f, "capability not registered: {id}")
             }
-            ResolverError::AmbiguousResolution { capability, matches } => {
-                write!(f, "ambiguous resolution for '{capability}': matches {matches:?}")
+            ResolverError::NoCompatibleVersion {
+                capability,
+                requirement,
+            } => {
+                write!(
+                    f,
+                    "no compatible version for '{capability}' matching '{requirement}'"
+                )
             }
-            ResolverError::UnresolvedDependency { capability, dependency } => {
-                write!(f, "unresolved dependency: '{capability}' requires '{dependency}'")
+            ResolverError::AmbiguousResolution {
+                capability,
+                matches,
+            } => {
+                write!(
+                    f,
+                    "ambiguous resolution for '{capability}': matches {matches:?}"
+                )
+            }
+            ResolverError::UnresolvedDependency {
+                capability,
+                dependency,
+            } => {
+                write!(
+                    f,
+                    "unresolved dependency: '{capability}' requires '{dependency}'"
+                )
             }
             ResolverError::CircularDependency => write!(f, "circular dependency detected"),
             ResolverError::PolicyDenied { capability, reason } => {
                 write!(f, "policy denied '{capability}': {reason}")
             }
-            ResolverError::LatencyExceeded { capability, latency_ms, max_ms } => {
-                write!(f, "capability '{capability}' latency {latency_ms}ms exceeds {max_ms}ms")
+            ResolverError::LatencyExceeded {
+                capability,
+                latency_ms,
+                max_ms,
+            } => {
+                write!(
+                    f,
+                    "capability '{capability}' latency {latency_ms}ms exceeds {max_ms}ms"
+                )
             }
-            ResolverError::GraphValidationFailed(msg) => write!(f, "graph validation failed: {msg}"),
+            ResolverError::GraphValidationFailed(msg) => {
+                write!(f, "graph validation failed: {msg}")
+            }
         }
     }
 }
@@ -154,8 +199,13 @@ impl CapabilityResolver {
     }
 
     /// Resolves a single `VersionConstraint` to the highest-matching `CapabilityContract`.
-    fn resolve_version(&self, constraint: &VersionConstraint) -> Result<CapabilityContract, ResolverError> {
-        let mut candidates: Vec<&CapabilityContract> = self.registry.list()
+    fn resolve_version(
+        &self,
+        constraint: &VersionConstraint,
+    ) -> Result<CapabilityContract, ResolverError> {
+        let mut candidates: Vec<&CapabilityContract> = self
+            .registry
+            .list()
             .into_iter()
             .filter(|c| c.id.as_str().starts_with(&constraint.capability_prefix))
             .filter(|c| constraint.requirement.matches(&c.version))
@@ -302,9 +352,10 @@ impl CapabilityResolver {
         // Resolve Required Capabilities (exact ID)
         for req_id in &reqs.required_capabilities {
             let target_id = self.aliases.get(req_id).unwrap_or(req_id);
-            let contract = self.registry.get(target_id).ok_or_else(|| {
-                ResolverError::UnregisteredCapability(req_id.clone())
-            })?;
+            let contract = self
+                .registry
+                .get(target_id)
+                .ok_or_else(|| ResolverError::UnregisteredCapability(req_id.clone()))?;
             if let Some(ref policy) = reqs.policy {
                 self.apply_policy(req_id, contract, policy)?;
             }
@@ -342,7 +393,8 @@ impl CapabilityResolver {
         }
 
         // Expand transitive dependencies
-        let resolved_contracts: Vec<CapabilityContract> = instances.iter().map(|i| i.contract.clone()).collect();
+        let resolved_contracts: Vec<CapabilityContract> =
+            instances.iter().map(|i| i.contract.clone()).collect();
         let (all_contracts, dep_edges) =
             self.expand_dependencies(&resolved_contracts, reqs.policy.as_ref())?;
 
@@ -363,7 +415,9 @@ impl CapabilityResolver {
             graph.add_dependency(edge.from.clone(), edge.to.clone());
         }
 
-        graph.validate().map_err(ResolverError::GraphValidationFailed)?;
+        graph
+            .validate()
+            .map_err(ResolverError::GraphValidationFailed)?;
 
         // Final belt-and-braces: re-verify every resolved instance against policy
         // (guards against future resolution paths forgetting the check).
@@ -373,7 +427,10 @@ impl CapabilityResolver {
             }
         }
 
-        let resolved = ResolvedCapabilitySet { graph, instances: final_instances };
+        let resolved = ResolvedCapabilitySet {
+            graph,
+            instances: final_instances,
+        };
         self.cache.put(reqs.clone(), resolved.clone());
         Ok(resolved)
     }
@@ -400,7 +457,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         reg.register(CapabilityContract {
             id: CapabilityId::new("echo.uppercase"),
@@ -415,7 +473,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         reg.freeze();
         Arc::new(reg)
@@ -437,7 +496,10 @@ mod tests {
     fn test_capability_resolution_alias() {
         let registry = build_test_registry();
         let mut resolver = CapabilityResolver::new(registry);
-        resolver.register_alias(CapabilityId::new("legacy.echo"), CapabilityId::new("echo.text"));
+        resolver.register_alias(
+            CapabilityId::new("legacy.echo"),
+            CapabilityId::new("echo.text"),
+        );
 
         let reqs = RequirementSet::new(vec![CapabilityId::new("legacy.echo")]);
         let res = resolver.resolve(&reqs).unwrap();
@@ -492,7 +554,8 @@ mod tests {
                 reliability_score: 1.0,
                 supports_streaming: false,
                 traits: vec![],
-            }).unwrap();
+            })
+            .unwrap();
         }
 
         reg.freeze();
@@ -561,7 +624,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         reg.register(CapabilityContract {
             id: CapabilityId::new("cap.filesystem"),
@@ -576,7 +640,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         reg.register(CapabilityContract {
             id: CapabilityId::new("cap.browser"),
@@ -591,7 +656,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         reg.freeze();
         Arc::new(reg)
@@ -606,7 +672,11 @@ mod tests {
         let res = resolver.resolve(&reqs).unwrap();
 
         assert_eq!(res.instances.len(), 3);
-        let ids: Vec<&str> = res.instances.iter().map(|i| i.contract.id.as_str()).collect();
+        let ids: Vec<&str> = res
+            .instances
+            .iter()
+            .map(|i| i.contract.id.as_str())
+            .collect();
         assert!(ids.contains(&"cap.browser"));
         assert!(ids.contains(&"cap.filesystem"));
         assert!(ids.contains(&"cap.shell"));
@@ -642,7 +712,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
         reg.freeze();
         let registry: Arc<dyn CapabilityRegistry> = Arc::new(reg);
         let resolver = CapabilityResolver::new(registry);
@@ -831,7 +902,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         // B depends on C
         reg.register(CapabilityContract {
@@ -847,7 +919,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         // C depends on A — completing the cycle
         reg.register(CapabilityContract {
@@ -863,7 +936,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         reg.freeze();
         let registry: Arc<dyn CapabilityRegistry> = Arc::new(reg);
@@ -903,7 +977,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         // B depends on A — direct reverse edge
         reg.register(CapabilityContract {
@@ -919,7 +994,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         reg.freeze();
         let registry: Arc<dyn CapabilityRegistry> = Arc::new(reg);
@@ -1062,7 +1138,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         reg.freeze();
         let registry: Arc<dyn CapabilityRegistry> = Arc::new(reg);
@@ -1103,7 +1180,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         // echo.uppercase has 50ms latency
         reg.register(CapabilityContract {
@@ -1119,7 +1197,8 @@ mod tests {
             reliability_score: 1.0,
             supports_streaming: false,
             traits: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         reg.freeze();
         let registry: Arc<dyn CapabilityRegistry> = Arc::new(reg);
@@ -1134,9 +1213,20 @@ mod tests {
         let res = resolver.resolve(&reqs).unwrap();
 
         // Optional capability exceeding latency is silently included — no error
-        assert_eq!(res.instances.len(), 2, "Both required and optional should be resolved");
-        let ids: Vec<&str> = res.instances.iter().map(|i| i.contract.id.as_str()).collect();
+        assert_eq!(
+            res.instances.len(),
+            2,
+            "Both required and optional should be resolved"
+        );
+        let ids: Vec<&str> = res
+            .instances
+            .iter()
+            .map(|i| i.contract.id.as_str())
+            .collect();
         assert!(ids.contains(&"echo.text"), "Required cap should be present");
-        assert!(ids.contains(&"echo.uppercase"), "Optional cap exceeding latency should still be present");
+        assert!(
+            ids.contains(&"echo.uppercase"),
+            "Optional cap exceeding latency should still be present"
+        );
     }
 }

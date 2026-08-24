@@ -85,7 +85,9 @@ impl PluginManager {
 
         for contract in plugin.capabilities() {
             tracing::info!(capability = %contract.id, plugin = %metadata.name, "registered capability contract");
-            self.capability_registry.register(contract).map_err(|e| e.to_string())?;
+            self.capability_registry
+                .register(contract)
+                .map_err(|e| e.to_string())?;
         }
 
         Ok(())
@@ -123,7 +125,10 @@ impl PluginManager {
         if self.wasm_runtime.is_none() {
             self.wasm_runtime = Some(crate::wasm::WasmRuntime::new()?);
         }
-        let runtime = self.wasm_runtime.as_mut().ok_or_else(|| anyhow::anyhow!("WasmRuntime initialization failed"))?;
+        let runtime = self
+            .wasm_runtime
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("WasmRuntime initialization failed"))?;
 
         let wasm_path = Path::new(dir).join(&manifest.plugin.entry);
         let wasm_bytes = std::fs::read(&wasm_path)?;
@@ -184,8 +189,8 @@ impl Default for PluginManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fusion_plugin_echo::EchoPlugin;
     use fusion_plugin_api::CapabilityId;
+    use fusion_plugin_echo::EchoPlugin;
 
     #[test]
     fn test_register_echo_capability_plugin() {

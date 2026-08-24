@@ -11,13 +11,13 @@ pub use state::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scheduler::connector_resolver::ConnectorResolver;
+    use crate::types::*;
     use axum::http::StatusCode;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use uuid::Uuid;
-    use crate::scheduler::connector_resolver::ConnectorResolver;
-    use crate::types::*;
 
     #[tokio::test]
     async fn test_health_endpoint() {
@@ -28,8 +28,8 @@ mod tests {
     #[tokio::test]
     async fn test_ready_endpoint() {
         use crate::config::{
-            AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig,
-            ResourceConfig, ServerConfig, StrategyConfig, ToolsConfig,
+            AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig, ResourceConfig,
+            ServerConfig, StrategyConfig, ToolsConfig,
         };
         let config = AppConfig {
             unsafe_dev: false,
@@ -63,15 +63,12 @@ mod tests {
                 "test".into(),
             )),
             crate::resource::DefaultResourceManager::new(config.to_quota()),
-            Arc::new(
-                crate::telemetry::SqliteEvidenceRepository::new(":memory:").unwrap(),
-            ),
+            Arc::new(crate::telemetry::SqliteEvidenceRepository::new(":memory:").unwrap()),
             config,
             PathBuf::from("config/default.yaml"),
             Arc::new(ConnectorResolver::new()),
         );
-        let (status, res) =
-            crate::server::health::ready_handler(axum::extract::State(state)).await;
+        let (status, res) = crate::server::health::ready_handler(axum::extract::State(state)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(res["status"], "ok");
     }
@@ -89,12 +86,10 @@ mod tests {
         let response = chat::error_response(request_id, "test-model", "something went wrong");
         assert_eq!(response.model, "test-model");
         assert_eq!(response.choices[0].finish_reason, "error");
-        assert!(
-            response.choices[0]
-                .message
-                .content
-                .contains("something went wrong")
-        );
+        assert!(response.choices[0]
+            .message
+            .content
+            .contains("something went wrong"));
         assert_eq!(response.object, "chat.completion");
     }
 
@@ -146,7 +141,8 @@ mod tests {
             }),
         };
 
-        let anthropic_resp = AnthropicMessagesResponse::from((completion_resp, "claude-3-5-sonnet".to_string()));
+        let anthropic_resp =
+            AnthropicMessagesResponse::from((completion_resp, "claude-3-5-sonnet".to_string()));
         assert_eq!(anthropic_resp.id, "msg_resp-123");
         assert_eq!(anthropic_resp.r#type, "message");
         assert_eq!(anthropic_resp.role, "assistant");
@@ -155,7 +151,3 @@ mod tests {
         assert_eq!(anthropic_resp.usage.output_tokens, 8);
     }
 }
-
-
-
-

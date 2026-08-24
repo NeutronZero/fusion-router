@@ -1,7 +1,7 @@
+use crate::compiler::diagnostics::CompilerDiagnostic;
+use crate::strategies::Strategy;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::strategies::Strategy;
-use crate::compiler::diagnostics::CompilerDiagnostic;
 
 #[derive(Default)]
 pub struct StrategyRegistry {

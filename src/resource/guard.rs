@@ -1,7 +1,7 @@
+use super::ResourceManager;
+use crate::types::ExecutionGraph;
 use std::sync::Arc;
 use uuid::Uuid;
-use crate::types::ExecutionGraph;
-use super::ResourceManager;
 
 pub struct ResourceGuard {
     pub request_id: Uuid,

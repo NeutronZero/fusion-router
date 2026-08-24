@@ -1,7 +1,9 @@
 use fusion_router::providers::circuit_breaker::{CircuitBreaker, CircuitState};
-use fusion_types::BudgetExceededError;
-use fusion_router::resource::{BudgetEnvelope, DefaultResourceManager, ResourceGuard, ResourceManager};
+use fusion_router::resource::{
+    BudgetEnvelope, DefaultResourceManager, ResourceGuard, ResourceManager,
+};
 use fusion_router::types::{ExecutionGraph, GraphMetadata, NanoUSD, Quota};
+use fusion_types::BudgetExceededError;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -77,7 +79,9 @@ async fn test_resource_quota_exhausted_globally() {
 fn test_budget_exceeded_per_request() {
     let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 100, 5);
     assert!(env.record_and_check(NanoUSD::from_nanos(600), 30).is_ok());
-    let err = env.record_and_check(NanoUSD::from_nanos(500), 30).unwrap_err();
+    let err = env
+        .record_and_check(NanoUSD::from_nanos(500), 30)
+        .unwrap_err();
     assert_eq!(
         err,
         BudgetExceededError::Cost {

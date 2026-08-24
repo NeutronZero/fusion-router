@@ -9,16 +9,14 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 pub use fusion_core::NanoUSD;
 
 pub mod execution;
 
-pub use execution::{
-    ExecutionIntent, OutputPreferences,
-};
+pub use execution::{ExecutionIntent, OutputPreferences};
 
 // ---------------------------------------------------------------------------
 // IR types (planner output / compiler input)
@@ -288,7 +286,6 @@ pub struct ToolCall {
 /// drift-prone copies).
 pub use fusion_core::ModelCatalog;
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Intent {
     Code,
@@ -444,9 +441,21 @@ pub enum BudgetExceededError {
 impl std::fmt::Display for BudgetExceededError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Cost { spent, max } => write!(f, "Cost budget exceeded: {} millicosts spent, {} max", spent, max),
-            Self::Tokens { spent, max } => write!(f, "Token budget exceeded: {} tokens spent, {} max", spent, max),
-            Self::Iterations { current, max } => write!(f, "Iteration budget exceeded: {} iterations, {} max", current, max),
+            Self::Cost { spent, max } => write!(
+                f,
+                "Cost budget exceeded: {} millicosts spent, {} max",
+                spent, max
+            ),
+            Self::Tokens { spent, max } => write!(
+                f,
+                "Token budget exceeded: {} tokens spent, {} max",
+                spent, max
+            ),
+            Self::Iterations { current, max } => write!(
+                f,
+                "Iteration budget exceeded: {} iterations, {} max",
+                current, max
+            ),
         }
     }
 }
@@ -489,10 +498,7 @@ pub enum CompilerError {
         message: String,
     },
     #[error("Pass '{pass}' failed: {message}")]
-    PassError {
-        pass: String,
-        message: String,
-    },
+    PassError { pass: String, message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
@@ -529,7 +535,10 @@ mod tests {
         for variant in variants {
             let expected = format!("{:?}", variant);
             let actual = variant.as_label();
-            assert_eq!(actual, expected, "as_label must match Debug format for Prometheus metric label continuity");
+            assert_eq!(
+                actual, expected,
+                "as_label must match Debug format for Prometheus metric label continuity"
+            );
         }
     }
 
@@ -563,8 +572,16 @@ mod tests {
         assert!(env.record_and_check(NanoUSD::from_nanos(500), 30).is_ok());
         assert_eq!(env.spent_cost().as_nanos(), 500);
         assert_eq!(env.spent_tokens(), 30);
-        let err = env.record_and_check(NanoUSD::from_nanos(600), 30).unwrap_err();
-        assert_eq!(err, BudgetExceededError::Cost { spent: 1100, max: 1000 });
+        let err = env
+            .record_and_check(NanoUSD::from_nanos(600), 30)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            BudgetExceededError::Cost {
+                spent: 1100,
+                max: 1000
+            }
+        );
     }
 
     #[test]

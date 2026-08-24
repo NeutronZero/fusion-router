@@ -1,9 +1,9 @@
 //! Executable Architecture Conformance Test Suite (ADR-027 Invariants)
 
+use fusion_kernel::capability::graph as fk_graph;
 use fusion_plugin_api::{CapabilityContract, CapabilityId, Plugin, PluginMetadata};
 use fusion_router::capability::{CapabilityRegistry, InMemoryCapabilityRegistry};
 use fusion_router::plugin::CompatibilityChecker;
-use fusion_kernel::capability::graph as fk_graph;
 use serde_json::json;
 
 #[test]
@@ -15,9 +15,9 @@ fn invariant_capability_registry_immutable_post_freeze() {
         description: "Invariant test".into(),
         inputs_schema: json!({}),
         outputs_schema: json!({}),
-            permissions: vec![],
-            dependencies: vec![],
-            estimated_cost: fusion_core::NanoUSD::ZERO,
+        permissions: vec![],
+        dependencies: vec![],
+        estimated_cost: fusion_core::NanoUSD::ZERO,
         estimated_latency_ms: 1,
         reliability_score: 1.0,
         supports_streaming: false,
@@ -59,9 +59,9 @@ fn invariant_capability_graph_detects_conflicts_and_cycles() {
         description: "Node A".into(),
         inputs_schema: json!({}),
         outputs_schema: json!({}),
-            permissions: vec![],
-            dependencies: vec![],
-            estimated_cost: fusion_core::NanoUSD::ZERO,
+        permissions: vec![],
+        dependencies: vec![],
+        estimated_cost: fusion_core::NanoUSD::ZERO,
         estimated_latency_ms: 1,
         reliability_score: 1.0,
         supports_streaming: false,
@@ -73,9 +73,9 @@ fn invariant_capability_graph_detects_conflicts_and_cycles() {
         description: "Node B".into(),
         inputs_schema: json!({}),
         outputs_schema: json!({}),
-            permissions: vec![],
-            dependencies: vec![],
-            estimated_cost: fusion_core::NanoUSD::ZERO,
+        permissions: vec![],
+        dependencies: vec![],
+        estimated_cost: fusion_core::NanoUSD::ZERO,
         estimated_latency_ms: 1,
         reliability_score: 1.0,
         supports_streaming: false,
@@ -88,6 +88,3 @@ fn invariant_capability_graph_detects_conflicts_and_cycles() {
 
     assert!(graph.validate().is_err());
 }
-
-
-

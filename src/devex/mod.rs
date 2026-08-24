@@ -5,8 +5,8 @@ pub mod trace_inspector;
 pub mod visualizer;
 
 #[allow(unused_imports)]
-pub use visualizer::GraphVisualizer;
+pub use scaffold::PluginScaffolder;
 #[allow(unused_imports)]
 pub use trace_inspector::TraceInspector;
 #[allow(unused_imports)]
-pub use scaffold::PluginScaffolder;
+pub use visualizer::GraphVisualizer;

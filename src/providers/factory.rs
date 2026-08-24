@@ -6,7 +6,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::{CapabilityDescriptor, ProviderConfig};
 use super::circuit_breaker::CircuitBreaker;
 use super::circuit_breaking_provider::CircuitBreakingProvider;
 use super::generic_openai_model::GenericOpenAIModel;
@@ -16,6 +15,7 @@ use super::provider_with_headers::ProviderWithHeaders;
 use super::router::ProviderTarget;
 use super::zen::ZenProvider;
 use super::ChatProvider;
+use crate::config::{CapabilityDescriptor, ProviderConfig};
 
 /// Default HTTP timeout for generic providers (120s).
 const GENERIC_TIMEOUT: Duration = Duration::from_secs(120);
@@ -30,7 +30,10 @@ pub fn resolve_api_key(
 ) -> anyhow::Result<String> {
     // 1. Direct api_key field (supports `{env:VAR}` syntax)
     if let Some(direct) = &cfg.api_key {
-        if let Some(var) = direct.strip_prefix("{env:").and_then(|s| s.strip_suffix('}')) {
+        if let Some(var) = direct
+            .strip_prefix("{env:")
+            .and_then(|s| s.strip_suffix('}'))
+        {
             if let Ok(val) = std::env::var(var) {
                 if !val.trim().is_empty() {
                     return Ok(val);
@@ -70,11 +73,7 @@ pub fn resolve_api_key(
 /// Built-in types (`openrouter`, `zen`, `ollama`) use their dedicated
 /// implementations. Everything else (`openai-compatible`, `deepseek`, `groq`,
 /// `cerebras`, etc.) uses the generic OpenAI-compatible model.
-pub fn create_provider_target(
-    name: &str,
-    cfg: &ProviderConfig,
-    api_key: String,
-) -> ProviderTarget {
+pub fn create_provider_target(name: &str, cfg: &ProviderConfig, api_key: String) -> ProviderTarget {
     let circuit_breaker = CircuitBreaker::new(cfg.failure_threshold, 3, cfg.cooldown_secs);
     let transport = cfg.effective_transport().to_string();
     let base_url = cfg.base_url.clone();
@@ -87,25 +86,20 @@ pub fn create_provider_target(
         circuit_breaker,
         Box::new(move || -> Arc<dyn ChatProvider + Send + Sync> {
             let provider: Arc<dyn ChatProvider + Send + Sync> = match transport.as_str() {
-                "openrouter" => {
-                    Arc::new(OpenRouterProvider::with_base_url(
-                        api_key.clone(),
-                        base_url.clone(),
-                    ))
-                }
-                "zen" | "opencode-zen" => {
-                    Arc::new(ZenProvider::with_base_url(
-                        api_key.clone(),
-                        base_url.clone(),
-                    ))
-                }
-                "ollama" => {
-                    Arc::new(OllamaProvider::new())
-                }
+                "openrouter" => Arc::new(OpenRouterProvider::with_base_url(
+                    api_key.clone(),
+                    base_url.clone(),
+                )),
+                "zen" | "opencode-zen" => Arc::new(ZenProvider::with_base_url(
+                    api_key.clone(),
+                    base_url.clone(),
+                )),
+                "ollama" => Arc::new(OllamaProvider::new()),
                 _ => {
                     // Generic OpenAI-compatible provider.
-                    let url = base_url.clone().unwrap_or_else(|| {
-                        match transport.as_str() {
+                    let url = base_url
+                        .clone()
+                        .unwrap_or_else(|| match transport.as_str() {
                             "deepseek" => "https://api.deepseek.com/v1".to_string(),
                             "groq" => "https://api.groq.com/openai/v1".to_string(),
                             "cerebras" => "https://api.cerebras.ai/v1".to_string(),
@@ -116,15 +110,17 @@ pub fn create_provider_target(
                             "openai" => "https://api.openai.com/v1".to_string(),
                             "anthropic" => "https://api.anthropic.com/v1".to_string(),
                             _ => "http://localhost:8080/v1".to_string(),
-                        }
-                    });
+                        });
 
                     let (model_id, model_cfg) = models_cfg
                         .iter()
                         .next()
                         .map(|(id, mc)| (id.clone(), mc.clone()))
                         .unwrap_or_else(|| {
-                            (format!("{}-model", provider_name), CapabilityDescriptor::default())
+                            (
+                                format!("{}-model", provider_name),
+                                CapabilityDescriptor::default(),
+                            )
                         });
 
                     let model = GenericOpenAIModel::new(
@@ -134,8 +130,7 @@ pub fn create_provider_target(
                         &model_cfg,
                         format!("{}/", provider_name),
                     );
-                    let transport = super::HttpTransport::new(GENERIC_TIMEOUT)
-                        .unwrap_or_default();
+                    let transport = super::HttpTransport::new(GENERIC_TIMEOUT).unwrap_or_default();
                     Arc::new(super::Provider::new(
                         Box::new(model),
                         Box::new(transport),
@@ -175,24 +170,19 @@ pub fn create_protected_target(
         circuit_breaker,
         Box::new(move || -> Arc<dyn ChatProvider + Send + Sync> {
             let inner: Arc<dyn ChatProvider + Send + Sync> = match transport.as_str() {
-                "openrouter" => {
-                    Arc::new(OpenRouterProvider::with_base_url(
-                        api_key.clone(),
-                        base_url.clone(),
-                    ))
-                }
-                "zen" | "opencode-zen" => {
-                    Arc::new(ZenProvider::with_base_url(
-                        api_key.clone(),
-                        base_url.clone(),
-                    ))
-                }
-                "ollama" => {
-                    Arc::new(OllamaProvider::new())
-                }
+                "openrouter" => Arc::new(OpenRouterProvider::with_base_url(
+                    api_key.clone(),
+                    base_url.clone(),
+                )),
+                "zen" | "opencode-zen" => Arc::new(ZenProvider::with_base_url(
+                    api_key.clone(),
+                    base_url.clone(),
+                )),
+                "ollama" => Arc::new(OllamaProvider::new()),
                 _ => {
-                    let url = base_url.clone().unwrap_or_else(|| {
-                        match transport.as_str() {
+                    let url = base_url
+                        .clone()
+                        .unwrap_or_else(|| match transport.as_str() {
                             "deepseek" => "https://api.deepseek.com/v1".to_string(),
                             "groq" => "https://api.groq.com/openai/v1".to_string(),
                             "cerebras" => "https://api.cerebras.ai/v1".to_string(),
@@ -203,15 +193,17 @@ pub fn create_protected_target(
                             "openai" => "https://api.openai.com/v1".to_string(),
                             "anthropic" => "https://api.anthropic.com/v1".to_string(),
                             _ => "http://localhost:8080/v1".to_string(),
-                        }
-                    });
+                        });
 
                     let (model_id, model_cfg) = models_cfg
                         .iter()
                         .next()
                         .map(|(id, mc)| (id.clone(), mc.clone()))
                         .unwrap_or_else(|| {
-                            (format!("{}-model", provider_name), CapabilityDescriptor::default())
+                            (
+                                format!("{}-model", provider_name),
+                                CapabilityDescriptor::default(),
+                            )
                         });
 
                     let model = GenericOpenAIModel::new(
@@ -221,8 +213,7 @@ pub fn create_protected_target(
                         &model_cfg,
                         format!("{}/", provider_name),
                     );
-                    let transport = super::HttpTransport::new(GENERIC_TIMEOUT)
-                        .unwrap_or_default();
+                    let transport = super::HttpTransport::new(GENERIC_TIMEOUT).unwrap_or_default();
                     Arc::new(super::Provider::new(
                         Box::new(model),
                         Box::new(transport),
@@ -252,11 +243,7 @@ pub fn create_protected_target(
 /// Unlike `create_provider_target`, this uses the config's base_url directly
 /// (it's called from the prepare/commit lifecycle where the old config is
 /// available).
-pub fn create_reload_target(
-    name: &str,
-    cfg: &ProviderConfig,
-    api_key: String,
-) -> ProviderTarget {
+pub fn create_reload_target(name: &str, cfg: &ProviderConfig, api_key: String) -> ProviderTarget {
     create_provider_target(name, cfg, api_key)
 }
 

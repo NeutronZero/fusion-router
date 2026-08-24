@@ -1,10 +1,10 @@
-use async_trait::async_trait;
-use std::path::PathBuf;
-use std::time::Instant;
 use crate::release::certification::{CertificationArtifact, CertificationContext};
 use crate::release::fixture::FixtureKind;
 use crate::release::fixture_loader::{discover_fixtures, load_fixture_manifest, FixtureLoader};
 use crate::release::gate::*;
+use async_trait::async_trait;
+use std::path::PathBuf;
+use std::time::Instant;
 
 #[allow(dead_code)]
 pub struct ConnectorGateConfig {
@@ -53,25 +53,32 @@ impl CertificationArtifact for ConnectorArtifact {
             GateCheck {
                 name: "connector-serde-schema".into(),
                 passed: self.valid_serde_schema,
-                message: format!("connector {} serde schema valid: {}", self.name, self.valid_serde_schema),
+                message: format!(
+                    "connector {} serde schema valid: {}",
+                    self.name, self.valid_serde_schema
+                ),
             },
             GateCheck {
                 name: "health-endpoint-declaration".into(),
                 passed: self.valid_health_endpoint_schema,
-                message: format!("connector {} health endpoint declaration valid: {}", self.name, self.valid_health_endpoint_schema),
+                message: format!(
+                    "connector {} health endpoint declaration valid: {}",
+                    self.name, self.valid_health_endpoint_schema
+                ),
             },
         ])
     }
 
     fn contract_checks(&self, _ctx: &CertificationContext) -> Result<Vec<GateCheck>, GateError> {
         let protocol_compat = self.protocol_version == 1;
-        Ok(vec![
-            GateCheck {
-                name: "protocol-schema-version".into(),
-                passed: protocol_compat,
-                message: format!("connector {} protocol v{} (compatible: ==1)", self.name, self.protocol_version),
-            },
-        ])
+        Ok(vec![GateCheck {
+            name: "protocol-schema-version".into(),
+            passed: protocol_compat,
+            message: format!(
+                "connector {} protocol v{} (compatible: ==1)",
+                self.name, self.protocol_version
+            ),
+        }])
     }
 }
 
@@ -88,19 +95,25 @@ pub struct FilesystemConnectorBackend {
 
 impl FilesystemConnectorBackend {
     pub fn new(fixture_root: PathBuf) -> Self {
-        Self { loader: FixtureLoader::new(fixture_root) }
+        Self {
+            loader: FixtureLoader::new(fixture_root),
+        }
     }
 }
 
 impl ConnectorBackend for FilesystemConnectorBackend {
-    fn name(&self) -> &'static str { "filesystem" }
+    fn name(&self) -> &'static str {
+        "filesystem"
+    }
 
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<ConnectorArtifact>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
         let entries = discover_fixtures(&manifest, FixtureKind::Connectors);
         let mut results = Vec::new();
         for entry in &entries {
-            let full_path = self.loader.resolve(&PathBuf::from("tests/fixtures").join(&entry.path));
+            let full_path = self
+                .loader
+                .resolve(&PathBuf::from("tests/fixtures").join(&entry.path));
             results.push(self.load(&full_path)?);
         }
         Ok(results)
@@ -108,7 +121,10 @@ impl ConnectorBackend for FilesystemConnectorBackend {
 
     fn load(&self, path: &std::path::Path) -> Result<ConnectorArtifact, GateError> {
         if !path.exists() {
-            return Err(GateError::ExecutionFailed(format!("connector path not found: {}", path.display())));
+            return Err(GateError::ExecutionFailed(format!(
+                "connector path not found: {}",
+                path.display()
+            )));
         }
         Ok(ConnectorArtifact::new(
             "http",
@@ -143,8 +159,12 @@ impl ConnectorGate {
 
 #[async_trait]
 impl ReleaseGate for ConnectorGate {
-    fn id(&self) -> GateId { GateId::Connector1 }
-    fn name(&self) -> &'static str { "Connector Conformance" }
+    fn id(&self) -> GateId {
+        GateId::Connector1
+    }
+    fn name(&self) -> &'static str {
+        "Connector Conformance"
+    }
     fn description(&self) -> &'static str {
         "Verify connector protocol schema, serialization compatibility, and health endpoint declarations"
     }
@@ -187,7 +207,10 @@ impl ReleaseGate for ConnectorGate {
             format!("{} connectors certified", artifacts.len())
         } else {
             let failed = all_checks.iter().filter(|c| !c.passed).count();
-            format!("{failed} checks failed across {} connectors", artifacts.len())
+            format!(
+                "{failed} checks failed across {} connectors",
+                artifacts.len()
+            )
         };
 
         GateExecution::Success(GateResult {
@@ -209,10 +232,14 @@ pub struct MockConnectorBackend {
 
 #[cfg(test)]
 impl ConnectorBackend for MockConnectorBackend {
-    fn name(&self) -> &'static str { "mock" }
+    fn name(&self) -> &'static str {
+        "mock"
+    }
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<ConnectorArtifact>, GateError> {
         if self.should_error {
-            return Err(GateError::ExecutionFailed("mock connector backend error".into()));
+            return Err(GateError::ExecutionFailed(
+                "mock connector backend error".into(),
+            ));
         }
         Ok(self.artifacts.clone())
     }
@@ -228,8 +255,13 @@ mod tests {
     #[test]
     fn test_connector_gate_metadata() {
         let gate = ConnectorGate::new(
-            Box::new(MockConnectorBackend { artifacts: vec![], should_error: false }),
-            ConnectorGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockConnectorBackend {
+                artifacts: vec![],
+                should_error: false,
+            }),
+            ConnectorGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let meta = gate.metadata();
         assert_eq!(meta.id, GateId::Connector1);
@@ -239,16 +271,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_connector_gate_passing() {
-        let artifact = ConnectorArtifact::new(
-            "http",
-            semver::Version::new(0, 10, 0),
-            1,
-            true,
-            true,
-        );
+        let artifact =
+            ConnectorArtifact::new("http", semver::Version::new(0, 10, 0), 1, true, true);
         let gate = ConnectorGate::new(
-            Box::new(MockConnectorBackend { artifacts: vec![artifact], should_error: false }),
-            ConnectorGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockConnectorBackend {
+                artifacts: vec![artifact],
+                should_error: false,
+            }),
+            ConnectorGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -268,8 +300,13 @@ mod tests {
             true,
         );
         let gate = ConnectorGate::new(
-            Box::new(MockConnectorBackend { artifacts: vec![artifact], should_error: false }),
-            ConnectorGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockConnectorBackend {
+                artifacts: vec![artifact],
+                should_error: false,
+            }),
+            ConnectorGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),

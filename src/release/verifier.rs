@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
 use crate::release::attestation::{AttestationBuilder, ATTESTATION_SCHEMA_VERSION};
 use crate::release::envelope::{AttestationEnvelope, ENVELOPE_VERSION};
 use crate::release::gate::GateError;
 use crate::release::signing::Signer;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationReport {
@@ -40,7 +40,9 @@ impl AttestationVerifier {
         }
 
         // Phase 2: Canonical Serialization
-        let canonical_bytes = match AttestationBuilder::to_canonical_bytes(&envelope.signed_attestation.attestation) {
+        let canonical_bytes = match AttestationBuilder::to_canonical_bytes(
+            &envelope.signed_attestation.attestation,
+        ) {
             Ok(bytes) => bytes,
             Err(e) => {
                 return Ok(VerificationReport {
@@ -69,11 +71,21 @@ impl AttestationVerifier {
         }
 
         // Phase 4: Semantic Consistency Check
-        let eval = &envelope.signed_attestation.attestation.assessment.policy_evaluation;
+        let eval = &envelope
+            .signed_attestation
+            .attestation
+            .assessment
+            .policy_evaluation;
         let semantic_valid = match eval.decision {
-            crate::release::evaluator::ReleaseDecision::Approved => eval.required_failures.is_empty(),
-            crate::release::evaluator::ReleaseDecision::ApprovedWithWaivers => !eval.waived_failures.is_empty(),
-            crate::release::evaluator::ReleaseDecision::Blocked => !eval.required_failures.is_empty(),
+            crate::release::evaluator::ReleaseDecision::Approved => {
+                eval.required_failures.is_empty()
+            }
+            crate::release::evaluator::ReleaseDecision::ApprovedWithWaivers => {
+                !eval.waived_failures.is_empty()
+            }
+            crate::release::evaluator::ReleaseDecision::Blocked => {
+                !eval.required_failures.is_empty()
+            }
         };
 
         let summary = if semantic_valid {
@@ -118,7 +130,10 @@ mod tests {
 
         let canonical_bytes = AttestationBuilder::to_canonical_bytes(&attestation).unwrap();
         let sig = signer.sign(&canonical_bytes).unwrap();
-        let signed = crate::release::signing::SignedAttestation { attestation, signature: sig };
+        let signed = crate::release::signing::SignedAttestation {
+            attestation,
+            signature: sig,
+        };
         let envelope = AttestationEnvelope::new(signed);
 
         let report = AttestationVerifier::verify(&envelope, &signer).unwrap();

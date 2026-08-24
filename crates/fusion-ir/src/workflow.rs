@@ -1,9 +1,9 @@
 use crate::edge::WorkflowEdge;
 use crate::node::WorkflowNode;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 #[cfg(test)]
 use crate::version::WORKFLOW_IR_VERSION;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,17 +79,17 @@ mod tests {
             nodes: vec![
                 WorkflowNode {
                     id: "n1".into(),
-                kind: WorkflowNodeKind::Task,
-                capability: Some("CodeGeneration".into()),
-                selected_model: None,
-                config: BTreeMap::new(),
+                    kind: WorkflowNodeKind::Task,
+                    capability: Some("CodeGeneration".into()),
+                    selected_model: None,
+                    config: BTreeMap::new(),
                 },
                 WorkflowNode {
                     id: "n2".into(),
-                kind: WorkflowNodeKind::Output,
-                capability: None,
-                selected_model: None,
-                config: BTreeMap::new(),
+                    kind: WorkflowNodeKind::Output,
+                    capability: None,
+                    selected_model: None,
+                    config: BTreeMap::new(),
                 },
             ],
             edges: vec![WorkflowEdge {
@@ -160,7 +160,10 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        assert_eq!(first.to_canonical_json().unwrap(), second.to_canonical_json().unwrap());
+        assert_eq!(
+            first.to_canonical_json().unwrap(),
+            second.to_canonical_json().unwrap()
+        );
     }
 
     #[test]
@@ -202,7 +205,10 @@ mod tests {
         ir.version = 99;
         let json = serde_json::to_string(&ir).unwrap();
         let err = WorkflowIR::from_json(&json).unwrap_err();
-        assert!(matches!(err, WorkflowIrError::Validation(ValidationError::VersionMismatch(99, WORKFLOW_IR_VERSION))));
+        assert!(matches!(
+            err,
+            WorkflowIrError::Validation(ValidationError::VersionMismatch(99, WORKFLOW_IR_VERSION))
+        ));
     }
 
     #[test]

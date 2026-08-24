@@ -46,12 +46,12 @@ impl std::error::Error for RuntimeError {}
 
 pub use config::SandboxConfig;
 pub use context::RuntimeContext;
+pub use fusion_runtime::RuntimeEngine;
 pub use host_services::CapabilityHostServices;
 pub use policy::{check_http_access, check_secret_access};
 pub use sandbox_instance::SandboxInstance;
 pub use sandbox_runtime::SandboxRuntime;
 pub use telemetry_context::TelemetryContext;
-pub use fusion_runtime::RuntimeEngine;
 
 #[cfg(feature = "wasm-plugins")]
 pub use linker::configure_linker;
@@ -75,10 +75,18 @@ mod tests {
         assert_eq!(err.to_string(), "out of memory");
         let err = RuntimeError::FuelExhausted;
         assert_eq!(err.to_string(), "fuel exhausted");
-        let err = RuntimeError::ExecutionTrap { message: "segfault".into() };
+        let err = RuntimeError::ExecutionTrap {
+            message: "segfault".into(),
+        };
         assert_eq!(err.to_string(), "execution trap: segfault");
-        let err = RuntimeError::HostServiceError { service: "secret".into(), inner: "denied".into() };
-        assert_eq!(err.to_string(), "host service error: service=secret, inner=denied");
+        let err = RuntimeError::HostServiceError {
+            service: "secret".into(),
+            inner: "denied".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "host service error: service=secret, inner=denied"
+        );
         let err = RuntimeError::NotSupported("reset".into());
         assert_eq!(err.to_string(), "not supported: reset");
     }

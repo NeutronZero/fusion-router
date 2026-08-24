@@ -1,10 +1,12 @@
+use crate::transport::backoff::Backoff;
+use crate::transport::{
+    Transport, TransportError, TransportEvent, TransportRequest, TransportResponse,
+};
 use async_trait::async_trait;
+use futures::StreamExt;
 use reqwest::Client;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use crate::transport::backoff::Backoff;
-use crate::transport::{Transport, TransportRequest, TransportResponse, TransportEvent, TransportError};
-use futures::StreamExt;
 
 const DEFAULT_MAX_RETRIES: u32 = 5;
 const DEFAULT_BACKOFF_BASE_MS: u64 = 1000;
@@ -23,9 +25,10 @@ impl HttpTransport {
     /// (timeout-less) client, so a misconfigured TLS/proxy setup surfaces at
     /// startup rather than producing unbounded requests at runtime.
     pub fn new(timeout: Duration) -> Result<Self, TransportError> {
-        let client = Client::builder().timeout(timeout).build().map_err(|e| {
-            TransportError::Network(format!("failed to build HTTP client: {e}"))
-        })?;
+        let client = Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| TransportError::Network(format!("failed to build HTTP client: {e}")))?;
         Ok(Self {
             client,
             backoff_base_ms: DEFAULT_BACKOFF_BASE_MS,
@@ -40,9 +43,10 @@ impl HttpTransport {
         max_ms: u64,
         max_retries: u32,
     ) -> Result<Self, TransportError> {
-        let client = Client::builder().timeout(timeout).build().map_err(|e| {
-            TransportError::Network(format!("failed to build HTTP client: {e}"))
-        })?;
+        let client = Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(|e| TransportError::Network(format!("failed to build HTTP client: {e}")))?;
         Ok(Self {
             client,
             backoff_base_ms: base_ms,
@@ -70,7 +74,10 @@ impl HttpTransport {
         let status = resp.status().as_u16();
         if status >= 400 {
             let err_body = resp.text().await.unwrap_or_default();
-            return Err(TransportError::Http { status, body: err_body });
+            return Err(TransportError::Http {
+                status,
+                body: err_body,
+            });
         }
 
         let body = resp
@@ -125,7 +132,13 @@ impl Transport for HttpTransport {
     }
 
     #[tracing::instrument(skip(self, req), fields(url = %req.url, method = %req.method))]
-    async fn stream(&self, req: TransportRequest) -> Result<futures::stream::BoxStream<'static, Result<TransportEvent, TransportError>>, TransportError> {
+    async fn stream(
+        &self,
+        req: TransportRequest,
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<TransportEvent, TransportError>>,
+        TransportError,
+    > {
         let mut request = match req.method.as_str() {
             "GET" => self.client.get(&req.url),
             _ => self.client.post(&req.url),
@@ -144,7 +157,10 @@ impl Transport for HttpTransport {
         let status = resp.status().as_u16();
         if status >= 400 {
             let err_body = resp.text().await.unwrap_or_default();
-            return Err(TransportError::Http { status, body: err_body });
+            return Err(TransportError::Http {
+                status,
+                body: err_body,
+            });
         }
 
         // Chunk boundaries are arbitrary byte counts: a multi-byte UTF-8
@@ -160,7 +176,9 @@ impl Transport for HttpTransport {
                     Ok(bytes) => {
                         let mut buf = pending.lock().unwrap_or_else(|e| e.into_inner());
                         buf.extend_from_slice(&bytes);
-                        Ok(TransportEvent { data: drain_utf8(&mut buf) })
+                        Ok(TransportEvent {
+                            data: drain_utf8(&mut buf),
+                        })
                     }
                     Err(e) => Err(TransportError::Network(e.to_string())),
                 }
@@ -203,8 +221,7 @@ fn drain_utf8(carry: &mut Vec<u8>) -> String {
         Err(e) => match e.error_len() {
             Some(err_len) => {
                 let valid = e.valid_up_to();
-                let text =
-                    String::from_utf8_lossy(&carry[..valid + err_len]).into_owned();
+                let text = String::from_utf8_lossy(&carry[..valid + err_len]).into_owned();
                 carry.drain(..valid + err_len);
                 text
             }
@@ -228,8 +245,7 @@ mod tests {
 
     #[test]
     fn test_with_backoff_stores_settings() {
-        let transport =
-            HttpTransport::with_backoff(Duration::from_secs(5), 250, 4_000, 3).unwrap();
+        let transport = HttpTransport::with_backoff(Duration::from_secs(5), 250, 4_000, 3).unwrap();
 
         assert_eq!(transport.backoff_base_ms, 250);
         assert_eq!(transport.backoff_max_ms, 4_000);
@@ -284,7 +300,11 @@ mod tests {
     #[test]
     fn test_drain_utf8_flushes_partial_tail_lossily() {
         let mut carry = vec![0xE4, 0xB8]; // first two bytes of U+4E2D (中)
-        assert_eq!(drain_utf8(&mut carry), "", "incomplete sequence stays buffered");
+        assert_eq!(
+            drain_utf8(&mut carry),
+            "",
+            "incomplete sequence stays buffered"
+        );
         // Stream ends: flush decodes lossily instead of dropping.
         assert_eq!(String::from_utf8_lossy(&carry), "\u{FFFD}");
     }

@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use crate::events::payload::ExecutionEvent;
 use crate::release::gate::GateError;
+use async_trait::async_trait;
 
 #[async_trait]
 pub trait CapabilityHostServices: Send + Sync {

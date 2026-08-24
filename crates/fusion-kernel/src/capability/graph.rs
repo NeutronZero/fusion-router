@@ -121,7 +121,9 @@ impl CapabilityGraph {
         for dep in &self.dependencies {
             if self.nodes.contains_key(&dep.from) && self.nodes.contains_key(&dep.to) {
                 // edge dep.to -> dep.from (to must execute before from)
-                adj.entry(dep.to.clone()).or_default().push(dep.from.clone());
+                adj.entry(dep.to.clone())
+                    .or_default()
+                    .push(dep.from.clone());
                 *in_degree.entry(dep.from.clone()).or_default() += 1;
             }
         }
@@ -202,13 +204,19 @@ mod tests {
         graph.add_node(make_contract("shell"));
 
         // browser -> filesystem -> shell
-        graph.add_dependency(CapabilityId::new("browser"), CapabilityId::new("filesystem"));
+        graph.add_dependency(
+            CapabilityId::new("browser"),
+            CapabilityId::new("filesystem"),
+        );
         graph.add_dependency(CapabilityId::new("filesystem"), CapabilityId::new("shell"));
 
         let order = graph.topological_sort().unwrap();
         assert_eq!(order.len(), 3);
         let shell_idx = order.iter().position(|r| r.as_str() == "shell").unwrap();
-        let fs_idx = order.iter().position(|r| r.as_str() == "filesystem").unwrap();
+        let fs_idx = order
+            .iter()
+            .position(|r| r.as_str() == "filesystem")
+            .unwrap();
         let browser_idx = order.iter().position(|r| r.as_str() == "browser").unwrap();
 
         assert!(shell_idx < fs_idx);
@@ -241,7 +249,9 @@ mod tests {
     #[test]
     fn test_topological_sort_empty() {
         let graph = CapabilityGraph::new();
-        let order = graph.topological_sort().expect("Empty graph should sort successfully");
+        let order = graph
+            .topological_sort()
+            .expect("Empty graph should sort successfully");
         assert!(order.is_empty());
     }
 
@@ -249,7 +259,9 @@ mod tests {
     fn test_topological_sort_single_node() {
         let mut graph = CapabilityGraph::new();
         graph.add_node(make_contract("single"));
-        let order = graph.topological_sort().expect("Single node graph should sort successfully");
+        let order = graph
+            .topological_sort()
+            .expect("Single node graph should sort successfully");
         assert_eq!(order.len(), 1);
         assert_eq!(order[0].as_str(), "single");
     }

@@ -1,7 +1,7 @@
-use async_trait::async_trait;
-use tokio::sync::broadcast;
 use crate::events::ExecutionEventEnvelope;
 use crate::release::gate::GateError;
+use async_trait::async_trait;
+use tokio::sync::broadcast;
 
 #[async_trait]
 pub trait EventBus: Send + Sync {
@@ -29,12 +29,11 @@ impl Default for BroadcastEventBus {
 #[async_trait]
 impl EventBus for BroadcastEventBus {
     async fn publish(&self, envelope: ExecutionEventEnvelope) -> Result<(), GateError> {
-        self.sender
-            .send(envelope)
-            .map(|_| ())
-            .map_err(|_| GateError::ExecutionFailed(
+        self.sender.send(envelope).map(|_| ()).map_err(|_| {
+            GateError::ExecutionFailed(
                 "event bus publish failed: no subscribers listening (event would be lost)".into(),
-            ))
+            )
+        })
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ExecutionEventEnvelope> {
@@ -89,6 +88,9 @@ mod tests {
         );
 
         let result = bus.publish(env).await;
-        assert!(result.is_err(), "publish with no receivers must not be silent");
+        assert!(
+            result.is_err(),
+            "publish with no receivers must not be silent"
+        );
     }
 }

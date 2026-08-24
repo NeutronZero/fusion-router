@@ -22,12 +22,33 @@ pub trait DomainEvent: Send + Sync + std::fmt::Debug {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum KernelEvent {
-    ExecutionStarted { id: Uuid, execution_id: ExecutionId },
-    ExecutionCompleted { id: Uuid, execution_id: ExecutionId },
-    NodeStarted { id: Uuid, execution_id: ExecutionId, node_id: String },
-    NodeFinished { id: Uuid, execution_id: ExecutionId, node_id: String },
-    JobStatusUpdated { id: Uuid, job_id: String, state: String },
-    PlatformStatusChanged { id: Uuid, status: PlatformStatus },
+    ExecutionStarted {
+        id: Uuid,
+        execution_id: ExecutionId,
+    },
+    ExecutionCompleted {
+        id: Uuid,
+        execution_id: ExecutionId,
+    },
+    NodeStarted {
+        id: Uuid,
+        execution_id: ExecutionId,
+        node_id: String,
+    },
+    NodeFinished {
+        id: Uuid,
+        execution_id: ExecutionId,
+        node_id: String,
+    },
+    JobStatusUpdated {
+        id: Uuid,
+        job_id: String,
+        state: String,
+    },
+    PlatformStatusChanged {
+        id: Uuid,
+        status: PlatformStatus,
+    },
 }
 
 impl DomainEvent for KernelEvent {
@@ -72,7 +93,10 @@ impl EventBus {
         Self { sender }
     }
 
-    pub fn publish(&self, event: KernelEvent) -> Result<usize, broadcast::error::SendError<KernelEvent>> {
+    pub fn publish(
+        &self,
+        event: KernelEvent,
+    ) -> Result<usize, broadcast::error::SendError<KernelEvent>> {
         self.sender.send(event)
     }
 
@@ -104,10 +128,16 @@ impl CapabilityCatalog {
         let mut catalog = HashMap::new();
         catalog.insert("Vision".to_string(), vec!["ImageInput".to_string()]);
         catalog.insert("JSON".to_string(), vec!["StructuredOutput".to_string()]);
-        catalog.insert("ToolCalling".to_string(), vec!["FunctionCalling".to_string()]);
+        catalog.insert(
+            "ToolCalling".to_string(),
+            vec!["FunctionCalling".to_string()],
+        );
         catalog.insert("Reasoning".to_string(), vec!["ChainOfThought".to_string()]);
         catalog.insert("Streaming".to_string(), vec!["SSE".to_string()]);
-        catalog.insert("Embeddings".to_string(), vec!["VectorEmbedding".to_string()]);
+        catalog.insert(
+            "Embeddings".to_string(),
+            vec!["VectorEmbedding".to_string()],
+        );
         catalog.insert("Audio".to_string(), vec!["AudioInputOutput".to_string()]);
         catalog.insert("ImageGen".to_string(), vec!["Diffusion".to_string()]);
         catalog.insert("Video".to_string(), vec!["VideoInput".to_string()]);
@@ -162,8 +192,16 @@ pub struct SystemCatalog {
 impl SystemCatalog {
     pub fn new() -> Self {
         Self {
-            providers: vec!["openrouter".to_string(), "zen".to_string(), "ollama".to_string()],
-            models: vec!["gpt-4o".to_string(), "claude-3-5-sonnet".to_string(), "llama3".to_string()],
+            providers: vec![
+                "openrouter".to_string(),
+                "zen".to_string(),
+                "ollama".to_string(),
+            ],
+            models: vec![
+                "gpt-4o".to_string(),
+                "claude-3-5-sonnet".to_string(),
+                "llama3".to_string(),
+            ],
         }
     }
 }

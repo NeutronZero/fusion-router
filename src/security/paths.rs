@@ -69,7 +69,10 @@ mod tests {
         // ../escapes from within the root
         let escape = root.join("..").join("escape.txt");
         let err = canonicalize_within(&root, &escape).unwrap_err();
-        assert!(matches!(err, PathError::CandidateMissing(_) | PathError::Escape(_)));
+        assert!(matches!(
+            err,
+            PathError::CandidateMissing(_) | PathError::Escape(_)
+        ));
         let _ = std::fs::remove_dir_all(&root);
     }
 

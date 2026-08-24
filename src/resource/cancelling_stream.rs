@@ -1,13 +1,13 @@
+use futures::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
-use futures::Stream;
 use tokio_util::sync::CancellationToken;
 
+use crate::providers::ModelPricing;
 use crate::resource::guard::ResourceGuard;
 use crate::resource::stream_meter::{StreamMeter, StreamMeterReport};
-use crate::providers::ModelPricing;
 use crate::types::ChatStreamChunk;
 
 /// Fired exactly once when a streamed response terminates (completion,
@@ -181,13 +181,13 @@ pub fn metered_stream_with_finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resource::DefaultResourceManager;
+    use crate::types::{ExecutionGraph, GraphMetadata, Quota};
     use futures::executor::block_on;
     use futures::stream;
     use futures::StreamExt;
-    use uuid::Uuid;
-    use crate::resource::DefaultResourceManager;
-    use crate::types::{ExecutionGraph, GraphMetadata, Quota};
     use std::collections::HashMap;
+    use uuid::Uuid;
 
     #[test]
     fn test_cancelling_stream_passes_through_normal() {
@@ -246,9 +246,8 @@ mod tests {
             finish_reason: None,
             usage: None,
         };
-        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> = Box::pin(
-            stream::once(futures::future::ready(Ok(chunk))),
-        );
+        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
+            Box::pin(stream::once(futures::future::ready(Ok(chunk))));
         let (mut stream, meter) = metered_stream(inner, guard, cancel, None);
         let result = block_on(stream.next());
         assert!(result.is_some());
@@ -271,9 +270,8 @@ mod tests {
             finish_reason: None,
             usage: None,
         };
-        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> = Box::pin(
-            stream::iter(vec![Ok(chunk1.clone()), Ok(chunk2.clone())]),
-        );
+        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
+            Box::pin(stream::iter(vec![Ok(chunk1.clone()), Ok(chunk2.clone())]));
         let (mut stream, _meter) = metered_stream(inner, guard, cancel, None);
         let result1 = block_on(stream.next()).unwrap().unwrap();
         assert_eq!(result1.content, chunk1.content);
@@ -289,16 +287,15 @@ mod tests {
         let fires = Arc::new(AtomicUsize::new(0));
         let cancel = CancellationToken::new();
         let guard = make_test_guard();
-        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> = Box::pin(
-            stream::iter(vec![
+        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
+            Box::pin(stream::iter(vec![
                 Err(anyhow::anyhow!("boom")),
                 Ok(ChatStreamChunk {
                     content: Some("late".to_string()),
                     finish_reason: None,
                     usage: None,
                 }),
-            ]),
-        );
+            ]));
         let fires2 = fires.clone();
         let (mut stream, _meter) = metered_stream_with_finish(
             inner,
@@ -329,17 +326,22 @@ mod tests {
             usage: None,
         };
         let chunk2 = ChatStreamChunk {
-            content: Some(" A very long continuation that exceeds the token budget envelope".to_string()),
+            content: Some(
+                " A very long continuation that exceeds the token budget envelope".to_string(),
+            ),
             finish_reason: None,
             usage: None,
         };
-        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> = Box::pin(
-            stream::iter(vec![Ok(chunk1), Ok(chunk2)]),
-        );
+        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
+            Box::pin(stream::iter(vec![Ok(chunk1), Ok(chunk2)]));
         let (stream, _meter) = metered_stream(inner, guard, cancel.clone(), None);
 
         // Set an envelope with max 5 tokens
-        let envelope = fusion_types::BudgetEnvelope::new(crate::types::NanoUSD::from_nanos(100_000_000), 5, 10);
+        let envelope = fusion_types::BudgetEnvelope::new(
+            crate::types::NanoUSD::from_nanos(100_000_000),
+            5,
+            10,
+        );
         let mut stream = stream.with_budget_envelope(envelope);
 
         // First chunk (~3 tokens) passes
@@ -349,7 +351,9 @@ mod tests {
         // Second chunk breaches budget (total > 5 tokens) and causes immediate error and cancellation
         let res2 = block_on(stream.next()).unwrap();
         assert!(res2.is_err(), "Must error when mid-stream budget breached");
-        assert!(cancel.is_cancelled(), "Token must be cancelled on mid-stream breach");
+        assert!(
+            cancel.is_cancelled(),
+            "Token must be cancelled on mid-stream breach"
+        );
     }
 }
-

@@ -2,10 +2,10 @@
 //!
 //! Late binding of abstract `CapabilityInstance` handles to concrete `Connector` instances at execution time.
 
+use fusion_plugin_api::{CapabilityExecutor, CapabilityId, CapabilityInstance};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
-use fusion_plugin_api::{CapabilityId, CapabilityInstance, CapabilityExecutor};
 
 /// The minimum connector version accepted during registration.
 const MIN_SUPPORTED_RUNTIME_VERSION: semver::Version = semver::Version::new(0, 10, 0);
@@ -73,12 +73,18 @@ impl ConnectorResolver {
     pub fn bind(&self, instance: &CapabilityInstance) -> Result<BoundConnector, String> {
         let map_guard = self.capability_map.read();
         let connector_name = map_guard.get(&instance.contract.id).ok_or_else(|| {
-            format!("No connector registered for capability: {}", instance.contract.id)
+            format!(
+                "No connector registered for capability: {}",
+                instance.contract.id
+            )
         })?;
 
         let connectors_guard = self.connectors.read();
         let connector = connectors_guard.get(connector_name).ok_or_else(|| {
-            format!("Connector '{}' registered for capability '{}' not found", connector_name, instance.contract.id)
+            format!(
+                "Connector '{}' registered for capability '{}' not found",
+                connector_name, instance.contract.id
+            )
         })?;
 
         Ok(BoundConnector {
@@ -112,7 +118,8 @@ impl ConnectorResolver {
 
     /// Find connectors that support the given capability.
     pub fn search_by_capability(&self, capability: &CapabilityId) -> Vec<Arc<dyn Connector>> {
-        self.connectors.read()
+        self.connectors
+            .read()
             .values()
             .filter(|c| c.descriptor().supported_capabilities.contains(capability))
             .cloned()
@@ -121,7 +128,8 @@ impl ConnectorResolver {
 
     /// Find connectors by name prefix match.
     pub fn search_by_name(&self, name_prefix: &str) -> Vec<Arc<dyn Connector>> {
-        self.connectors.read()
+        self.connectors
+            .read()
             .values()
             .filter(|c| c.descriptor().name.starts_with(name_prefix))
             .cloned()
@@ -219,7 +227,10 @@ mod tests {
         let err = resolver
             .register_connector(Arc::new(OldConnector))
             .unwrap_err();
-        assert!(err.contains("0.9.0"), "error should mention version 0.9.0: {err}");
+        assert!(
+            err.contains("0.9.0"),
+            "error should mention version 0.9.0: {err}"
+        );
         assert!(
             err.contains("0.10.0"),
             "error should mention min version 0.10.0: {err}"

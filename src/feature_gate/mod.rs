@@ -216,7 +216,10 @@ mod tests {
     fn test_apply_config_unknown_feature_is_ignored() {
         let mut registry = FeatureRegistry::new(TEST_DEFINITIONS);
         let mut config: HashMap<String, FeatureConfig> = HashMap::new();
-        config.insert("unknown-feature".to_string(), FeatureConfig { enabled: true });
+        config.insert(
+            "unknown-feature".to_string(),
+            FeatureConfig { enabled: true },
+        );
         registry.apply_config(&config);
     }
 
@@ -226,10 +229,16 @@ mod tests {
         let list = registry.list();
         assert_eq!(list.len(), 5);
 
-        let streaming = list.iter().find(|s| s.id == FeatureFlag::Streaming).unwrap();
+        let streaming = list
+            .iter()
+            .find(|s| s.id == FeatureFlag::Streaming)
+            .unwrap();
         assert!(streaming.enabled);
         assert!(!streaming.overridden);
-        assert_eq!(streaming.definition.description, "Enable streaming responses");
+        assert_eq!(
+            streaming.definition.description,
+            "Enable streaming responses"
+        );
 
         let replay = list.iter().find(|s| s.id == FeatureFlag::Replay).unwrap();
         assert!(!replay.enabled);
@@ -241,13 +250,19 @@ mod tests {
         let mut registry = FeatureRegistry::new(TEST_DEFINITIONS);
 
         let mut config: HashMap<String, FeatureConfig> = HashMap::new();
-        config.insert("connector-health".to_string(), FeatureConfig { enabled: false });
+        config.insert(
+            "connector-health".to_string(),
+            FeatureConfig { enabled: false },
+        );
         registry.apply_config(&config);
 
         assert!(!registry.is_enabled(FeatureFlag::ConnectorHealth));
 
         let list = registry.list();
-        let ch = list.iter().find(|s| s.id == FeatureFlag::ConnectorHealth).unwrap();
+        let ch = list
+            .iter()
+            .find(|s| s.id == FeatureFlag::ConnectorHealth)
+            .unwrap();
         assert!(ch.overridden);
     }
 

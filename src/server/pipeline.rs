@@ -1,15 +1,15 @@
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::context::assembler::ContextAssembler;
-use crate::planner::Planner;
 use crate::compiler::Compiler;
-use crate::scheduler::Scheduler;
+use crate::context::assembler::ContextAssembler;
 use crate::executor::Executor;
+use crate::planner::Planner;
 use crate::requirements::extractor::RequirementsExtractor;
-use crate::resource::{ResourceManager, ResourceGuard, BudgetEnvelope};
+use crate::resource::{BudgetEnvelope, ResourceGuard, ResourceManager};
+use crate::scheduler::Scheduler;
 use crate::telemetry::EvidenceRepository;
 use crate::types::*;
 
@@ -28,7 +28,11 @@ pub struct PipelineContext {
 }
 
 impl PipelineContext {
-    pub fn new(request_id: Uuid, request: ChatCompletionRequest, cancellation_token: CancellationToken) -> Self {
+    pub fn new(
+        request_id: Uuid,
+        request: ChatCompletionRequest,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         Self {
             request_id,
             cancellation_token,
@@ -47,7 +51,8 @@ impl PipelineContext {
 
 #[async_trait]
 pub trait PipelineStep<Input, Output>: Send + Sync {
-    async fn execute(&self, input: Input, ctx: &mut PipelineContext) -> Result<Output, RouterError>;
+    async fn execute(&self, input: Input, ctx: &mut PipelineContext)
+        -> Result<Output, RouterError>;
 }
 
 pub struct ContextAssemblyStep {
@@ -56,14 +61,20 @@ pub struct ContextAssemblyStep {
 
 #[async_trait]
 impl PipelineStep<ChatCompletionRequest, ContextSnapshot> for ContextAssemblyStep {
-    async fn execute(&self, request: ChatCompletionRequest, ctx: &mut PipelineContext) -> Result<ContextSnapshot, RouterError> {
-        let snapshot = self.assembler.assemble(&request).await.map_err(|e| {
-            RouterError::StageFailure {
-                stage: PipelineStage::ContextAssembly,
-                request_id: ctx.request_id,
-                message: e.to_string(),
-            }
-        })?;
+    async fn execute(
+        &self,
+        request: ChatCompletionRequest,
+        ctx: &mut PipelineContext,
+    ) -> Result<ContextSnapshot, RouterError> {
+        let snapshot =
+            self.assembler
+                .assemble(&request)
+                .await
+                .map_err(|e| RouterError::StageFailure {
+                    stage: PipelineStage::ContextAssembly,
+                    request_id: ctx.request_id,
+                    message: e.to_string(),
+                })?;
         ctx.assembled_context = Some(snapshot.clone());
         Ok(snapshot)
     }
@@ -75,7 +86,11 @@ pub struct RequirementsExtractionStep {
 
 #[async_trait]
 impl PipelineStep<ContextSnapshot, Requirements> for RequirementsExtractionStep {
-    async fn execute(&self, context: ContextSnapshot, ctx: &mut PipelineContext) -> Result<Requirements, RouterError> {
+    async fn execute(
+        &self,
+        context: ContextSnapshot,
+        ctx: &mut PipelineContext,
+    ) -> Result<Requirements, RouterError> {
         let mut reqs = self.extractor.extract(&context);
         reqs.execution_intent = ctx.request.execution.clone();
         reqs.output_preferences = ctx.request.output.clone();
@@ -92,14 +107,20 @@ pub struct EvidenceSnapshotStep {
 
 #[async_trait]
 impl PipelineStep<(), EvidenceSnapshot> for EvidenceSnapshotStep {
-    async fn execute(&self, _: (), ctx: &mut PipelineContext) -> Result<EvidenceSnapshot, RouterError> {
-        let evidence = self.repository.snapshot().await.map_err(|e| {
-            RouterError::StageFailure {
+    async fn execute(
+        &self,
+        _: (),
+        ctx: &mut PipelineContext,
+    ) -> Result<EvidenceSnapshot, RouterError> {
+        let evidence = self
+            .repository
+            .snapshot()
+            .await
+            .map_err(|e| RouterError::StageFailure {
                 stage: PipelineStage::EvidenceSnapshot,
                 request_id: ctx.request_id,
                 message: e.to_string(),
-            }
-        })?;
+            })?;
         ctx.evidence = Some(evidence.clone());
         Ok(evidence)
     }
@@ -113,10 +134,19 @@ pub struct PlanningStep {
 
 #[async_trait]
 impl PipelineStep<(Requirements, Option<EvidenceSnapshot>), WorkflowIR> for PlanningStep {
-    async fn execute(&self, (reqs, evidence): (Requirements, Option<EvidenceSnapshot>), ctx: &mut PipelineContext) -> Result<WorkflowIR, RouterError> {
+    async fn execute(
+        &self,
+        (reqs, evidence): (Requirements, Option<EvidenceSnapshot>),
+        ctx: &mut PipelineContext,
+    ) -> Result<WorkflowIR, RouterError> {
         let ir = self
             .planner
-            .plan_with_policy_version(&reqs, &self.policies, evidence.as_ref(), self.policy_version)
+            .plan_with_policy_version(
+                &reqs,
+                &self.policies,
+                evidence.as_ref(),
+                self.policy_version,
+            )
             .await
             .map_err(|e| RouterError::CapacityExceeded {
                 request_id: ctx.request_id,
@@ -133,7 +163,11 @@ pub struct CompilationStep {
 
 #[async_trait]
 impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
-    async fn execute(&self, ir: WorkflowIR, ctx: &mut PipelineContext) -> Result<ExecutionGraph, RouterError> {
+    async fn execute(
+        &self,
+        ir: WorkflowIR,
+        ctx: &mut PipelineContext,
+    ) -> Result<ExecutionGraph, RouterError> {
         let mut graph = self.compiler.compile(ir).await.map_err(|e| match &e {
             CompilerError::ValidationError { pass, message, .. } if pass == "policy" => {
                 RouterError::PolicyDenied {
@@ -166,7 +200,12 @@ impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
             if node.model.is_empty() {
                 node.model = ctx.request.model.clone();
             }
-            if matches!(node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
+            if matches!(
+                node.kind,
+                ExecutionNodeKind::LLMGenerate
+                    | ExecutionNodeKind::LLMReview
+                    | ExecutionNodeKind::LLMJudge
+            ) {
                 if let Some(ctx_snapshot) = &ctx.assembled_context {
                     let messages = serde_json::to_value(&ctx_snapshot.messages).unwrap_or_default();
                     node.config.insert("messages".to_string(), messages.clone());
@@ -176,8 +215,15 @@ impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
                     // sub-node so their requests carry the user's input.
                     if let Some(subgraph) = node.subgraph.as_mut() {
                         for sub_node in &mut subgraph.nodes {
-                            if matches!(sub_node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
-                                sub_node.config.insert("messages".to_string(), messages.clone());
+                            if matches!(
+                                sub_node.kind,
+                                ExecutionNodeKind::LLMGenerate
+                                    | ExecutionNodeKind::LLMReview
+                                    | ExecutionNodeKind::LLMJudge
+                            ) {
+                                sub_node
+                                    .config
+                                    .insert("messages".to_string(), messages.clone());
                             }
                         }
                     }
@@ -193,11 +239,19 @@ impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
                             .map(|t| serde_json::Value::String(t.name.clone()))
                             .collect();
                         let allowlist = serde_json::Value::Array(allowlist);
-                        node.config.insert("tool_allowlist".to_string(), allowlist.clone());
+                        node.config
+                            .insert("tool_allowlist".to_string(), allowlist.clone());
                         if let Some(subgraph) = node.subgraph.as_mut() {
                             for sub_node in &mut subgraph.nodes {
-                                if matches!(sub_node.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge) {
-                                    sub_node.config.insert("tool_allowlist".to_string(), allowlist.clone());
+                                if matches!(
+                                    sub_node.kind,
+                                    ExecutionNodeKind::LLMGenerate
+                                        | ExecutionNodeKind::LLMReview
+                                        | ExecutionNodeKind::LLMJudge
+                                ) {
+                                    sub_node
+                                        .config
+                                        .insert("tool_allowlist".to_string(), allowlist.clone());
                                 }
                             }
                         }
@@ -217,7 +271,11 @@ pub struct ResourceReservationStep {
 
 #[async_trait]
 impl PipelineStep<ExecutionGraph, ResourceGuard> for ResourceReservationStep {
-    async fn execute(&self, graph: ExecutionGraph, ctx: &mut PipelineContext) -> Result<ResourceGuard, RouterError> {
+    async fn execute(
+        &self,
+        graph: ExecutionGraph,
+        ctx: &mut PipelineContext,
+    ) -> Result<ResourceGuard, RouterError> {
         if !self.resource_manager.try_reserve(&graph).await {
             return Err(RouterError::ResourceExhausted {
                 request_id: ctx.request_id,
@@ -244,7 +302,14 @@ impl PipelineStep<ExecutionGraph, ResourceGuard> for ResourceReservationStep {
         let llm_node_count = graph
             .nodes
             .iter()
-            .filter(|n| matches!(n.kind, ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge))
+            .filter(|n| {
+                matches!(
+                    n.kind,
+                    ExecutionNodeKind::LLMGenerate
+                        | ExecutionNodeKind::LLMReview
+                        | ExecutionNodeKind::LLMJudge
+                )
+            })
             .count()
             .max(1) as u64;
         let max_output = ctx.request.max_tokens.unwrap_or(4096) as u64;
@@ -264,7 +329,11 @@ pub struct SchedulingExecutionStep {
 
 #[async_trait]
 impl PipelineStep<(ExecutionGraph, ReservationId), ExecutionResult> for SchedulingExecutionStep {
-    async fn execute(&self, (graph, reservation): (ExecutionGraph, ReservationId), ctx: &mut PipelineContext) -> Result<ExecutionResult, RouterError> {
+    async fn execute(
+        &self,
+        (graph, reservation): (ExecutionGraph, ReservationId),
+        ctx: &mut PipelineContext,
+    ) -> Result<ExecutionResult, RouterError> {
         let mut instance = self.scheduler.schedule(graph, reservation);
         instance.budget_envelope = ctx.budget_envelope.clone();
         let result = self
@@ -286,7 +355,11 @@ pub struct ResponseBuilderStep;
 
 #[async_trait]
 impl PipelineStep<ExecutionResult, ChatCompletionResponse> for ResponseBuilderStep {
-    async fn execute(&self, result: ExecutionResult, ctx: &mut PipelineContext) -> Result<ChatCompletionResponse, RouterError> {
+    async fn execute(
+        &self,
+        result: ExecutionResult,
+        ctx: &mut PipelineContext,
+    ) -> Result<ChatCompletionResponse, RouterError> {
         if !result.success {
             return Err(RouterError::StageFailure {
                 stage: PipelineStage::ResponseBuilding,
@@ -301,11 +374,18 @@ impl PipelineStep<ExecutionResult, ChatCompletionResponse> for ResponseBuilderSt
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .or_else(|| {
                 result.terminal_node_id.and_then(|id| {
-                    result.outputs.get(&id).and_then(|v| v.as_str().map(|s| s.to_string()))
+                    result
+                        .outputs
+                        .get(&id)
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
                 })
             })
             .or_else(|| {
-                result.outputs.values().last().and_then(|v| v.as_str().map(|s| s.to_string()))
+                result
+                    .outputs
+                    .values()
+                    .last()
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
             })
             // Tool call results are structured JSON, not text: surface them so
             // the client can see what executed and what came back.
@@ -386,11 +466,7 @@ mod tests {
     #[test]
     fn test_pipeline_context_cancellation_token_carried() {
         let token = CancellationToken::new();
-        let ctx = PipelineContext::new(
-            Uuid::new_v4(),
-            test_request(),
-            token.clone(),
-        );
+        let ctx = PipelineContext::new(Uuid::new_v4(), test_request(), token.clone());
 
         assert!(!ctx.cancellation_token.is_cancelled());
         token.cancel();
@@ -430,7 +506,9 @@ mod tests {
     async fn test_compilation_step_propagates_tool_allowlist() {
         let compiler = Arc::new(crate::compiler::build_compiler(
             crate::types::ModelCatalog::default(),
-            Arc::new(crate::resource::DefaultResourceManager::new(permissive_quota())),
+            Arc::new(crate::resource::DefaultResourceManager::new(
+                permissive_quota(),
+            )),
             None,
         ));
         let mut request = test_request();
@@ -477,11 +555,14 @@ mod tests {
     async fn test_compilation_step_omits_allowlist_when_request_has_no_tools() {
         let compiler = Arc::new(crate::compiler::build_compiler(
             crate::types::ModelCatalog::default(),
-            Arc::new(crate::resource::DefaultResourceManager::new(permissive_quota())),
+            Arc::new(crate::resource::DefaultResourceManager::new(
+                permissive_quota(),
+            )),
             None,
         ));
 
-        let mut ctx = PipelineContext::new(Uuid::new_v4(), test_request(), CancellationToken::new());
+        let mut ctx =
+            PipelineContext::new(Uuid::new_v4(), test_request(), CancellationToken::new());
         let step = CompilationStep { compiler };
         let graph = step.execute(consensus_ir(), &mut ctx).await.unwrap();
 
@@ -491,4 +572,3 @@ mod tests {
         );
     }
 }
-

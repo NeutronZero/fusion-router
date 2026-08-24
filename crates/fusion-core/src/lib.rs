@@ -147,8 +147,7 @@ pub enum PlatformError {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelCatalog {
     pub code: String,
     pub debug: String,
@@ -159,7 +158,6 @@ pub struct ModelCatalog {
     pub fast: String,
     pub cheap: String,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ModelRequirements {

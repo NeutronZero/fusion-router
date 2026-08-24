@@ -7,11 +7,11 @@
 //! The `Quota` copy is a two-field projection (kernel quota is scope-minimal);
 //! live spend/accounting always reads through to the monolith implementation.
 
-use std::sync::Arc;
-use async_trait::async_trait;
-use uuid::Uuid;
 use crate::resource::ResourceManager;
 use crate::types::{ExecutionGraph, GraphMetadata};
+use async_trait::async_trait;
+use std::sync::Arc;
+use uuid::Uuid;
 
 pub struct KernelResourceManager {
     inner: Arc<dyn ResourceManager>,
@@ -52,19 +52,31 @@ impl KernelResourceManager {
 
 #[async_trait]
 impl fusion_kernel::resource::ResourceManager for KernelResourceManager {
-    async fn can_afford(&self, estimated_cost: fusion_core::NanoUSD, estimated_tokens: u64) -> bool {
+    async fn can_afford(
+        &self,
+        estimated_cost: fusion_core::NanoUSD,
+        estimated_tokens: u64,
+    ) -> bool {
         self.inner
             .can_afford(&Self::graph_for(estimated_cost, estimated_tokens))
             .await
     }
 
-    async fn try_reserve(&self, estimated_cost: fusion_core::NanoUSD, estimated_tokens: u64) -> bool {
+    async fn try_reserve(
+        &self,
+        estimated_cost: fusion_core::NanoUSD,
+        estimated_tokens: u64,
+    ) -> bool {
         self.inner
             .try_reserve(&Self::graph_for(estimated_cost, estimated_tokens))
             .await
     }
 
-    async fn release(&self, estimated_cost: fusion_core::NanoUSD, estimated_tokens: u64) -> anyhow::Result<()> {
+    async fn release(
+        &self,
+        estimated_cost: fusion_core::NanoUSD,
+        estimated_tokens: u64,
+    ) -> anyhow::Result<()> {
         self.inner
             .release(&Self::graph_for(estimated_cost, estimated_tokens))
             .await
@@ -106,18 +118,42 @@ mod tests {
     #[tokio::test]
     async fn scalar_checks_delegate_to_graph_shaped_manager() {
         let rm = manager();
-        assert!(rm.can_afford(fusion_core::NanoUSD::from_nanos(500_000_000), 500).await);
-        assert!(!rm.can_afford(fusion_core::NanoUSD::from_nanos(1_100_000_000), 500).await, "over cost quota");
-        assert!(!rm.can_afford(fusion_core::NanoUSD::from_nanos(500_000_000), 1100).await, "over token quota");
+        assert!(
+            rm.can_afford(fusion_core::NanoUSD::from_nanos(500_000_000), 500)
+                .await
+        );
+        assert!(
+            !rm.can_afford(fusion_core::NanoUSD::from_nanos(1_100_000_000), 500)
+                .await,
+            "over cost quota"
+        );
+        assert!(
+            !rm.can_afford(fusion_core::NanoUSD::from_nanos(500_000_000), 1100)
+                .await,
+            "over token quota"
+        );
     }
 
     #[tokio::test]
     async fn reserve_and_release_delegate() {
         let rm = manager();
-        assert!(rm.try_reserve(fusion_core::NanoUSD::from_nanos(600_000_000), 600).await);
-        assert!(!rm.try_reserve(fusion_core::NanoUSD::from_nanos(600_000_000), 600).await, "quota exhausted after reserve");
-        rm.release(fusion_core::NanoUSD::from_nanos(600_000_000), 600).await.unwrap();
-        assert!(rm.try_reserve(fusion_core::NanoUSD::from_nanos(600_000_000), 600).await, "release frees quota");
+        assert!(
+            rm.try_reserve(fusion_core::NanoUSD::from_nanos(600_000_000), 600)
+                .await
+        );
+        assert!(
+            !rm.try_reserve(fusion_core::NanoUSD::from_nanos(600_000_000), 600)
+                .await,
+            "quota exhausted after reserve"
+        );
+        rm.release(fusion_core::NanoUSD::from_nanos(600_000_000), 600)
+            .await
+            .unwrap();
+        assert!(
+            rm.try_reserve(fusion_core::NanoUSD::from_nanos(600_000_000), 600)
+                .await,
+            "release frees quota"
+        );
     }
 
     #[test]
@@ -130,8 +166,12 @@ mod tests {
     #[tokio::test]
     async fn spend_reads_through_to_inner() {
         let rm = manager();
-        rm.try_reserve(fusion_core::NanoUSD::from_nanos(250_000_000), 250).await;
-        assert_eq!(rm.spent_cost(), fusion_core::NanoUSD::from_nanos(250_000_000));
+        rm.try_reserve(fusion_core::NanoUSD::from_nanos(250_000_000), 250)
+            .await;
+        assert_eq!(
+            rm.spent_cost(),
+            fusion_core::NanoUSD::from_nanos(250_000_000)
+        );
         assert_eq!(rm.spent_tokens(), 250);
     }
 }

@@ -1,10 +1,10 @@
-use async_trait::async_trait;
-use std::path::PathBuf;
-use std::time::Instant;
+use crate::config::AppConfig;
 use crate::release::fixture::{ExpectedOutcome, FixtureKind, FixtureManifest};
 use crate::release::fixture_loader::{discover_fixtures, load_fixture_manifest, FixtureLoader};
 use crate::release::gate::*;
-use crate::config::AppConfig;
+use async_trait::async_trait;
+use std::path::PathBuf;
+use std::time::Instant;
 
 pub struct UpgradeGateConfig {
     pub fixture_root: PathBuf,
@@ -36,12 +36,16 @@ pub struct FilesystemUpgradeBackend {
 
 impl FilesystemUpgradeBackend {
     pub fn new(fixture_root: PathBuf) -> Self {
-        Self { loader: FixtureLoader::new(fixture_root) }
+        Self {
+            loader: FixtureLoader::new(fixture_root),
+        }
     }
 }
 
 impl UpgradeBackend for FilesystemUpgradeBackend {
-    fn name(&self) -> &'static str { "filesystem" }
+    fn name(&self) -> &'static str {
+        "filesystem"
+    }
 
     fn discover_configs(&self, _ctx: &UpgradeContext) -> Result<Vec<ConfigFixture>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
@@ -60,11 +64,19 @@ impl UpgradeBackend for FilesystemUpgradeBackend {
     }
 
     fn load_config(&self, fixture: &ConfigFixture) -> Result<String, GateError> {
-        let full_path = self.loader.resolve(&PathBuf::from("tests/fixtures").join(&fixture.path));
+        let full_path = self
+            .loader
+            .resolve(&PathBuf::from("tests/fixtures").join(&fixture.path));
         let files = self.loader.find_files(&full_path, "yaml")?;
-        files.first()
+        files
+            .first()
             .map(|p| self.loader.read_to_string(p))
-            .unwrap_or_else(|| Err(GateError::ExecutionFailed(format!("no yaml config found in {:?}", fixture.path))))
+            .unwrap_or_else(|| {
+                Err(GateError::ExecutionFailed(format!(
+                    "no yaml config found in {:?}",
+                    fixture.path
+                )))
+            })
     }
 }
 
@@ -91,8 +103,12 @@ impl UpgradeGate {
 
 #[async_trait]
 impl ReleaseGate for UpgradeGate {
-    fn id(&self) -> GateId { GateId::Upgrade1 }
-    fn name(&self) -> &'static str { "Configuration Upgrade" }
+    fn id(&self) -> GateId {
+        GateId::Upgrade1
+    }
+    fn name(&self) -> &'static str {
+        "Configuration Upgrade"
+    }
     fn description(&self) -> &'static str {
         "Verify historical configs load correctly through the current parser"
     }
@@ -140,23 +156,34 @@ impl ReleaseGate for UpgradeGate {
                 ExpectedOutcome::Warning => true,
                 ExpectedOutcome::Fail => has_errors,
             };
-            if !check_passed { all_passed = false; }
+            if !check_passed {
+                all_passed = false;
+            }
             let status = if check_passed { "PASS" } else { "FAIL" };
             let detail = match fixture.expected {
                 ExpectedOutcome::Pass => {
                     if has_errors {
-                        format!("expected pass but got errors: {}", validation_errors.join("; "))
-                    } else { "ok".into() }
+                        format!(
+                            "expected pass but got errors: {}",
+                            validation_errors.join("; ")
+                        )
+                    } else {
+                        "ok".into()
+                    }
                 }
                 ExpectedOutcome::Warning => {
                     if has_errors {
                         format!("warnings (expected): {}", validation_errors.join("; "))
-                    } else { "no warnings (expected some)".into() }
+                    } else {
+                        "no warnings (expected some)".into()
+                    }
                 }
                 ExpectedOutcome::Fail => {
                     if has_errors {
                         format!("expected failure: {}", validation_errors.join("; "))
-                    } else { "expected fail but passed (regression)".into() }
+                    } else {
+                        "expected fail but passed (regression)".into()
+                    }
                 }
             };
             all_checks.push(GateCheck {
@@ -189,12 +216,17 @@ pub struct MockUpgradeBackend {
 
 #[cfg(test)]
 impl UpgradeBackend for MockUpgradeBackend {
-    fn name(&self) -> &'static str { "mock" }
+    fn name(&self) -> &'static str {
+        "mock"
+    }
     fn discover_configs(&self, _ctx: &UpgradeContext) -> Result<Vec<ConfigFixture>, GateError> {
         Ok(self.configs.clone())
     }
     fn load_config(&self, fixture: &ConfigFixture) -> Result<String, GateError> {
-        fixture.content.clone().ok_or_else(|| GateError::ExecutionFailed("no content".into()))
+        fixture
+            .content
+            .clone()
+            .ok_or_else(|| GateError::ExecutionFailed("no content".into()))
     }
 }
 
@@ -207,7 +239,9 @@ mod tests {
     fn test_upgrade_gate_metadata() {
         let gate = UpgradeGate::new(
             Box::new(MockUpgradeBackend { configs: vec![] }),
-            UpgradeGateConfig { fixture_root: PathBuf::from(".") },
+            UpgradeGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let meta = gate.metadata();
         assert_eq!(meta.id, GateId::Upgrade1);
@@ -217,12 +251,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_upgrade_gate_passing_config() {
-        let backend = MockUpgradeBackend { configs: vec![
-            ConfigFixture {
+        let backend = MockUpgradeBackend {
+            configs: vec![ConfigFixture {
                 version: semver::Version::new(0, 10, 0),
                 path: PathBuf::from("configs/v0.10"),
                 expected: ExpectedOutcome::Pass,
-                content: Some(r#"
+                content: Some(
+                    r#"
 server:
   host: "0.0.0.0"
   port: 8080
@@ -233,12 +268,16 @@ resources:
 auth:
   enabled: false
   api_keys: []
-"#.into()),
-            },
-        ]};
+"#
+                    .into(),
+                ),
+            }],
+        };
         let gate = UpgradeGate::new(
             Box::new(backend),
-            UpgradeGateConfig { fixture_root: PathBuf::from(".") },
+            UpgradeGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -250,12 +289,13 @@ auth:
 
     #[tokio::test]
     async fn test_upgrade_gate_expected_fail_but_passes() {
-        let backend = MockUpgradeBackend { configs: vec![
-            ConfigFixture {
+        let backend = MockUpgradeBackend {
+            configs: vec![ConfigFixture {
                 version: semver::Version::new(0, 10, 0),
                 path: PathBuf::from("configs/v0.10"),
                 expected: ExpectedOutcome::Fail,
-                content: Some(r#"
+                content: Some(
+                    r#"
 server:
   host: "0.0.0.0"
   port: 8080
@@ -266,12 +306,16 @@ resources:
 auth:
   enabled: false
   api_keys: []
-"#.into()),
-            },
-        ]};
+"#
+                    .into(),
+                ),
+            }],
+        };
         let gate = UpgradeGate::new(
             Box::new(backend),
-            UpgradeGateConfig { fixture_root: PathBuf::from(".") },
+            UpgradeGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -293,7 +337,9 @@ auth:
         ]};
         let gate = UpgradeGate::new(
             Box::new(backend),
-            UpgradeGateConfig { fixture_root: PathBuf::from(".") },
+            UpgradeGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -303,6 +349,3 @@ auth:
         assert!(result.passed());
     }
 }
-
-
-

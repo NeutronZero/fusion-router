@@ -1,9 +1,9 @@
-use std::path::PathBuf;
 use fusion_router::release::bootstrap::build_default_runner;
 use fusion_router::release::evaluator::{EvaluationContext, PolicyEvaluator, ReleaseDecision};
 use fusion_router::release::gate::GateContext;
 use fusion_router::release::policy::{load_policy_from_yaml, PolicyDefinition, ReleaseEnvironment};
 use fusion_router::release::waiver::{load_waivers_from_yaml, WaiverSet};
+use std::path::PathBuf;
 
 #[tokio::test]
 async fn test_policy_evaluation_end_to_end_production() {
@@ -24,12 +24,10 @@ async fn test_policy_evaluation_end_to_end_production() {
     let eval = PolicyEvaluator::evaluate(&eval_ctx, &results);
 
     // Assert that policy evaluation runs cleanly and returns a valid decision
-    assert!(
-        matches!(
-            eval.decision,
-            ReleaseDecision::Approved | ReleaseDecision::ApprovedWithWaivers | ReleaseDecision::Blocked
-        )
-    );
+    assert!(matches!(
+        eval.decision,
+        ReleaseDecision::Approved | ReleaseDecision::ApprovedWithWaivers | ReleaseDecision::Blocked
+    ));
     assert_eq!(eval.environment, ReleaseEnvironment::Production);
 }
 
@@ -44,7 +42,8 @@ async fn test_policy_evaluation_end_to_end_staging() {
 
     let results = runner.run_all(&context).await;
     let policy = PolicyDefinition::default_policy();
-    let eval_ctx = EvaluationContext::new(ReleaseEnvironment::Staging, policy, WaiverSet::default());
+    let eval_ctx =
+        EvaluationContext::new(ReleaseEnvironment::Staging, policy, WaiverSet::default());
     let eval = PolicyEvaluator::evaluate(&eval_ctx, &results);
 
     assert_eq!(eval.environment, ReleaseEnvironment::Staging);

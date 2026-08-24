@@ -16,11 +16,18 @@ async fn test_beta_compiler_inspector_journey() {
         .expect("build ir");
 
     let exec_ir = workflow_to_types(&planning_ir).expect("Adapter conversion");
-    let report = engine.compile("Build AST Parser", &exec_ir).await.expect("Compile");
+    let report = engine
+        .compile("Build AST Parser", &exec_ir)
+        .await
+        .expect("Compile");
 
     // 1. Tab 1: Summary Validation
     assert_eq!(report.intent, "Build AST Parser");
-    assert!(report.compilation_time_ms <= 100, "compilation_time_ms should be reasonable: {}", report.compilation_time_ms);
+    assert!(
+        report.compilation_time_ms <= 100,
+        "compilation_time_ms should be reasonable: {}",
+        report.compilation_time_ms
+    );
 
     // 2. Tab 2: Route Analysis & Provider Candidate Comparison Matrix
     assert_eq!(report.provider_comparison.len(), 3);
@@ -41,6 +48,9 @@ async fn test_beta_compiler_inspector_journey() {
     // 4. Multi-dimensional Score Verification
     let explain_scores = report.route_scores;
     assert_eq!(explain_scores.len(), 3);
-    assert!(explain_scores[0].capability_score.is_some(), "capability score must be present (Phase 5)");
+    assert!(
+        explain_scores[0].capability_score.is_some(),
+        "capability score must be present (Phase 5)"
+    );
     assert_eq!(explain_scores[0].budget_score, Some(1.0));
 }

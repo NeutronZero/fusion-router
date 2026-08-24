@@ -10,17 +10,19 @@
 use fusion_compiler::CompilerEngine;
 use fusion_core::ExecutionId;
 use fusion_ir::WorkflowBuilder;
-use fusion_planner::PlannerService;
 use fusion_kernel::CapabilitySystem;
+use fusion_planner::PlannerService;
 use fusion_router::ir::adapter::workflow_to_types;
 
 #[test]
 fn test_domain_invariant_execution_has_one_workflow_ir() {
     let capability_system = CapabilitySystem::new();
     let planner = PlannerService::new(capability_system);
-    
+
     let intent = "Build AST Parser";
-    let ir = planner.plan(intent).expect("Planner must produce WorkflowIR");
+    let ir = planner
+        .plan(intent)
+        .expect("Planner must produce WorkflowIR");
 
     assert!(!ir.nodes().is_empty(), "WorkflowIR must contain IR nodes");
     assert_eq!(ir.version(), 1, "WorkflowIR version must be v1");
@@ -40,23 +42,39 @@ async fn test_domain_invariant_workflow_ir_produces_one_execution_graph() {
 
     let compiler = CompilerEngine::new();
     let exec_ir = workflow_to_types(&planning_ir).expect("Adapter conversion");
-    let report = compiler.compile("Test Domain Compilation", &exec_ir).await.expect("Compile");
+    let report = compiler
+        .compile("Test Domain Compilation", &exec_ir)
+        .await
+        .expect("Compile");
 
-    assert!(!report.graph_id.is_empty(), "ExecutionGraph ID must be present");
-    assert_eq!(report.pass_diffs.len(), 5, "Must execute exactly 5 compiler passes");
+    assert!(
+        !report.graph_id.is_empty(),
+        "ExecutionGraph ID must be present"
+    );
+    assert_eq!(
+        report.pass_diffs.len(),
+        5,
+        "Must execute exactly 5 compiler passes"
+    );
 }
 
 #[test]
 fn test_domain_invariant_execution_graph_belongs_to_execution_id() {
     let exec_id = ExecutionId::new();
-    assert!(!exec_id.0.to_string().is_empty(), "ExecutionId must be strongly-typed UUID");
+    assert!(
+        !exec_id.0.to_string().is_empty(),
+        "ExecutionId must be strongly-typed UUID"
+    );
 }
 
 #[test]
 fn test_domain_invariant_replay_references_immutable_bundle() {
     let exec_id = ExecutionId::new();
     let bundle_id = format!("{}.fusion", exec_id.0);
-    assert!(bundle_id.ends_with(".fusion"), "ExecutionBundle must be a .fusion archive");
+    assert!(
+        bundle_id.ends_with(".fusion"),
+        "ExecutionBundle must be a .fusion archive"
+    );
 }
 
 #[tokio::test]
@@ -68,10 +86,15 @@ async fn test_domain_invariant_studio_projections_derived_from_execution() {
         .build()
         .unwrap();
     let exec_ir = workflow_to_types(&planning_ir).expect("Adapter conversion");
-    let score = compiler.explain_route("openrouter", "Code Generation", &exec_ir).await;
+    let score = compiler
+        .explain_route("openrouter", "Code Generation", &exec_ir)
+        .await;
 
     assert_eq!(score.provider_name, "openrouter");
-    assert!(score.total_score > 0.0, "Route analysis must compute positive total score");
+    assert!(
+        score.total_score > 0.0,
+        "Route analysis must compute positive total score"
+    );
 }
 
 #[test]
@@ -82,6 +105,8 @@ fn test_domain_invariant_13_single_worker_lease_exclusivity() {
 
     // Invariant 12 contract shape: Lease(node_id, worker_id, epoch)
     let lease_key = format!("lease:{}:{}:{}", exec_id.0, node_id, worker_id);
-    assert!(lease_key.starts_with("lease:"), "Lease must have unique, deterministic key");
+    assert!(
+        lease_key.starts_with("lease:"),
+        "Lease must have unique, deterministic key"
+    );
 }
-

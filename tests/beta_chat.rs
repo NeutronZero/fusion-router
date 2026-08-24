@@ -29,7 +29,10 @@ async fn test_beta_chat_end_to_end_orchestration_journey() {
     // 2. Compiler Phase (Must be invoked for every request - Law 1)
     let compiler = CompilerEngine::new();
     let exec_ir = workflow_to_types(&planning_ir).expect("Adapter conversion");
-    let report = compiler.compile(prompt, &exec_ir).await.expect("Compile workflow");
+    let report = compiler
+        .compile(prompt, &exec_ir)
+        .await
+        .expect("Compile workflow");
 
     assert_eq!(report.intent, prompt);
     assert_eq!(report.passes_executed.len(), 5);

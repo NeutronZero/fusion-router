@@ -4,9 +4,9 @@
 //! with real SQLite persistence, replacing the earlier in-memory stub.
 
 use async_trait::async_trait;
+use parking_lot::Mutex;
 use rusqlite::{params, Connection};
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 use super::SessionStore;
 use crate::session::types::{ExecutionSession, SessionId, SessionSnapshot};
@@ -84,7 +84,10 @@ impl SessionStore for SqliteSessionStore {
         Ok(())
     }
 
-    async fn load_session(&self, session_id: &SessionId) -> Result<Option<ExecutionSession>, String> {
+    async fn load_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<ExecutionSession>, String> {
         let conn = self.conn.lock();
         let mut stmt = conn
             .prepare("SELECT session_id, workflow_id, created_at_ms, owner, config FROM sessions WHERE session_id = ?1")
@@ -97,16 +100,26 @@ impl SessionStore for SqliteSessionStore {
                 let created_at_ms: i64 = row.get(2)?;
                 let owner: String = row.get(3)?;
                 let config_json: String = row.get(4)?;
-                Ok((session_id_str, workflow_id_str, created_at_ms, owner, config_json))
+                Ok((
+                    session_id_str,
+                    workflow_id_str,
+                    created_at_ms,
+                    owner,
+                    config_json,
+                ))
             })
             .ok();
 
         match result {
             Some((sid, wf, ts, owner, cfg_json)) => {
-                let session_id = SessionId(uuid::Uuid::parse_str(&sid).map_err(|e| format!("bad session_id: {}", e))?);
-                let workflow_id = uuid::Uuid::parse_str(&wf).map_err(|e| format!("bad workflow_id: {}", e))?;
-                let config: std::collections::HashMap<String, String> = serde_json::from_str(&cfg_json)
-                    .map_err(|e| format!("failed to deserialize config: {}", e))?;
+                let session_id = SessionId(
+                    uuid::Uuid::parse_str(&sid).map_err(|e| format!("bad session_id: {}", e))?,
+                );
+                let workflow_id =
+                    uuid::Uuid::parse_str(&wf).map_err(|e| format!("bad workflow_id: {}", e))?;
+                let config: std::collections::HashMap<String, String> =
+                    serde_json::from_str(&cfg_json)
+                        .map_err(|e| format!("failed to deserialize config: {}", e))?;
                 Ok(Some(ExecutionSession {
                     session_id,
                     workflow_id,
@@ -139,7 +152,10 @@ impl SessionStore for SqliteSessionStore {
         Ok(())
     }
 
-    async fn list_checkpoints(&self, session_id: &SessionId) -> Result<Vec<SessionSnapshot>, String> {
+    async fn list_checkpoints(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<SessionSnapshot>, String> {
         let conn = self.conn.lock();
         let mut stmt = conn
             .prepare("SELECT snapshot_id, session_id, current_node_id, state, execution_context_id, trace_id, checkpoint_timestamp_ms FROM snapshots WHERE session_id = ?1 ORDER BY checkpoint_timestamp_ms ASC")
@@ -168,21 +184,25 @@ impl SessionStore for SqliteSessionStore {
 
         let mut snapshots = Vec::new();
         for row in rows {
-            let (sid, ssid, node_id, state_json, exec_ctx, trace_id, ts) = row
-                .map_err(|e| format!("failed to read snapshot row: {}", e))?;
+            let (sid, ssid, node_id, state_json, exec_ctx, trace_id, ts) =
+                row.map_err(|e| format!("failed to read snapshot row: {}", e))?;
 
-            let snapshot_id = uuid::Uuid::parse_str(&ssid).map_err(|e| format!("bad snapshot_id: {}", e))?;
-            let session_id = SessionId(uuid::Uuid::parse_str(&sid).map_err(|e| format!("bad session_id: {}", e))?);
+            let snapshot_id =
+                uuid::Uuid::parse_str(&ssid).map_err(|e| format!("bad snapshot_id: {}", e))?;
+            let session_id = SessionId(
+                uuid::Uuid::parse_str(&sid).map_err(|e| format!("bad session_id: {}", e))?,
+            );
             let current_node_id = node_id
                 .map(|s| uuid::Uuid::parse_str(&s))
                 .transpose()
                 .map_err(|e| format!("bad current_node_id: {}", e))?;
-            let state: crate::types::execution_context::ExecutionState = serde_json::from_str(&state_json)
-                .map_err(|e| format!("failed to deserialize state: {}", e))?;
+            let state: crate::types::execution_context::ExecutionState =
+                serde_json::from_str(&state_json)
+                    .map_err(|e| format!("failed to deserialize state: {}", e))?;
             let execution_context_id = uuid::Uuid::parse_str(&exec_ctx)
                 .map_err(|e| format!("bad execution_context_id: {}", e))?;
-            let trace_id = uuid::Uuid::parse_str(&trace_id)
-                .map_err(|e| format!("bad trace_id: {}", e))?;
+            let trace_id =
+                uuid::Uuid::parse_str(&trace_id).map_err(|e| format!("bad trace_id: {}", e))?;
 
             snapshots.push(SessionSnapshot {
                 session_id,
@@ -286,7 +306,10 @@ mod tests {
         let store = SqliteSessionStore::new(":memory:").unwrap();
         let session = test_session();
         store.create_session(session.clone()).await.unwrap();
-        store.save_snapshot(test_snapshot(&session.session_id)).await.unwrap();
+        store
+            .save_snapshot(test_snapshot(&session.session_id))
+            .await
+            .unwrap();
 
         store.delete_session(&session.session_id).await.unwrap();
 

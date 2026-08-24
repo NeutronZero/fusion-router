@@ -2,10 +2,10 @@
 //!
 //! Orchestrates compiler passes, validates prerequisites, records pass execution timing, and collects diagnostics.
 
-use std::time::Instant;
 use crate::compiler::context::CompilationContext;
 use crate::compiler::passes::CompilerPass;
 use crate::types::{CompilerError, WorkflowIR};
+use std::time::Instant;
 
 pub struct CompilerPipeline {
     passes: Vec<Box<dyn CompilerPass + Send + Sync>>,
@@ -51,8 +51,8 @@ impl Default for CompilerPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
     use crate::types::{IRNode, IRNodeKind, StrategyKind};
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn test_compiler_pipeline_execution() {
@@ -62,14 +62,18 @@ mod tests {
 
         #[async_trait::async_trait]
         impl CompilerPass for PassAdapter {
-            fn name(&self) -> &str { self.0.name() }
+            fn name(&self) -> &str {
+                self.0.name()
+            }
             async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
                 self.0.apply(ir).await
             }
         }
 
         let mut pipeline = CompilerPipeline::new();
-        pipeline.add_pass(Box::new(PassAdapter(fusion_compiler::ConstraintValidationPass)));
+        pipeline.add_pass(Box::new(PassAdapter(
+            fusion_compiler::ConstraintValidationPass,
+        )));
 
         let input_ir = WorkflowIR {
             plan_id: Uuid::new_v4(),

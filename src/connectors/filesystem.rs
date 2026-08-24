@@ -1,3 +1,5 @@
+use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
+use crate::security::paths::canonicalize_within;
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
@@ -7,8 +9,6 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
-use crate::security::paths::canonicalize_within;
 
 /// Reads files from the filesystem (real I/O, Law 10 path containment).
 ///
@@ -74,25 +74,32 @@ impl CapabilityExecutor for FilesystemPlugin {
                 retryable: false,
             })?;
 
-        let canonical = canonicalize_within(&self.root, std::path::Path::new(path)).map_err(
-            |err| ExecutionError {
-                connector: "filesystem".into(),
-                capability: instance.contract.id.clone(),
-                reason: format!("path rejected (Law 10): {err}"),
-                retryable: false,
-            },
-        )?;
+        let canonical =
+            canonicalize_within(&self.root, std::path::Path::new(path)).map_err(|err| {
+                ExecutionError {
+                    connector: "filesystem".into(),
+                    capability: instance.contract.id.clone(),
+                    reason: format!("path rejected (Law 10): {err}"),
+                    retryable: false,
+                }
+            })?;
 
         let started = std::time::Instant::now();
-        let content = tokio::fs::read_to_string(&canonical).await.map_err(|err| ExecutionError {
-            connector: "filesystem".into(),
-            capability: instance.contract.id.clone(),
-            reason: format!("failed to read {}: {err}", canonical.display()),
-            retryable: false,
-        })?;
+        let content =
+            tokio::fs::read_to_string(&canonical)
+                .await
+                .map_err(|err| ExecutionError {
+                    connector: "filesystem".into(),
+                    capability: instance.contract.id.clone(),
+                    reason: format!("failed to read {}: {err}", canonical.display()),
+                    retryable: false,
+                })?;
 
         let mut metrics = HashMap::new();
-        metrics.insert("latency_ms".to_string(), started.elapsed().as_secs_f64() * 1000.0);
+        metrics.insert(
+            "latency_ms".to_string(),
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
 
         Ok(ExecutionResult {
             outputs: json!({ "content": content }),
@@ -179,10 +186,7 @@ mod tests {
         std::fs::write(&file, "hello from disk").unwrap();
         let plugin = FilesystemPlugin { root };
         let result = plugin
-            .execute(
-                &make_instance(),
-                json!({ "path": file.to_str().unwrap() }),
-            )
+            .execute(&make_instance(), json!({ "path": file.to_str().unwrap() }))
             .await
             .unwrap();
         assert_eq!(result.outputs["content"], "hello from disk");
@@ -199,7 +203,11 @@ mod tests {
             .execute(&make_instance(), json!({ "path": escape }))
             .await
             .unwrap_err();
-        assert!(err.reason.contains("Law 10"), "unexpected reason: {}", err.reason);
+        assert!(
+            err.reason.contains("Law 10"),
+            "unexpected reason: {}",
+            err.reason
+        );
         std::fs::remove_dir_all(plugin.root).unwrap();
     }
 

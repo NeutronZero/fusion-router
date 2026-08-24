@@ -1,6 +1,6 @@
-use crate::transport::HttpTransport;
 use super::openrouter_model::OpenRouterModel;
 use super::Provider;
+use crate::transport::HttpTransport;
 use std::time::Duration;
 
 pub fn new_openrouter_provider(api_key: String) -> Provider {
@@ -15,10 +15,7 @@ pub fn new_openrouter_provider_with_base_url(
         "openrouter-model".to_string(),
         base_url,
     ));
-    let transport = Box::new(
-        HttpTransport::new(Duration::from_secs(600))
-            .unwrap_or_default(),
-    );
+    let transport = Box::new(HttpTransport::new(Duration::from_secs(600)).unwrap_or_default());
     Provider::new(model, transport, api_key)
 }
 

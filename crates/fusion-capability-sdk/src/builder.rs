@@ -1,5 +1,5 @@
-use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityTrait, Permission};
 use fusion_core::NanoUSD;
+use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityTrait, Permission};
 use semver::Version;
 use serde_json::Value;
 
@@ -92,8 +92,12 @@ impl CapabilityBuilder {
             id: CapabilityId::new(self.id),
             version: self.version.unwrap_or_else(|| Version::new(0, 1, 0)),
             description: self.description.unwrap_or_default(),
-            inputs_schema: self.inputs_schema.unwrap_or(Value::Object(Default::default())),
-            outputs_schema: self.outputs_schema.unwrap_or(Value::Object(Default::default())),
+            inputs_schema: self
+                .inputs_schema
+                .unwrap_or(Value::Object(Default::default())),
+            outputs_schema: self
+                .outputs_schema
+                .unwrap_or(Value::Object(Default::default())),
             permissions: self.permissions,
             dependencies: self.dependencies,
             estimated_cost: self.estimated_cost,

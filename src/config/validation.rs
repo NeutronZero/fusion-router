@@ -1,6 +1,6 @@
 use crate::config::error::{ConfigValidationError, ValidationSeverity};
 use crate::config::types::AppConfig;
-use crate::types::{Policy, PolicyAction, PolicyCondition, Quota, ProviderLimit};
+use crate::types::{Policy, PolicyAction, PolicyCondition, ProviderLimit, Quota};
 
 impl AppConfig {
     pub fn load(path: &str) -> anyhow::Result<Self> {
@@ -14,13 +14,21 @@ impl AppConfig {
             max_daily_cost: self.resources.max_daily_cost,
             max_daily_tokens: self.resources.max_daily_tokens,
             max_concurrent: self.resources.max_concurrent,
-            provider_limits: self.resources.provider_limits.iter().map(|(k, v)| {
-                (k.clone(), ProviderLimit {
-                    max_daily_cost: v.max_daily_cost,
-                    max_rpm: v.max_rpm,
-                    max_tpm: v.max_tpm,
+            provider_limits: self
+                .resources
+                .provider_limits
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        ProviderLimit {
+                            max_daily_cost: v.max_daily_cost,
+                            max_rpm: v.max_rpm,
+                            max_tpm: v.max_tpm,
+                        },
+                    )
                 })
-            }).collect(),
+                .collect(),
         }
     }
 
@@ -72,7 +80,10 @@ impl AppConfig {
         {
             errors.push(ConfigValidationError {
                 field: "logging.level".into(),
-                message: format!("'{}' is not a valid tracing level/directive", self.logging.level),
+                message: format!(
+                    "'{}' is not a valid tracing level/directive",
+                    self.logging.level
+                ),
                 value: Some(self.logging.level.clone()),
                 severity: ValidationSeverity::Error,
             });
@@ -145,7 +156,9 @@ impl AppConfig {
             if !self.auth.enabled {
                 errors.push(ConfigValidationError {
                     field: "auth.enabled".into(),
-                    message: "authentication is disabled; start with --unsafe-dev to run without auth".into(),
+                    message:
+                        "authentication is disabled; start with --unsafe-dev to run without auth"
+                            .into(),
                     value: None,
                     severity: ValidationSeverity::Error,
                 });
@@ -161,7 +174,9 @@ impl AppConfig {
             if self.server.cors.allowed_origins.iter().any(|o| o == "*") {
                 errors.push(ConfigValidationError {
                     field: "server.cors.allowed_origins".into(),
-                    message: "wildcard CORS origin '*' is forbidden; start with --unsafe-dev to allow it".into(),
+                    message:
+                        "wildcard CORS origin '*' is forbidden; start with --unsafe-dev to allow it"
+                            .into(),
                     value: None,
                     severity: ValidationSeverity::Error,
                 });
@@ -177,7 +192,9 @@ impl AppConfig {
             if self.tools.enable_http_tool {
                 errors.push(ConfigValidationError {
                     field: "tools.enable_http_tool".into(),
-                    message: "the HTTP tool is disabled by default; start with --unsafe-dev to enable it".into(),
+                    message:
+                        "the HTTP tool is disabled by default; start with --unsafe-dev to enable it"
+                            .into(),
                     value: None,
                     severity: ValidationSeverity::Error,
                 });
@@ -203,22 +220,37 @@ impl AppConfig {
             });
         }
 
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 
     pub fn to_policies(&self) -> Vec<Policy> {
-        self.policies.iter().map(|p| Policy {
-            name: p.name.clone(),
-            priority: p.priority,
-            conditions: p.conditions.iter().map(|c| PolicyCondition {
-                field: c.field.clone(),
-                operator: c.operator.clone(),
-                value: c.value.clone(),
-            }).collect(),
-            actions: p.actions.iter().map(|a| PolicyAction {
-                action_type: a.action_type.clone(),
-                params: a.params.clone(),
-            }).collect(),
-        }).collect()
+        self.policies
+            .iter()
+            .map(|p| Policy {
+                name: p.name.clone(),
+                priority: p.priority,
+                conditions: p
+                    .conditions
+                    .iter()
+                    .map(|c| PolicyCondition {
+                        field: c.field.clone(),
+                        operator: c.operator.clone(),
+                        value: c.value.clone(),
+                    })
+                    .collect(),
+                actions: p
+                    .actions
+                    .iter()
+                    .map(|a| PolicyAction {
+                        action_type: a.action_type.clone(),
+                        params: a.params.clone(),
+                    })
+                    .collect(),
+            })
+            .collect()
     }
 }

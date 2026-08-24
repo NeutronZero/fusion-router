@@ -6,8 +6,8 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::types::{
-    ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata, NanoUSD, StrategyKind,
-    RetryPolicy, FallbackConfig,
+    ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, FallbackConfig, GraphMetadata,
+    NanoUSD, RetryPolicy, StrategyKind,
 };
 
 pub const PRIMITIVE_GRAPH_VERSION: u16 = 1;
@@ -31,9 +31,16 @@ pub enum ReducerMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum PrimitiveNodeKind {
-    LLMGenerate { model: String, role: Option<String> },
-    LLMReview { model: String },
-    FanOut { count: u32 },
+    LLMGenerate {
+        model: String,
+        role: Option<String>,
+    },
+    LLMReview {
+        model: String,
+    },
+    FanOut {
+        count: u32,
+    },
     Barrier {
         min_completion: f32,
         timeout: Duration,
@@ -43,8 +50,12 @@ pub enum PrimitiveNodeKind {
         mode: ReducerMode,
         model: String,
     },
-    FeedbackLoop { max_iterations: u32 },
-    ConditionalBranch { condition: String },
+    FeedbackLoop {
+        max_iterations: u32,
+    },
+    ConditionalBranch {
+        condition: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -84,7 +95,12 @@ impl PrimitiveGraph {
         self.nodes.push(node);
     }
 
-    pub fn add_edge(&mut self, from: impl Into<String>, to: impl Into<String>, condition: Option<String>) {
+    pub fn add_edge(
+        &mut self,
+        from: impl Into<String>,
+        to: impl Into<String>,
+        condition: Option<String>,
+    ) {
         self.edges.push(PrimitiveEdge {
             from: from.into(),
             to: to.into(),
@@ -117,7 +133,9 @@ impl PrimitiveGraph {
                 PrimitiveNodeKind::Barrier { min_completion, .. } => {
                     format!("Barrier ({:.0}%)", min_completion * 100.0)
                 }
-                PrimitiveNodeKind::Reducer { mode, model } => format!("Reducer ({:?} - {})", mode, model),
+                PrimitiveNodeKind::Reducer { mode, model } => {
+                    format!("Reducer ({:?} - {})", mode, model)
+                }
                 PrimitiveNodeKind::FeedbackLoop { max_iterations } => {
                     format!("FeedbackLoop (max: {})", max_iterations)
                 }
@@ -129,7 +147,10 @@ impl PrimitiveGraph {
         }
         for edge in &self.edges {
             if let Some(cond) = &edge.condition {
-                out.push_str(&format!("    {} -- \"{}\" --> {}\n", edge.from, cond, edge.to));
+                out.push_str(&format!(
+                    "    {} -- \"{}\" --> {}\n",
+                    edge.from, cond, edge.to
+                ));
             } else {
                 out.push_str(&format!("    {} --> {}\n", edge.from, edge.to));
             }
@@ -161,7 +182,8 @@ impl PrimitiveGraph {
             .map(|n| n.id.as_str())
             .collect();
 
-        let mut id_to_uuid: std::collections::HashMap<&str, Uuid> = std::collections::HashMap::new();
+        let mut id_to_uuid: std::collections::HashMap<&str, Uuid> =
+            std::collections::HashMap::new();
         let mut exec_nodes: Vec<ExecutionNode> = Vec::new();
 
         for (idx, pn) in self.nodes.iter().enumerate() {
@@ -185,9 +207,7 @@ impl PrimitiveGraph {
                 PrimitiveNodeKind::Reducer { model, .. } => {
                     (ExecutionNodeKind::LLMJudge, model.clone())
                 }
-                PrimitiveNodeKind::FeedbackLoop { .. } => {
-                    (ExecutionNodeKind::Loop, String::new())
-                }
+                PrimitiveNodeKind::FeedbackLoop { .. } => (ExecutionNodeKind::Loop, String::new()),
                 PrimitiveNodeKind::ConditionalBranch { .. } => {
                     (ExecutionNodeKind::Conditional, String::new())
                 }
@@ -227,9 +247,10 @@ impl PrimitiveGraph {
 
             match (from_skip, to_skip) {
                 (false, false) => {
-                    if let (Some(&f), Some(&t)) =
-                        (id_to_uuid.get(pe.from.as_str()), id_to_uuid.get(pe.to.as_str()))
-                    {
+                    if let (Some(&f), Some(&t)) = (
+                        id_to_uuid.get(pe.from.as_str()),
+                        id_to_uuid.get(pe.to.as_str()),
+                    ) {
                         exec_edges.push(ExecutionEdge {
                             from: f,
                             to: t,
@@ -242,9 +263,7 @@ impl PrimitiveGraph {
                         let after_barrier: Vec<&str> = self
                             .edges
                             .iter()
-                            .filter(|e| {
-                                e.from == pe.to && !skippable.contains(e.to.as_str())
-                            })
+                            .filter(|e| e.from == pe.to && !skippable.contains(e.to.as_str()))
                             .map(|e| e.to.as_str())
                             .collect();
                         for target in after_barrier {
@@ -287,7 +306,10 @@ impl PrimitiveGraph {
         }
         for edge in &self.edges {
             if let Some(cond) = &edge.condition {
-                out.push_str(&format!("    \"{}\" -> \"{}\" [label=\"{}\"];\n", edge.from, edge.to, cond));
+                out.push_str(&format!(
+                    "    \"{}\" -> \"{}\" [label=\"{}\"];\n",
+                    edge.from, edge.to, cond
+                ));
             } else {
                 out.push_str(&format!("    \"{}\" -> \"{}\";\n", edge.from, edge.to));
             }

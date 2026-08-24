@@ -42,7 +42,12 @@ impl WorkflowBuilder {
         self
     }
 
-    pub fn add_node(mut self, id: &str, kind: WorkflowNodeKind, capability: Option<&str>) -> Result<Self, ValidationError> {
+    pub fn add_node(
+        mut self,
+        id: &str,
+        kind: WorkflowNodeKind,
+        capability: Option<&str>,
+    ) -> Result<Self, ValidationError> {
         if !self.seen.insert(id.to_string()) {
             return Err(ValidationError::DuplicateNodeId(id.to_string()));
         }
@@ -76,7 +81,11 @@ impl WorkflowBuilder {
         Ok(self)
     }
 
-    pub fn with_config(mut self, id: &str, config: BTreeMap<String, serde_json::Value>) -> Result<Self, ValidationError> {
+    pub fn with_config(
+        mut self,
+        id: &str,
+        config: BTreeMap<String, serde_json::Value>,
+    ) -> Result<Self, ValidationError> {
         let node = self
             .nodes
             .iter_mut()
@@ -87,14 +96,23 @@ impl WorkflowBuilder {
     }
 
     pub fn add_node_with_model(
-        mut self, id: &str, kind: WorkflowNodeKind, capability: Option<&str>,
-        selected_model: Option<String>, config: BTreeMap<String, serde_json::Value>,
+        mut self,
+        id: &str,
+        kind: WorkflowNodeKind,
+        capability: Option<&str>,
+        selected_model: Option<String>,
+        config: BTreeMap<String, serde_json::Value>,
     ) -> Result<Self, ValidationError> {
         if !self.seen.insert(id.to_string()) {
             return Err(ValidationError::DuplicateNodeId(id.to_string()));
         }
-        self.nodes.push(WorkflowNode { id: id.to_string(), kind,
-            capability: capability.map(String::from), selected_model, config });
+        self.nodes.push(WorkflowNode {
+            id: id.to_string(),
+            kind,
+            capability: capability.map(String::from),
+            selected_model,
+            config,
+        });
         Ok(self)
     }
 
@@ -134,7 +152,13 @@ impl WorkflowBuilder {
         self.add_node(id, WorkflowNodeKind::Output, None)
     }
 
-    pub fn edge(mut self, from: &str, to: &str, kind: WorkflowEdgeKind, condition: Option<String>) -> Result<Self, ValidationError> {
+    pub fn edge(
+        mut self,
+        from: &str,
+        to: &str,
+        kind: WorkflowEdgeKind,
+        condition: Option<String>,
+    ) -> Result<Self, ValidationError> {
         for ref_id in [from, to] {
             if !self.seen.contains(ref_id) {
                 return Err(ValidationError::UnknownNodeRef(ref_id.to_string()));
@@ -157,8 +181,18 @@ impl WorkflowBuilder {
         self.edge(from, to, WorkflowEdgeKind::Parallel, None)
     }
 
-    pub fn conditional(self, from: &str, to: &str, condition: &str) -> Result<Self, ValidationError> {
-        self.edge(from, to, WorkflowEdgeKind::Conditional, Some(condition.to_string()))
+    pub fn conditional(
+        self,
+        from: &str,
+        to: &str,
+        condition: &str,
+    ) -> Result<Self, ValidationError> {
+        self.edge(
+            from,
+            to,
+            WorkflowEdgeKind::Conditional,
+            Some(condition.to_string()),
+        )
     }
 
     pub fn retry(self, from: &str, to: &str) -> Result<Self, ValidationError> {
@@ -213,7 +247,10 @@ mod tests {
 
     #[test]
     fn duplicate_node_id_fails_at_call() {
-        let err = WorkflowBuilder::new().task("n1", "A").and_then(|b| b.task("n1", "B")).unwrap_err();
+        let err = WorkflowBuilder::new()
+            .task("n1", "A")
+            .and_then(|b| b.task("n1", "B"))
+            .unwrap_err();
         assert_eq!(err, ValidationError::DuplicateNodeId("n1".into()));
     }
 
@@ -225,7 +262,13 @@ mod tests {
 
     #[test]
     fn build_runs_full_structural_validation() -> Result<(), ValidationError> {
-        let err = WorkflowBuilder::new().task("a", "A")?.task("b", "B")?.sequential("a", "b")?.sequential("b", "a")?.build().unwrap_err();
+        let err = WorkflowBuilder::new()
+            .task("a", "A")?
+            .task("b", "B")?
+            .sequential("a", "b")?
+            .sequential("b", "a")?
+            .build()
+            .unwrap_err();
         assert_eq!(err, ValidationError::MissingRoot);
         Ok(())
     }
@@ -258,7 +301,10 @@ mod tests {
             .output("n2")?
             .sequential("n1", "n2")?
             .build()?;
-        assert_eq!(ir.nodes[0].config.get("goal"), Some(&serde_json::Value::String("payments".into())));
+        assert_eq!(
+            ir.nodes[0].config.get("goal"),
+            Some(&serde_json::Value::String("payments".into()))
+        );
         Ok(())
     }
 

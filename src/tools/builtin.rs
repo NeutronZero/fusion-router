@@ -37,7 +37,8 @@ impl Tool for CalculatorTool {
     }
 
     async fn execute(&self, args: Value) -> Result<Value, String> {
-        let expr = args.get("expression")
+        let expr = args
+            .get("expression")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing 'expression' argument".to_string())?;
 
@@ -80,7 +81,8 @@ impl Tool for SearchTool {
     }
 
     async fn execute(&self, args: Value) -> Result<Value, String> {
-        let query = args.get("query")
+        let query = args
+            .get("query")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing 'query' argument".to_string())?;
 
@@ -124,7 +126,8 @@ impl Tool for FileReadTool {
     }
 
     async fn execute(&self, args: Value) -> Result<Value, String> {
-        let path = args.get("path")
+        let path = args
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing 'path' argument".to_string())?;
 
@@ -173,7 +176,9 @@ mod tests {
     #[tokio::test]
     async fn test_calculator_tool() {
         let tool = CalculatorTool;
-        let result = tool.execute(serde_json::json!({"expression": "2 + 3"})).await;
+        let result = tool
+            .execute(serde_json::json!({"expression": "2 + 3"}))
+            .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap()["result"], 5.0);
     }
@@ -181,7 +186,9 @@ mod tests {
     #[tokio::test]
     async fn test_calculator_tool_invalid_expression() {
         let tool = CalculatorTool;
-        let result = tool.execute(serde_json::json!({"expression": "invalid"})).await;
+        let result = tool
+            .execute(serde_json::json!({"expression": "invalid"}))
+            .await;
         assert!(result.is_err());
     }
 
@@ -189,7 +196,9 @@ mod tests {
     async fn test_calculator_tool_rejects_oversized_expression() {
         let tool = CalculatorTool;
         let long_expr = "1 + ".repeat(200);
-        let result = tool.execute(serde_json::json!({"expression": long_expr})).await;
+        let result = tool
+            .execute(serde_json::json!({"expression": long_expr}))
+            .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("max length"));
     }
@@ -207,10 +216,16 @@ mod tests {
     async fn test_file_read_tool_path_traversal_blocked() {
         let tmp = std::env::temp_dir();
         let tool = FileReadTool::new(tmp.to_string_lossy().to_string());
-        let result = tool.execute(serde_json::json!({"path": "../../etc/passwd"})).await;
+        let result = tool
+            .execute(serde_json::json!({"path": "../../etc/passwd"}))
+            .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.contains("Path traversal") || err.contains("not found") || err.contains("inaccessible"));
+        assert!(
+            err.contains("Path traversal")
+                || err.contains("not found")
+                || err.contains("inaccessible")
+        );
     }
 
     #[tokio::test]
@@ -244,7 +259,11 @@ mod tests {
 
         let _ = std::fs::remove_file(&test_path);
 
-        assert!(result.is_ok(), "File read should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "File read should succeed: {:?}",
+            result.err()
+        );
         let val = result.unwrap();
         assert_eq!(val["content"].as_str().unwrap(), test_content);
     }

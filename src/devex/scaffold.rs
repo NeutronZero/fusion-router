@@ -19,8 +19,9 @@ impl PluginScaffolder {
     pub fn scaffold_plugin<P: AsRef<Path>>(&self, path: P, name: &str) -> std::io::Result<()> {
         let base_path = path.as_ref().join(name);
         fs::create_dir_all(&base_path)?;
-        
-        let cargo_toml = format!(r#"
+
+        let cargo_toml = format!(
+            r#"
 [package]
 name = "{}"
 version = "0.1.0"
@@ -28,7 +29,9 @@ edition = "2021"
 
 [dependencies]
 fusion-plugin-api = {{ path = "../../crates/fusion-plugin-api" }}
-"#, name);
+"#,
+            name
+        );
 
         let src_dir = base_path.join("src");
         fs::create_dir_all(&src_dir)?;

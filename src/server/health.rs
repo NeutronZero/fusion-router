@@ -7,9 +7,7 @@ pub async fn health_handler() -> Json<Value> {
     Json(json!({"status": "ok"}))
 }
 
-pub async fn ready_handler(
-    State(state): State<AppState>,
-) -> (StatusCode, Json<Value>) {
+pub async fn ready_handler(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     // Real readiness signals only — no hardcoded "ok" placeholders.
     let db_ok = state.evidence_repository.ping().await;
     let providers_configured = state
@@ -24,20 +22,29 @@ pub async fn ready_handler(
     });
 
     if db_ok && providers_configured {
-        (StatusCode::OK, Json(json!({"status": "ok", "checks": checks})))
+        (
+            StatusCode::OK,
+            Json(json!({"status": "ok", "checks": checks})),
+        )
     } else {
-        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"status": "unavailable", "checks": checks})))
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "unavailable", "checks": checks})),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{
+        AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig, ResourceConfig,
+        ServerConfig, StrategyConfig, ToolsConfig,
+    };
+    use crate::scheduler::connector_resolver::ConnectorResolver;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use crate::config::{AppConfig, ServerConfig, ResourceConfig, StrategyConfig, ToolsConfig, AuthConfig, RateLimitingConfig, LoggingConfig, CorsConfig};
-    use crate::scheduler::connector_resolver::ConnectorResolver;
 
     fn dummy_state() -> AppState {
         let config = AppConfig {
@@ -68,7 +75,9 @@ mod tests {
             features: HashMap::new(),
         };
         crate::server::handlers::AppState::new(
-            Arc::new(crate::providers::openrouter::OpenRouterProvider::new("test".into())),
+            Arc::new(crate::providers::openrouter::OpenRouterProvider::new(
+                "test".into(),
+            )),
             crate::resource::DefaultResourceManager::new(config.to_quota()),
             Arc::new(crate::telemetry::SqliteEvidenceRepository::new(":memory:").unwrap()),
             config,
@@ -91,7 +100,3 @@ mod tests {
         assert_eq!(res["status"], "ok");
     }
 }
-
-
-
-

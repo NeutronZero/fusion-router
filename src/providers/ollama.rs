@@ -1,14 +1,11 @@
-use crate::transport::HttpTransport;
 use super::ollama_model::OllamaModel;
 use super::Provider;
+use crate::transport::HttpTransport;
 use std::time::Duration;
 
 pub fn new_ollama_provider() -> Provider {
     let model = Box::new(OllamaModel::new("ollama-model".to_string()));
-    let transport = Box::new(
-        HttpTransport::new(Duration::from_secs(30))
-            .unwrap_or_default(),
-    );
+    let transport = Box::new(HttpTransport::new(Duration::from_secs(30)).unwrap_or_default());
     Provider::new(model, transport, String::new())
 }
 

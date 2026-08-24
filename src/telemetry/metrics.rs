@@ -1,7 +1,5 @@
+use prometheus::{Encoder, HistogramVec, IntCounter, IntCounterVec, TextEncoder};
 use std::sync::OnceLock;
-use prometheus::{
-    HistogramVec, IntCounter, IntCounterVec, TextEncoder, Encoder,
-};
 
 static METRICS: OnceLock<FusionMetrics> = OnceLock::new();
 
@@ -46,35 +44,29 @@ impl FusionMetrics {
         Self {
             requests_total: safe_int_counter(
                 "fusionrouter_requests_total",
-                "Total number of requests"
+                "Total number of requests",
             ),
             request_duration_seconds: safe_histogram_vec(
                 "fusionrouter_request_duration_seconds",
                 "Request duration in seconds",
-                &["route"]
+                &["route"],
             ),
-            errors_total: safe_int_counter(
-                "fusionrouter_errors_total",
-                "Total number of errors"
-            ),
-            tokens_total: safe_int_counter(
-                "fusionrouter_tokens_total",
-                "Total tokens consumed"
-            ),
+            errors_total: safe_int_counter("fusionrouter_errors_total", "Total number of errors"),
+            tokens_total: safe_int_counter("fusionrouter_tokens_total", "Total tokens consumed"),
             provider_latency_seconds: safe_histogram_vec(
                 "fusionrouter_provider_latency_seconds",
                 "Provider latency in seconds",
-                &["provider"]
+                &["provider"],
             ),
             strategy_latency_seconds: safe_histogram_vec(
                 "fusionrouter_strategy_latency_seconds",
                 "Per-strategy latency in seconds",
-                &["strategy"]
+                &["strategy"],
             ),
             strategy_errors_total: safe_int_counter_vec(
                 "fusionrouter_strategy_errors_total",
                 "Per-strategy error count",
-                &["strategy"]
+                &["strategy"],
             ),
             graph_hash_count: safe_int_counter(
                 "fusionrouter_graph_hash_count",
@@ -125,7 +117,10 @@ mod tests {
     #[test]
     fn test_metrics_render_uses_prometheus_format() {
         let metrics = FusionMetrics::instance();
-        metrics.request_duration_seconds.with_label_values(&["test"]).observe(0.01);
+        metrics
+            .request_duration_seconds
+            .with_label_values(&["test"])
+            .observe(0.01);
         let output = render_metrics();
 
         // Standard prometheus text format: HELP and TYPE declarations
@@ -134,7 +129,10 @@ mod tests {
         assert!(output.contains("# TYPE fusionrouter_request_duration_seconds histogram"));
 
         // Counter lines must end with a plain integer
-        for line in output.lines().filter(|l| l.starts_with("fusionrouter_requests_total")) {
+        for line in output
+            .lines()
+            .filter(|l| l.starts_with("fusionrouter_requests_total"))
+        {
             let value = line.rsplit(' ').next().unwrap_or("");
             assert!(
                 value.parse::<u64>().is_ok(),

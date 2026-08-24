@@ -1,10 +1,10 @@
-use async_trait::async_trait;
-use std::path::PathBuf;
-use std::time::Instant;
 use crate::release::certification::{CertificationArtifact, CertificationContext};
 use crate::release::fixture::FixtureKind;
 use crate::release::fixture_loader::{discover_fixtures, load_fixture_manifest, FixtureLoader};
 use crate::release::gate::*;
+use async_trait::async_trait;
+use std::path::PathBuf;
+use std::time::Instant;
 
 #[allow(dead_code)]
 pub struct StrategyGateConfig {
@@ -48,13 +48,11 @@ impl CertificationArtifact for StrategyArtifact {
     }
 
     fn schema_checks(&self, _ctx: &CertificationContext) -> Result<Vec<GateCheck>, GateError> {
-        Ok(vec![
-            GateCheck {
-                name: "strategy-descriptor-schema".into(),
-                passed: !self.name.is_empty() && !self.pattern.is_empty(),
-                message: format!("strategy {} pattern {}", self.name, self.pattern),
-            },
-        ])
+        Ok(vec![GateCheck {
+            name: "strategy-descriptor-schema".into(),
+            passed: !self.name.is_empty() && !self.pattern.is_empty(),
+            message: format!("strategy {} pattern {}", self.name, self.pattern),
+        }])
     }
 
     fn contract_checks(&self, _ctx: &CertificationContext) -> Result<Vec<GateCheck>, GateError> {
@@ -63,15 +61,24 @@ impl CertificationArtifact for StrategyArtifact {
                 name: "compiler-graph-compilation".into(),
                 passed: self.compiles_to_execution_graph,
                 message: if self.compiles_to_execution_graph {
-                    format!("strategy {} produces compiler-valid ExecutionGraph", self.name)
+                    format!(
+                        "strategy {} produces compiler-valid ExecutionGraph",
+                        self.name
+                    )
                 } else {
-                    format!("strategy {} failed compiler ExecutionGraph validation", self.name)
+                    format!(
+                        "strategy {} failed compiler ExecutionGraph validation",
+                        self.name
+                    )
                 },
             },
             GateCheck {
                 name: "policy-compatibility".into(),
                 passed: self.valid_policy,
-                message: format!("strategy {} policy compliance: {}", self.name, self.valid_policy),
+                message: format!(
+                    "strategy {} policy compliance: {}",
+                    self.name, self.valid_policy
+                ),
             },
         ])
     }
@@ -102,19 +109,25 @@ pub struct FilesystemStrategyBackend {
 
 impl FilesystemStrategyBackend {
     pub fn new(fixture_root: PathBuf) -> Self {
-        Self { loader: FixtureLoader::new(fixture_root) }
+        Self {
+            loader: FixtureLoader::new(fixture_root),
+        }
     }
 }
 
 impl StrategyBackend for FilesystemStrategyBackend {
-    fn name(&self) -> &'static str { "filesystem" }
+    fn name(&self) -> &'static str {
+        "filesystem"
+    }
 
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<StrategyArtifact>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
         let entries = discover_fixtures(&manifest, FixtureKind::Strategies);
         let mut results = Vec::new();
         for entry in &entries {
-            let full_path = self.loader.resolve(&PathBuf::from("tests/fixtures").join(&entry.path));
+            let full_path = self
+                .loader
+                .resolve(&PathBuf::from("tests/fixtures").join(&entry.path));
             results.push(self.load(&full_path)?);
         }
         Ok(results)
@@ -122,7 +135,10 @@ impl StrategyBackend for FilesystemStrategyBackend {
 
     fn load(&self, path: &std::path::Path) -> Result<StrategyArtifact, GateError> {
         if !path.exists() {
-            return Err(GateError::ExecutionFailed(format!("strategy path not found: {}", path.display())));
+            return Err(GateError::ExecutionFailed(format!(
+                "strategy path not found: {}",
+                path.display()
+            )));
         }
         let files = if path.is_dir() {
             self.loader.find_files(path, "json")?
@@ -130,7 +146,10 @@ impl StrategyBackend for FilesystemStrategyBackend {
             vec![path.to_path_buf()]
         };
         let file = files.first().ok_or_else(|| {
-            GateError::ExecutionFailed(format!("no strategy manifest (*.json) found in {}", path.display()))
+            GateError::ExecutionFailed(format!(
+                "no strategy manifest (*.json) found in {}",
+                path.display()
+            ))
         })?;
         let content = self.loader.read_to_string(file)?;
         let manifest: StrategyManifest = serde_json::from_str(&content).map_err(|e| {
@@ -169,8 +188,12 @@ impl StrategyGate {
 
 #[async_trait]
 impl ReleaseGate for StrategyGate {
-    fn id(&self) -> GateId { GateId::Strategy1 }
-    fn name(&self) -> &'static str { "Strategy Conformance" }
+    fn id(&self) -> GateId {
+        GateId::Strategy1
+    }
+    fn name(&self) -> &'static str {
+        "Strategy Conformance"
+    }
     fn description(&self) -> &'static str {
         "Verify routing strategy registration, compiler compatibility, and execution graph compilation"
     }
@@ -213,7 +236,10 @@ impl ReleaseGate for StrategyGate {
             format!("{} strategies certified", artifacts.len())
         } else {
             let failed = all_checks.iter().filter(|c| !c.passed).count();
-            format!("{failed} checks failed across {} strategies", artifacts.len())
+            format!(
+                "{failed} checks failed across {} strategies",
+                artifacts.len()
+            )
         };
 
         GateExecution::Success(GateResult {
@@ -235,10 +261,14 @@ pub struct MockStrategyBackend {
 
 #[cfg(test)]
 impl StrategyBackend for MockStrategyBackend {
-    fn name(&self) -> &'static str { "mock" }
+    fn name(&self) -> &'static str {
+        "mock"
+    }
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<StrategyArtifact>, GateError> {
         if self.should_error {
-            return Err(GateError::ExecutionFailed("mock strategy backend error".into()));
+            return Err(GateError::ExecutionFailed(
+                "mock strategy backend error".into(),
+            ));
         }
         Ok(self.artifacts.clone())
     }
@@ -254,8 +284,13 @@ mod tests {
     #[test]
     fn test_strategy_gate_metadata() {
         let gate = StrategyGate::new(
-            Box::new(MockStrategyBackend { artifacts: vec![], should_error: false }),
-            StrategyGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockStrategyBackend {
+                artifacts: vec![],
+                should_error: false,
+            }),
+            StrategyGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let meta = gate.metadata();
         assert_eq!(meta.id, GateId::Strategy1);
@@ -273,8 +308,13 @@ mod tests {
             true,
         );
         let gate = StrategyGate::new(
-            Box::new(MockStrategyBackend { artifacts: vec![artifact], should_error: false }),
-            StrategyGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockStrategyBackend {
+                artifacts: vec![artifact],
+                should_error: false,
+            }),
+            StrategyGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -294,8 +334,13 @@ mod tests {
             true,
         );
         let gate = StrategyGate::new(
-            Box::new(MockStrategyBackend { artifacts: vec![artifact], should_error: false }),
-            StrategyGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockStrategyBackend {
+                artifacts: vec![artifact],
+                should_error: false,
+            }),
+            StrategyGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -307,7 +352,8 @@ mod tests {
 
     #[test]
     fn test_filesystem_strategy_backend_load_reads_real_content() {
-        let temp = std::env::temp_dir().join(format!("fusion_strategy_gate_{}", std::process::id()));
+        let temp =
+            std::env::temp_dir().join(format!("fusion_strategy_gate_{}", std::process::id()));
         std::fs::create_dir_all(temp.join("strategies/single")).unwrap();
         std::fs::write(
             temp.join("strategies/single/strategy.json"),
@@ -335,7 +381,8 @@ mod tests {
 
     #[test]
     fn test_filesystem_strategy_backend_load_rejects_malformed_content() {
-        let temp = std::env::temp_dir().join(format!("fusion_strategy_malformed_{}", std::process::id()));
+        let temp =
+            std::env::temp_dir().join(format!("fusion_strategy_malformed_{}", std::process::id()));
         std::fs::create_dir_all(temp.join("strategies/single")).unwrap();
         std::fs::write(
             temp.join("strategies/single/strategy.json"),
@@ -345,7 +392,10 @@ mod tests {
 
         let backend = FilesystemStrategyBackend::new(temp.clone());
         let result = backend.load(&temp.join("strategies/single"));
-        assert!(result.is_err(), "malformed manifest must not fabricate a pass");
+        assert!(
+            result.is_err(),
+            "malformed manifest must not fabricate a pass"
+        );
 
         let _ = std::fs::remove_dir_all(temp);
     }

@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 use crate::release::gate::{GateExecution, GateId, GateResult};
 use crate::release::policy::{EnvironmentPolicy, PolicyDefinition, ReleaseEnvironment};
 use crate::release::waiver::{WaiverEvaluation, WaiverSet};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct EvaluationContext {
@@ -13,7 +13,11 @@ pub struct EvaluationContext {
 }
 
 impl EvaluationContext {
-    pub fn new(environment: ReleaseEnvironment, policy: PolicyDefinition, waivers: WaiverSet) -> Self {
+    pub fn new(
+        environment: ReleaseEnvironment,
+        policy: PolicyDefinition,
+        waivers: WaiverSet,
+    ) -> Self {
         Self {
             environment,
             policy,
@@ -106,7 +110,9 @@ impl PolicyEvaluator {
             })
             .collect();
 
-        let env_policy = ctx.policy.get_environment_policy(&ctx.environment)
+        let env_policy = ctx
+            .policy
+            .get_environment_policy(&ctx.environment)
             .cloned()
             .unwrap_or_default();
 
@@ -116,7 +122,10 @@ impl PolicyEvaluator {
         let mut waived_failures = Vec::new();
 
         for failed_gate in classified.required_failed {
-            if let Some(waiver) = ctx.waivers.find_active_waiver(failed_gate, None, ctx.evaluation_time) {
+            if let Some(waiver) =
+                ctx.waivers
+                    .find_active_waiver(failed_gate, None, ctx.evaluation_time)
+            {
                 waived_failures.push(WaiverEvaluation {
                     waiver: waiver.clone(),
                     active: true,
@@ -162,9 +171,9 @@ impl PolicyEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-    use chrono::TimeZone;
     use crate::release::waiver::Waiver;
+    use chrono::TimeZone;
+    use std::time::Duration;
 
     fn mock_execution(gate_id: GateId, passed: bool) -> GateExecution {
         GateExecution::Success(GateResult {
@@ -179,7 +188,8 @@ mod tests {
     #[test]
     fn test_evaluator_all_passed() {
         let policy = PolicyDefinition::default_policy();
-        let ctx = EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
+        let ctx =
+            EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
         let results = vec![
             mock_execution(GateId::Sdk1, true),
             mock_execution(GateId::Replay1, true),
@@ -197,7 +207,8 @@ mod tests {
     #[test]
     fn test_evaluator_required_failure_blocked() {
         let policy = PolicyDefinition::default_policy();
-        let ctx = EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
+        let ctx =
+            EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
         let results = vec![
             mock_execution(GateId::Sdk1, true),
             mock_execution(GateId::Plugin1, false), // Required gate fails
@@ -219,7 +230,9 @@ mod tests {
             expires: Utc.with_ymd_and_hms(2030, 1, 1, 0, 0, 0).unwrap(),
             approved_by: "architecture".into(),
         };
-        let waiver_set = WaiverSet { waivers: vec![waiver] };
+        let waiver_set = WaiverSet {
+            waivers: vec![waiver],
+        };
         let ctx = EvaluationContext::new(ReleaseEnvironment::Production, policy, waiver_set);
 
         let results = vec![
@@ -236,7 +249,8 @@ mod tests {
     #[test]
     fn test_evaluator_advisory_failure_approved() {
         let policy = PolicyDefinition::default_policy();
-        let ctx = EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
+        let ctx =
+            EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
         let results = vec![
             mock_execution(GateId::Sdk1, true),
             mock_execution(GateId::Provider1, false), // Advisory gate fails
@@ -251,17 +265,22 @@ mod tests {
     #[test]
     fn test_evaluator_empty_evidence_blocked() {
         let policy = PolicyDefinition::default_policy();
-        let ctx = EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
+        let ctx =
+            EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
         let results = vec![];
 
         let eval = PolicyEvaluator::evaluate(&ctx, &results);
-        assert_eq!(eval.decision, ReleaseDecision::Blocked, "no evidence must not Approve");
+        assert_eq!(
+            eval.decision,
+            ReleaseDecision::Blocked,
+            "no evidence must not Approve"
+        );
     }
 
     #[test]
     fn test_evaluator_required_execution_error_blocks() {
-        use crate::release::policy::EnvironmentPolicy;
         use crate::release::gate::GateError;
+        use crate::release::policy::EnvironmentPolicy;
 
         let policy = PolicyDefinition {
             name: "audit-fix".into(),
@@ -275,13 +294,15 @@ mod tests {
             .into_iter()
             .collect(),
         };
-        let ctx = EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
+        let ctx =
+            EvaluationContext::new(ReleaseEnvironment::Production, policy, WaiverSet::default());
         let results = vec![
             mock_execution(GateId::Sdk1, true),
             GateExecution::Success(GateResult {
                 gate_id: GateId::Replay1,
                 passed: false,
-                summary: GateError::ToolNotAvailable("determinism backend not available".into()).to_string(),
+                summary: GateError::ToolNotAvailable("determinism backend not available".into())
+                    .to_string(),
                 details: vec![],
                 duration: Duration::from_millis(10),
             }),

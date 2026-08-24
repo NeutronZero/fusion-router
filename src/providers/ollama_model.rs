@@ -1,7 +1,7 @@
+use super::{Model, ModelCapabilities, ModelPricing, TransportRequest, TransportResponse};
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice, Usage};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use crate::types::{ChatCompletionRequest, ChatCompletionResponse, Choice, ChatMessage, Usage};
-use super::{Model, ModelCapabilities, ModelPricing, TransportRequest, TransportResponse};
 
 pub struct OllamaModel {
     pub model_id: String,
@@ -52,11 +52,15 @@ impl Model for OllamaModel {
         None
     }
 
-    fn format_request(&self, req: &ChatCompletionRequest, _api_key: &str) -> anyhow::Result<TransportRequest> {
+    fn format_request(
+        &self,
+        req: &ChatCompletionRequest,
+        _api_key: &str,
+    ) -> anyhow::Result<TransportRequest> {
         let base_url = std::env::var("OLLAMA_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:11434/api".to_string());
         let url = format!("{}/chat", base_url);
-        
+
         let mut headers = HashMap::new();
         headers.insert("Content-Type".to_string(), "application/json".to_string());
 
@@ -77,7 +81,10 @@ impl Model for OllamaModel {
         })
     }
 
-    fn normalize_response(&self, resp: TransportResponse) -> anyhow::Result<ChatCompletionResponse> {
+    fn normalize_response(
+        &self,
+        resp: TransportResponse,
+    ) -> anyhow::Result<ChatCompletionResponse> {
         let body = resp.body;
         let id = body["id"].as_str().unwrap_or("ollama-id").to_string();
         let model = body["model"].as_str().unwrap_or(&self.model_id).to_string();
@@ -87,8 +94,14 @@ impl Model for OllamaModel {
             .map(|dt| dt.timestamp())
             .unwrap_or_else(|| chrono::Utc::now().timestamp());
 
-        let content = body["message"]["content"].as_str().unwrap_or("").to_string();
-        let role = body["message"]["role"].as_str().unwrap_or("assistant").to_string();
+        let content = body["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let role = body["message"]["role"]
+            .as_str()
+            .unwrap_or("assistant")
+            .to_string();
 
         let choices = vec![Choice {
             index: 0,
@@ -99,7 +112,8 @@ impl Model for OllamaModel {
         let usage = Usage {
             prompt_tokens: body["prompt_eval_count"].as_u64().unwrap_or(0) as u32,
             completion_tokens: body["eval_count"].as_u64().unwrap_or(0) as u32,
-            total_tokens: (body["prompt_eval_count"].as_u64().unwrap_or(0) + body["eval_count"].as_u64().unwrap_or(0)) as u32,
+            total_tokens: (body["prompt_eval_count"].as_u64().unwrap_or(0)
+                + body["eval_count"].as_u64().unwrap_or(0)) as u32,
         };
 
         let native_tool_calls = super::native_tool_calls_from(&body, "message", -1);

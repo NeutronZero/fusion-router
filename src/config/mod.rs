@@ -6,13 +6,12 @@ pub mod validation;
 
 pub use types::*;
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::config::defaults::*;
     use crate::config::error::*;
+    use std::collections::HashMap;
 
     fn base_config() -> AppConfig {
         AppConfig {
@@ -35,7 +34,10 @@ mod tests {
             providers: HashMap::new(),
             strategies: StrategyConfig::default(),
             tools: ToolsConfig::default(),
-            auth: AuthConfig { enabled: true, api_keys: vec!["sk-test".into()] },
+            auth: AuthConfig {
+                enabled: true,
+                api_keys: vec!["sk-test".into()],
+            },
             rate_limiting: RateLimitingConfig::default(),
             logging: LoggingConfig::default(),
             model_catalog: crate::types::ModelCatalog::default(),
@@ -51,7 +53,10 @@ mod tests {
         assert!(default_rate_limiting_enabled());
         assert_eq!(default_allowed_shell_commands(), Vec::<String>::new());
         assert!(!default_enable_http_tool());
-        assert!(AuthConfig::default().enabled, "auth must default to enabled");
+        assert!(
+            AuthConfig::default().enabled,
+            "auth must default to enabled"
+        );
         let mut config = base_config();
         config.auth = AuthConfig::default();
         assert!(config.auth.enabled && config.auth.api_keys.is_empty());
@@ -69,12 +74,21 @@ resources:
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(!config.unsafe_dev, "unsafe_dev must default to false");
         assert_eq!(config.server.host, "127.0.0.1");
-        assert!(config.auth.enabled, "auth must default to enabled when deserialized");
-        assert!(config.rate_limiting.enabled, "rate limiting must default to enabled");
+        assert!(
+            config.auth.enabled,
+            "auth must default to enabled when deserialized"
+        );
+        assert!(
+            config.rate_limiting.enabled,
+            "rate limiting must default to enabled"
+        );
         assert!(config.server.cors.allowed_origins.is_empty());
         assert!(config.tools.allowed_shell_commands.is_empty());
         assert!(!config.tools.enable_http_tool);
-        assert!(!config.tools.allow_auto_exec, "tool auto-execution must default to false");
+        assert!(
+            !config.tools.allow_auto_exec,
+            "tool auto-execution must default to false"
+        );
         assert!(
             !config.tools.allow_unrestricted_args,
             "unrestricted shell args must default to false"
@@ -120,7 +134,9 @@ resources:
         let mut config = base_config();
         config.server.cors.allowed_origins = vec!["*".into()];
         let errors = config.validate_with_profile(true).unwrap_err();
-        assert!(errors.iter().any(|e| e.field == "server.cors.allowed_origins"));
+        assert!(errors
+            .iter()
+            .any(|e| e.field == "server.cors.allowed_origins"));
     }
 
     #[test]
@@ -129,7 +145,9 @@ resources:
         config.tools.allowed_shell_commands = vec!["cat".into()];
         config.tools.enable_http_tool = true;
         let errors = config.validate_with_profile(true).unwrap_err();
-        assert!(errors.iter().any(|e| e.field == "tools.allowed_shell_commands"));
+        assert!(errors
+            .iter()
+            .any(|e| e.field == "tools.allowed_shell_commands"));
         assert!(errors.iter().any(|e| e.field == "tools.enable_http_tool"));
     }
 
@@ -187,7 +205,9 @@ resources:
         let mut config = base_config();
         config.server.shutdown_timeout_secs = 0;
         let errors = config.validate().unwrap_err();
-        assert!(errors.iter().any(|e| e.field == "server.shutdown_timeout_secs"));
+        assert!(errors
+            .iter()
+            .any(|e| e.field == "server.shutdown_timeout_secs"));
     }
 
     #[test]
@@ -277,13 +297,19 @@ resources:
 
         let quota = config.to_quota();
 
-        assert_eq!(quota.max_daily_cost, crate::types::NanoUSD::from_nanos(42_500_000_000));
+        assert_eq!(
+            quota.max_daily_cost,
+            crate::types::NanoUSD::from_nanos(42_500_000_000)
+        );
         assert_eq!(quota.max_daily_tokens, 999);
         assert_eq!(quota.max_concurrent, 7);
         let limit = quota.provider_limits.get("openai").unwrap();
         assert_eq!(limit.max_rpm, 60);
         assert_eq!(limit.max_tpm, 100_000);
-        assert_eq!(limit.max_daily_cost, crate::types::NanoUSD::from_nanos(10_000_000_000));
+        assert_eq!(
+            limit.max_daily_cost,
+            crate::types::NanoUSD::from_nanos(10_000_000_000)
+        );
     }
 
     #[test]
@@ -329,7 +355,3 @@ resources:
         assert!(base_config().to_policies().is_empty());
     }
 }
-
-
-
-

@@ -38,8 +38,7 @@ pub fn execute_build(project_dir: &Path, output_dir: &Path) -> Result<PathBuf, S
 
     let optimized = try_wasm_opt(&stripped, project_dir);
 
-    fs::create_dir_all(output_dir)
-        .map_err(|e| format!("Failed to create output dir: {e}"))?;
+    fs::create_dir_all(output_dir).map_err(|e| format!("Failed to create output dir: {e}"))?;
 
     let manifest_path = project_dir.join("manifest.toml");
     if !manifest_path.exists() {
@@ -68,7 +67,9 @@ pub fn execute_build(project_dir: &Path, output_dir: &Path) -> Result<PathBuf, S
         .map_err(|e| format!("Failed to add manifest: {e}"))?;
 
     let mut wasm_header = tar::Header::new_gnu();
-    wasm_header.set_path("module.wasm").map_err(|e| format!("Failed to set header path: {e}"))?;
+    wasm_header
+        .set_path("module.wasm")
+        .map_err(|e| format!("Failed to set header path: {e}"))?;
     wasm_header.set_size(wasm_bytes.len() as u64);
     wasm_header.set_mode(0o444);
     wasm_header.set_cksum();
@@ -77,16 +78,26 @@ pub fn execute_build(project_dir: &Path, output_dir: &Path) -> Result<PathBuf, S
         .map_err(|e| format!("Failed to add module: {e}"))?;
 
     let mut attestation_header = tar::Header::new_gnu();
-    attestation_header.set_path("attestation.json").map_err(|e| format!("Failed to set header path: {e}"))?;
+    attestation_header
+        .set_path("attestation.json")
+        .map_err(|e| format!("Failed to set header path: {e}"))?;
     attestation_header.set_size(attestation.len() as u64);
     attestation_header.set_mode(0o444);
     attestation_header.set_cksum();
     archive
-        .append_data(&mut attestation_header, "attestation.json", attestation.as_bytes())
+        .append_data(
+            &mut attestation_header,
+            "attestation.json",
+            attestation.as_bytes(),
+        )
         .map_err(|e| format!("Failed to add attestation: {e}"))?;
 
-    let encoder = archive.into_inner().map_err(|e| format!("Failed to finalize archive: {e}"))?;
-    encoder.finish().map_err(|e| format!("Failed to write archive: {e}"))?;
+    let encoder = archive
+        .into_inner()
+        .map_err(|e| format!("Failed to finalize archive: {e}"))?;
+    encoder
+        .finish()
+        .map_err(|e| format!("Failed to write archive: {e}"))?;
 
     println!("Created package: {}", pkg_path.display());
     Ok(pkg_path)
@@ -95,7 +106,10 @@ pub fn execute_build(project_dir: &Path, output_dir: &Path) -> Result<PathBuf, S
 fn try_strip_wasm(path: &Path) -> PathBuf {
     let tmp = path.with_extension("stripped.wasm");
     let status = Command::new("wasm-strip")
-        .args([path.to_string_lossy().as_ref(), tmp.to_string_lossy().as_ref()])
+        .args([
+            path.to_string_lossy().as_ref(),
+            tmp.to_string_lossy().as_ref(),
+        ])
         .status();
     match status {
         Ok(s) if s.success() => tmp,
@@ -106,7 +120,12 @@ fn try_strip_wasm(path: &Path) -> PathBuf {
 fn try_wasm_opt(path: &Path, project_dir: &Path) -> PathBuf {
     let tmp = project_dir.join("target/optimized.wasm");
     let status = Command::new("wasm-opt")
-        .args(["-O2", path.to_string_lossy().as_ref(), "-o", tmp.to_string_lossy().as_ref()])
+        .args([
+            "-O2",
+            path.to_string_lossy().as_ref(),
+            "-o",
+            tmp.to_string_lossy().as_ref(),
+        ])
         .status();
     match status {
         Ok(s) if s.success() => tmp,

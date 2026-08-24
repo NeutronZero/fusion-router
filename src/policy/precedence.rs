@@ -12,7 +12,10 @@ impl PolicyPrecedenceEngine {
     /// Precedence is computed here, not at the call site, so it holds for any
     /// `PolicyIR` regardless of input order or `Deserialize` source (ADR-034):
     /// `Deny > Approval > Allow`, then higher `priority` wins.
-    pub fn evaluate_matching_rule<'a>(ir: &'a PolicyIR, target_symbol: &str) -> Option<&'a PolicyRule> {
+    pub fn evaluate_matching_rule<'a>(
+        ir: &'a PolicyIR,
+        target_symbol: &str,
+    ) -> Option<&'a PolicyRule> {
         ir.rules
             .iter()
             .filter(|rule| rule.target_pattern == target_symbol || rule.target_pattern == "*")
@@ -80,7 +83,8 @@ mod tests {
                 rule("specific-deny", "shell.exec", 100, PolicyEffect::Deny),
             ],
         };
-        let matched = PolicyPrecedenceEngine::evaluate_matching_rule(&unsorted, "shell.exec").unwrap();
+        let matched =
+            PolicyPrecedenceEngine::evaluate_matching_rule(&unsorted, "shell.exec").unwrap();
         assert_eq!(matched.rule_id, "specific-deny");
         assert_eq!(matched.effect, PolicyEffect::Deny);
     }

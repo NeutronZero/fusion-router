@@ -1,7 +1,7 @@
+use super::{Model, ModelCapabilities, ModelPricing, TransportRequest, TransportResponse};
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice, Usage};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use crate::types::{ChatCompletionRequest, ChatCompletionResponse, Choice, ChatMessage, Usage};
-use super::{Model, ModelCapabilities, ModelPricing, TransportRequest, TransportResponse};
 
 pub struct ZenModel {
     pub model_id: String,
@@ -57,20 +57,26 @@ impl Model for ZenModel {
         None
     }
 
-    fn format_request(&self, req: &ChatCompletionRequest, api_key: &str) -> anyhow::Result<TransportRequest> {
+    fn format_request(
+        &self,
+        req: &ChatCompletionRequest,
+        api_key: &str,
+    ) -> anyhow::Result<TransportRequest> {
         let base_url = self
             .base_url
             .clone()
             .or_else(|| std::env::var("OPENCODEZEN_BASE_URL").ok())
             .unwrap_or_else(|| "https://opencode.ai/zen/v1".to_string());
         let url = format!("{}/chat/completions", base_url);
-        
+
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
         headers.insert("Content-Type".to_string(), "application/json".to_string());
 
-        let api_model = req.model
-            .strip_prefix("zen/").or_else(|| req.model.strip_prefix("opencode/"))
+        let api_model = req
+            .model
+            .strip_prefix("zen/")
+            .or_else(|| req.model.strip_prefix("opencode/"))
             .unwrap_or(&req.model);
 
         tracing::debug!(
@@ -100,7 +106,10 @@ impl Model for ZenModel {
         })
     }
 
-    fn normalize_response(&self, resp: TransportResponse) -> anyhow::Result<ChatCompletionResponse> {
+    fn normalize_response(
+        &self,
+        resp: TransportResponse,
+    ) -> anyhow::Result<ChatCompletionResponse> {
         let body = resp.body;
         tracing::debug!(
             response_keys = ?body.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()),
@@ -110,7 +119,9 @@ impl Model for ZenModel {
         );
         let id = body["id"].as_str().unwrap_or("zen-id").to_string();
         let model = body["model"].as_str().unwrap_or(&self.model_id).to_string();
-        let created = body["created"].as_i64().unwrap_or_else(|| chrono::Utc::now().timestamp());
+        let created = body["created"]
+            .as_i64()
+            .unwrap_or_else(|| chrono::Utc::now().timestamp());
 
         let choices: Vec<Choice> = body["choices"]
             .as_array()
@@ -125,7 +136,10 @@ impl Model for ZenModel {
                         Ok(Choice {
                             index: i as u32,
                             message: ChatMessage {
-                                role: c["message"]["role"].as_str().unwrap_or("assistant").to_string(),
+                                role: c["message"]["role"]
+                                    .as_str()
+                                    .unwrap_or("assistant")
+                                    .to_string(),
                                 content,
                             },
                             finish_reason,
@@ -210,7 +224,10 @@ mod tests {
             }),
         };
         let err = model.normalize_response(resp).unwrap_err().to_string();
-        assert!(err.contains("truncated"), "expected truncation error, got: {err}");
+        assert!(
+            err.contains("truncated"),
+            "expected truncation error, got: {err}"
+        );
     }
 
     #[test]
@@ -227,4 +244,3 @@ mod tests {
         assert_eq!(out.choices[0].message.content, "");
     }
 }
-

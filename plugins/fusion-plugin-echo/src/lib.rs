@@ -55,8 +55,8 @@ impl CapabilityPlugin for EchoPlugin {
                         "text": { "type": "string" }
                     }
                 }),
-            permissions: vec![],
-            dependencies: vec![],
+                permissions: vec![],
+                dependencies: vec![],
                 estimated_cost: fusion_plugin_api::NanoUSD::ZERO,
                 estimated_latency_ms: 1,
                 reliability_score: 1.0,
@@ -80,8 +80,8 @@ impl CapabilityPlugin for EchoPlugin {
                         "text": { "type": "string" }
                     }
                 }),
-            permissions: vec![],
-            dependencies: vec![],
+                permissions: vec![],
+                dependencies: vec![],
                 estimated_cost: fusion_plugin_api::NanoUSD::ZERO,
                 estimated_latency_ms: 1,
                 reliability_score: 1.0,

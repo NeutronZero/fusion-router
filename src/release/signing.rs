@@ -1,9 +1,9 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 use crate::release::attestation::ReleaseAttestation;
 use crate::release::gate::GateError;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignatureBlock {
@@ -25,7 +25,11 @@ pub trait Signer: Send + Sync {
     fn key_id(&self) -> &str;
     fn algorithm(&self) -> &'static str;
     fn sign(&self, canonical_payload: &[u8]) -> Result<SignatureBlock, GateError>;
-    fn verify(&self, canonical_payload: &[u8], signature: &SignatureBlock) -> Result<bool, GateError>;
+    fn verify(
+        &self,
+        canonical_payload: &[u8],
+        signature: &SignatureBlock,
+    ) -> Result<bool, GateError>;
 }
 
 pub struct MockSigner {
@@ -34,7 +38,9 @@ pub struct MockSigner {
 
 impl MockSigner {
     pub fn new(key_id: impl Into<String>) -> Self {
-        Self { key_id: key_id.into() }
+        Self {
+            key_id: key_id.into(),
+        }
     }
 }
 
@@ -68,7 +74,11 @@ impl Signer for MockSigner {
         })
     }
 
-    fn verify(&self, canonical_payload: &[u8], signature: &SignatureBlock) -> Result<bool, GateError> {
+    fn verify(
+        &self,
+        canonical_payload: &[u8],
+        signature: &SignatureBlock,
+    ) -> Result<bool, GateError> {
         if signature.version != 1 {
             return Ok(false);
         }
@@ -90,7 +100,10 @@ pub struct HmacSha256Signer {
 
 impl HmacSha256Signer {
     pub fn new(key_id: impl Into<String>, key: &[u8]) -> Self {
-        Self { key_id: key_id.into(), key: key.to_vec() }
+        Self {
+            key_id: key_id.into(),
+            key: key.to_vec(),
+        }
     }
 }
 
@@ -153,7 +166,11 @@ impl Signer for HmacSha256Signer {
         })
     }
 
-    fn verify(&self, canonical_payload: &[u8], signature: &SignatureBlock) -> Result<bool, GateError> {
+    fn verify(
+        &self,
+        canonical_payload: &[u8],
+        signature: &SignatureBlock,
+    ) -> Result<bool, GateError> {
         use base64::Engine;
         if signature.version != 1 {
             return Ok(false);
@@ -161,7 +178,9 @@ impl Signer for HmacSha256Signer {
         let expected = hmac_sha256(&self.key, canonical_payload);
         let supplied = base64::engine::general_purpose::STANDARD
             .decode(&signature.signature_bytes_base64)
-            .map_err(|e| GateError::ExecutionFailed(format!("signature base64 decode error: {e}")))?;
+            .map_err(|e| {
+                GateError::ExecutionFailed(format!("signature base64 decode error: {e}"))
+            })?;
         Ok(constant_time_eq(&expected, &supplied))
     }
 }
@@ -198,7 +217,11 @@ mod tests {
         assert_eq!(sig.public_key_id, "ops-key");
 
         // base64-decoded signature is 32 bytes (SHA-256 digest)
-        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &sig.signature_bytes_base64).unwrap();
+        let decoded = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &sig.signature_bytes_base64,
+        )
+        .unwrap();
         assert_eq!(decoded.len(), 32);
 
         let valid = signer.verify(payload, &sig).unwrap();
@@ -221,6 +244,9 @@ mod tests {
 
         let attacker = HmacSha256Signer::new("ops-key", b"attacker key");
         let forged_check = attacker.verify(b"authentic payload", &sig).unwrap();
-        assert!(!forged_check, "signature must not verify under a different key");
+        assert!(
+            !forged_check,
+            "signature must not verify under a different key"
+        );
     }
 }

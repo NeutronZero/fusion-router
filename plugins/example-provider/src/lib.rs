@@ -1,4 +1,4 @@
-use std::ffi::{CString, c_void};
+use std::ffi::{c_void, CString};
 
 /// Plugin entry point: creates a provider instance.
 /// Returns a heap-allocated raw pointer to the provider.
@@ -120,5 +120,8 @@ pub struct FileRef {
 #[async_trait::async_trait]
 pub trait ChatProvider: Send + Sync {
     fn name(&self) -> &str;
-    async fn chat_completion(&self, request: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse>;
+    async fn chat_completion(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> anyhow::Result<ChatCompletionResponse>;
 }

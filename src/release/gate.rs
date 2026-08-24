@@ -69,7 +69,8 @@ impl Serialize for GateId {
 impl<'de> Deserialize<'de> for GateId {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        GateId::from_str(&s).ok_or_else(|| serde::de::Error::custom(format!("invalid GateId: {}", s)))
+        GateId::from_str(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid GateId: {}", s)))
     }
 }
 
@@ -239,7 +240,12 @@ mod tests {
 
     #[test]
     fn test_gate_id_serde() {
-        for id in [GateId::Sdk1, GateId::Replay1, GateId::Upgrade1, GateId::Determinism1] {
+        for id in [
+            GateId::Sdk1,
+            GateId::Replay1,
+            GateId::Upgrade1,
+            GateId::Determinism1,
+        ] {
             let json = serde_json::to_string(&id).unwrap();
             let deserialized: GateId = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized, id);
@@ -282,7 +288,10 @@ mod tests {
         assert_eq!(deserialized.details[0].name, result.details[0].name);
         assert_eq!(deserialized.details[0].passed, result.details[0].passed);
         assert_eq!(deserialized.details[0].message, result.details[0].message);
-        assert_eq!(deserialized.duration.as_secs_f64(), result.duration.as_secs_f64());
+        assert_eq!(
+            deserialized.duration.as_secs_f64(),
+            result.duration.as_secs_f64()
+        );
     }
 
     #[test]

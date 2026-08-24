@@ -1,7 +1,7 @@
+use super::{Model, ModelCapabilities, ModelPricing, TransportRequest, TransportResponse};
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice, Usage};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use crate::types::{ChatCompletionRequest, ChatCompletionResponse, Choice, ChatMessage, Usage};
-use super::{Model, ModelCapabilities, ModelPricing, TransportRequest, TransportResponse};
 
 pub struct OpenRouterModel {
     pub model_id: String,
@@ -57,27 +57,31 @@ impl Model for OpenRouterModel {
         None
     }
 
-    fn format_request(&self, req: &ChatCompletionRequest, api_key: &str) -> anyhow::Result<TransportRequest> {
+    fn format_request(
+        &self,
+        req: &ChatCompletionRequest,
+        api_key: &str,
+    ) -> anyhow::Result<TransportRequest> {
         let base_url = self
             .base_url
             .clone()
             .or_else(|| std::env::var("OPENROUTER_BASE_URL").ok())
             .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
         let url = format!("{}/chat/completions", base_url);
-        
+
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {}", api_key));
-        headers.insert("HTTP-Referer".to_string(), "https://github.com/anomalyco/opencode".to_string());
+        headers.insert(
+            "HTTP-Referer".to_string(),
+            "https://github.com/anomalyco/opencode".to_string(),
+        );
         headers.insert("X-Title".to_string(), "FusionRouter".to_string());
         headers.insert("Content-Type".to_string(), "application/json".to_string());
 
         // The registry routes on `<provider-key>/` prefixes; strip the routing
         // prefix before forwarding so the upstream API receives a bare model
         // id (mirrors ZenModel::format_request).
-        let api_model = req
-            .model
-            .strip_prefix("openrouter/")
-            .unwrap_or(&req.model);
+        let api_model = req.model.strip_prefix("openrouter/").unwrap_or(&req.model);
 
         let mut body = serde_json::json!({
             "model": api_model,
@@ -98,11 +102,16 @@ impl Model for OpenRouterModel {
         })
     }
 
-    fn normalize_response(&self, resp: TransportResponse) -> anyhow::Result<ChatCompletionResponse> {
+    fn normalize_response(
+        &self,
+        resp: TransportResponse,
+    ) -> anyhow::Result<ChatCompletionResponse> {
         let body = resp.body;
         let id = body["id"].as_str().unwrap_or("or-id").to_string();
         let model = body["model"].as_str().unwrap_or(&self.model_id).to_string();
-        let created = body["created"].as_i64().unwrap_or_else(|| chrono::Utc::now().timestamp());
+        let created = body["created"]
+            .as_i64()
+            .unwrap_or_else(|| chrono::Utc::now().timestamp());
 
         let choices: Vec<Choice> = body["choices"]
             .as_array()
@@ -117,7 +126,10 @@ impl Model for OpenRouterModel {
                         Ok(Choice {
                             index: i as u32,
                             message: ChatMessage {
-                                role: c["message"]["role"].as_str().unwrap_or("assistant").to_string(),
+                                role: c["message"]["role"]
+                                    .as_str()
+                                    .unwrap_or("assistant")
+                                    .to_string(),
                                 content,
                             },
                             finish_reason,
@@ -189,7 +201,9 @@ mod tests {
             }),
         };
         let out = model.normalize_response(resp).unwrap();
-        let calls = out.native_tool_calls.expect("native tool calls must be extracted");
+        let calls = out
+            .native_tool_calls
+            .expect("native tool calls must be extracted");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].id, "call_1");
         assert_eq!(calls[0].name, "calculator");

@@ -1,26 +1,22 @@
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use fusion_router::compiler::Compiler;
-use fusion_router::compiler::build_compiler;
-use fusion_router::resource::DefaultResourceManager;
-use fusion_router::types::{
-    IRMetadata, IRNode, IRNodeKind, Quota, StrategyKind, WorkflowIR,
-};
 use fusion_compiler::CompilerPass;
+use fusion_router::compiler::build_compiler;
+use fusion_router::compiler::Compiler;
+use fusion_router::resource::DefaultResourceManager;
+use fusion_router::types::{IRMetadata, IRNode, IRNodeKind, Quota, StrategyKind, WorkflowIR};
 
 fn create_test_ir() -> WorkflowIR {
     WorkflowIR {
         plan_id: Uuid::nil(),
-        nodes: vec![
-            IRNode {
-                id: Uuid::nil(),
-                kind: IRNodeKind::Generate,
-                strategy: StrategyKind::Single,
-                model: None,
-                config: HashMap::new(),
-            },
-        ],
+        nodes: vec![IRNode {
+            id: Uuid::nil(),
+            kind: IRNodeKind::Generate,
+            strategy: StrategyKind::Single,
+            model: None,
+            config: HashMap::new(),
+        }],
         edges: vec![],
         metadata: IRMetadata {
             policy_version: 0,

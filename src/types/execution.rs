@@ -111,7 +111,9 @@ mod tests {
 
     #[test]
     fn test_output_preferences_json_round_trip() {
-        let prefs = OutputPreferences { include_report: true };
+        let prefs = OutputPreferences {
+            include_report: true,
+        };
         let json = serde_json::to_string(&prefs).unwrap();
         let deserialized: OutputPreferences = serde_json::from_str(&json).unwrap();
         assert_eq!(prefs.include_report, deserialized.include_report);
@@ -119,7 +121,9 @@ mod tests {
 
     #[test]
     fn test_output_preferences_default() {
-        let prefs = OutputPreferences { include_report: false };
+        let prefs = OutputPreferences {
+            include_report: false,
+        };
         let json = serde_json::to_string(&prefs).unwrap();
         let deserialized: OutputPreferences = serde_json::from_str(&json).unwrap();
         assert!(!deserialized.include_report);
@@ -166,7 +170,10 @@ mod tests {
         let strategy = request.strategy.expect("strategy present");
         assert_eq!(strategy.kind, "Consensus");
         assert_eq!(strategy.count, 3);
-        assert_eq!(strategy.members, vec!["zen/model-a", "openrouter/model-b", "openrouter/model-c"]);
+        assert_eq!(
+            strategy.members,
+            vec!["zen/model-a", "openrouter/model-b", "openrouter/model-c"]
+        );
         assert_eq!(strategy.max_tool_rounds, 5);
     }
 

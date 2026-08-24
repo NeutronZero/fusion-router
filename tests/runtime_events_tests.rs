@@ -1,4 +1,3 @@
-use uuid::Uuid;
 use fusion_router::events::bus::{BroadcastEventBus, EventBus};
 use fusion_router::events::consumers::{
     CheckpointPolicy, CheckpointProjection, PersistentEventStoreProjection, TimelineProjection,
@@ -6,6 +5,7 @@ use fusion_router::events::consumers::{
 use fusion_router::events::payload::ExecutionEvent;
 use fusion_router::events::projection::ProjectionDispatcher;
 use fusion_router::events::ExecutionEventEnvelope;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn test_end_to_end_runtime_event_pipeline() {
@@ -14,7 +14,10 @@ async fn test_end_to_end_runtime_event_pipeline() {
 
     let mut dispatcher = ProjectionDispatcher::new();
     dispatcher.register(TimelineProjection::new("exec-e2e-1"));
-    dispatcher.register(CheckpointProjection::new(CheckpointPolicy::EveryNode, temp_dir.clone()));
+    dispatcher.register(CheckpointProjection::new(
+        CheckpointPolicy::EveryNode,
+        temp_dir.clone(),
+    ));
     dispatcher.register(PersistentEventStoreProjection::new(temp_dir.clone()));
 
     let handle = dispatcher.spawn_listener(&bus);

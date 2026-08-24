@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{Stream, StreamExt, stream};
+use futures::{stream, Stream, StreamExt};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -106,8 +106,7 @@ async fn test_metered_stream_counts_tokens() {
     let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
         Box::pin(stream::iter(chunks));
 
-    let manager: Arc<dyn ResourceManager> =
-        Arc::new(DefaultResourceManager::new(test_quota()));
+    let manager: Arc<dyn ResourceManager> = Arc::new(DefaultResourceManager::new(test_quota()));
     manager.try_reserve(&test_graph()).await;
     let guard = make_resource_guard(manager);
 
@@ -143,8 +142,7 @@ async fn test_metered_stream_reports_ttfb() {
     let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
         Box::pin(stream::iter(chunks));
 
-    let manager: Arc<dyn ResourceManager> =
-        Arc::new(DefaultResourceManager::new(test_quota()));
+    let manager: Arc<dyn ResourceManager> = Arc::new(DefaultResourceManager::new(test_quota()));
     manager.try_reserve(&test_graph()).await;
     let guard = make_resource_guard(manager);
 
@@ -174,8 +172,7 @@ async fn test_cancelling_stream_stops_early() {
     let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
         Box::pin(slow_chunks(100, Duration::from_millis(1)));
 
-    let manager: Arc<dyn ResourceManager> =
-        Arc::new(DefaultResourceManager::new(test_quota()));
+    let manager: Arc<dyn ResourceManager> = Arc::new(DefaultResourceManager::new(test_quota()));
     manager.try_reserve(&test_graph()).await;
     let guard = make_resource_guard(manager);
 
@@ -212,8 +209,7 @@ async fn test_cancelling_stream_stops_early() {
 #[tokio::test]
 async fn test_stream_resource_guard_released_on_exhaustion() {
     let graph = test_graph();
-    let manager: Arc<dyn ResourceManager> =
-        Arc::new(DefaultResourceManager::new(test_quota()));
+    let manager: Arc<dyn ResourceManager> = Arc::new(DefaultResourceManager::new(test_quota()));
 
     let reserved = manager.try_reserve(&graph).await;
     assert!(reserved, "reservation should succeed");

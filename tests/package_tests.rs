@@ -6,8 +6,8 @@ use std::sync::{Arc, RwLock};
 use fusion_plugin_api::{CapabilityContract, CapabilityId, Permission};
 use fusion_router::capability::{CapabilityRegistry, InMemoryCapabilityRegistry};
 use fusion_router::package::{
-    FilesystemPackageRegistry, PackageLoader, PackageRegistry, PackageVerifier,
-    RuntimeModuleCache, format::Manifest,
+    format::Manifest, FilesystemPackageRegistry, PackageLoader, PackageRegistry, PackageVerifier,
+    RuntimeModuleCache,
 };
 
 fn build_signed_fusionpkg(
@@ -45,7 +45,9 @@ fn build_signed_fusionpkg(
         vec![],
     );
     let attestation = fusion_router::release::attestation::ReleaseAttestation::new(assessment);
-    let canonical = fusion_router::release::attestation::AttestationBuilder::to_canonical_bytes(&attestation).unwrap();
+    let canonical =
+        fusion_router::release::attestation::AttestationBuilder::to_canonical_bytes(&attestation)
+            .unwrap();
     let signature = signer.sign(&canonical).unwrap();
     let signed = fusion_router::release::signing::SignedAttestation {
         attestation,
@@ -57,17 +59,20 @@ fn build_signed_fusionpkg(
     let mut builder = tar::Builder::new(Vec::new());
     let mut h = tar::Header::new_gnu();
     h.set_path("manifest.toml").unwrap();
-    h.set_size(manifest_toml.len() as u64); h.set_cksum();
+    h.set_size(manifest_toml.len() as u64);
+    h.set_cksum();
     builder.append(&h, manifest_toml.as_bytes()).unwrap();
 
     let mut h = tar::Header::new_gnu();
     h.set_path("module.wasm").unwrap();
-    h.set_size(wasm_bytes.len() as u64); h.set_cksum();
+    h.set_size(wasm_bytes.len() as u64);
+    h.set_cksum();
     builder.append(&h, &wasm_bytes[..]).unwrap();
 
     let mut h = tar::Header::new_gnu();
     h.set_path("attestation.json").unwrap();
-    h.set_size(attestation_json.len() as u64); h.set_cksum();
+    h.set_size(attestation_json.len() as u64);
+    h.set_cksum();
     builder.append(&h, &attestation_json[..]).unwrap();
 
     let uncompressed = builder.into_inner().unwrap();
@@ -92,15 +97,15 @@ fn test_full_verify_load_resolve_cycle() {
         supports_streaming: false,
         traits: vec![],
     };
-    let pkg_bytes = build_signed_fusionpkg(
-        "test.echo", "0.1.0", &[contract], &["Network".into()],
-    );
+    let pkg_bytes = build_signed_fusionpkg("test.echo", "0.1.0", &[contract], &["Network".into()]);
 
     let pkg_dir = tempfile::tempdir().unwrap();
     let pkg_path = pkg_dir.path().join("test.echo-0.1.0.fusionpkg");
     std::fs::write(&pkg_path, &pkg_bytes).unwrap();
 
-    let signer = Arc::new(fusion_router::release::signing::MockSigner::new("integration-key"));
+    let signer = Arc::new(fusion_router::release::signing::MockSigner::new(
+        "integration-key",
+    ));
     let verifier = PackageVerifier::new(signer);
     let verified = verifier.verify(&pkg_path).unwrap();
     assert_eq!(verified.manifest().name, "test.echo");
@@ -119,9 +124,15 @@ fn test_full_verify_load_resolve_cycle() {
 
     let reg_dir = tempfile::tempdir().unwrap();
     let pkg_reg = FilesystemPackageRegistry::new(reg_dir.path());
-    pkg_reg.store(&cap_id, &semver::Version::new(0, 1, 0), &pkg_bytes).unwrap();
-    assert!(pkg_reg.contains(&cap_id, &semver::Version::new(0, 1, 0)).unwrap());
-    let loaded_pkg = pkg_reg.load(&cap_id, &semver::Version::new(0, 1, 0)).unwrap();
+    pkg_reg
+        .store(&cap_id, &semver::Version::new(0, 1, 0), &pkg_bytes)
+        .unwrap();
+    assert!(pkg_reg
+        .contains(&cap_id, &semver::Version::new(0, 1, 0))
+        .unwrap());
+    let loaded_pkg = pkg_reg
+        .load(&cap_id, &semver::Version::new(0, 1, 0))
+        .unwrap();
     assert_eq!(loaded_pkg, pkg_bytes);
 }
 
@@ -131,10 +142,14 @@ fn test_verify_rejects_missing_attestation() {
     let manifest = r#"name = "bad" version = "0.1.0""#;
     let wasm = wat::parse_str("(module)").unwrap();
     let mut h = tar::Header::new_gnu();
-    h.set_path("manifest.toml").unwrap(); h.set_size(manifest.len() as u64); h.set_cksum();
+    h.set_path("manifest.toml").unwrap();
+    h.set_size(manifest.len() as u64);
+    h.set_cksum();
     builder.append(&h, manifest.as_bytes()).unwrap();
     let mut h = tar::Header::new_gnu();
-    h.set_path("module.wasm").unwrap(); h.set_size(wasm.len() as u64); h.set_cksum();
+    h.set_path("module.wasm").unwrap();
+    h.set_size(wasm.len() as u64);
+    h.set_cksum();
     builder.append(&h, &wasm[..]).unwrap();
     let uncompressed = builder.into_inner().unwrap();
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -155,14 +170,20 @@ fn test_registry_list_versions_returns_sorted() {
     let reg = FilesystemPackageRegistry::new(dir.path());
     let id = CapabilityId::new("test.multi");
 
-    reg.store(&id, &semver::Version::new(0, 3, 0), b"v3").unwrap();
-    reg.store(&id, &semver::Version::new(0, 1, 0), b"v1").unwrap();
-    reg.store(&id, &semver::Version::new(0, 2, 0), b"v2").unwrap();
+    reg.store(&id, &semver::Version::new(0, 3, 0), b"v3")
+        .unwrap();
+    reg.store(&id, &semver::Version::new(0, 1, 0), b"v1")
+        .unwrap();
+    reg.store(&id, &semver::Version::new(0, 2, 0), b"v2")
+        .unwrap();
 
     let versions = reg.list_versions(&id).unwrap();
-    assert_eq!(versions, vec![
-        semver::Version::new(0, 1, 0),
-        semver::Version::new(0, 2, 0),
-        semver::Version::new(0, 3, 0),
-    ]);
+    assert_eq!(
+        versions,
+        vec![
+            semver::Version::new(0, 1, 0),
+            semver::Version::new(0, 2, 0),
+            semver::Version::new(0, 3, 0),
+        ]
+    );
 }

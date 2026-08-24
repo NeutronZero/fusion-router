@@ -10,7 +10,9 @@ use fusion_router::release::attestation::{AttestationBuilder, ReleaseAttestation
 use fusion_router::release::bootstrap;
 use fusion_router::release::envelope::AttestationEnvelope;
 #[allow(unused_imports)]
-use fusion_router::release::evaluator::{EvaluationContext, PolicyEvaluation, PolicyEvaluator, ReleaseDecision};
+use fusion_router::release::evaluator::{
+    EvaluationContext, PolicyEvaluation, PolicyEvaluator, ReleaseDecision,
+};
 use fusion_router::release::gate::{GateContext, GateId};
 use fusion_router::release::policy::{load_policy_from_yaml, PolicyDefinition, ReleaseEnvironment};
 use fusion_router::release::signing::{HmacSha256Signer, Signer};
@@ -18,7 +20,10 @@ use fusion_router::release::verifier::AttestationVerifier;
 use fusion_router::release::waiver::{load_waivers_from_yaml, WaiverSet};
 
 #[derive(Parser)]
-#[command(name = "fusion", about = "FusionRouter release governance & runtime trace tool")]
+#[command(
+    name = "fusion",
+    about = "FusionRouter release governance & runtime trace tool"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -163,7 +168,11 @@ async fn main() {
                 let output = commands::gates::explain_gate(&runner, gate_id);
                 println!("{output}");
             }
-            GatesCmd::Evaluate { env, policy, waivers } => {
+            GatesCmd::Evaluate {
+                env,
+                policy,
+                waivers,
+            } => {
                 let context = GateContext {
                     workspace_root,
                     baseline_version: None,
@@ -198,7 +207,11 @@ async fn main() {
                 };
                 let gate_results = runner.run_all(&context).await;
                 let rel_env = ReleaseEnvironment::from_str(&env);
-                let eval_ctx = EvaluationContext::new(rel_env.clone(), PolicyDefinition::default_policy(), WaiverSet::default());
+                let eval_ctx = EvaluationContext::new(
+                    rel_env.clone(),
+                    PolicyDefinition::default_policy(),
+                    WaiverSet::default(),
+                );
                 let evaluation = PolicyEvaluator::evaluate(&eval_ctx, &gate_results);
 
                 let assessment = ReleaseAssessment::new(rel_env, evaluation, vec![]);
@@ -219,10 +232,14 @@ async fn main() {
                         std::process::exit(1);
                     }
                 };
-                let signed = fusion_router::release::signing::SignedAttestation { attestation, signature: sig };
+                let signed = fusion_router::release::signing::SignedAttestation {
+                    attestation,
+                    signature: sig,
+                };
                 let envelope = AttestationEnvelope::new(signed);
 
-                let archive_path = output_dir.unwrap_or_else(|| workspace_root.join(".fusion/attestations"));
+                let archive_path =
+                    output_dir.unwrap_or_else(|| workspace_root.join(".fusion/attestations"));
                 let archive = FilesystemArchiveBackend::new(archive_path);
                 let stored_path = match archive.store(&envelope) {
                     Ok(p) => p,
@@ -233,13 +250,36 @@ async fn main() {
                 };
 
                 println!("Signed Release Attestation Created");
-                println!("Assessment ID: {}", envelope.signed_attestation.attestation.assessment.assessment_id);
-                println!("Environment: {}", envelope.signed_attestation.attestation.assessment.environment);
-                println!("Decision: {:?}", envelope.signed_attestation.attestation.assessment.policy_evaluation.decision);
+                println!(
+                    "Assessment ID: {}",
+                    envelope
+                        .signed_attestation
+                        .attestation
+                        .assessment
+                        .assessment_id
+                );
+                println!(
+                    "Environment: {}",
+                    envelope
+                        .signed_attestation
+                        .attestation
+                        .assessment
+                        .environment
+                );
+                println!(
+                    "Decision: {:?}",
+                    envelope
+                        .signed_attestation
+                        .attestation
+                        .assessment
+                        .policy_evaluation
+                        .decision
+                );
                 println!("Saved to: {}", stored_path.display());
             }
             GatesCmd::VerifyAttestation { target } => {
-                let archive = FilesystemArchiveBackend::new(workspace_root.join(".fusion/attestations"));
+                let archive =
+                    FilesystemArchiveBackend::new(workspace_root.join(".fusion/attestations"));
                 let envelope = if PathBuf::from(&target).exists() {
                     let content = match std::fs::read_to_string(&target) {
                         Ok(c) => c,
@@ -289,8 +329,12 @@ async fn main() {
             }
         },
         Commands::Trace(cmd) => match cmd {
-            TraceCmd::Timeline { execution_id, format } => {
-                let store = PersistentEventStoreProjection::new(workspace_root.join(".fusion/events"));
+            TraceCmd::Timeline {
+                execution_id,
+                format,
+            } => {
+                let store =
+                    PersistentEventStoreProjection::new(workspace_root.join(".fusion/events"));
                 let events = store.load_events(&execution_id).await.unwrap_or_default();
 
                 let mut proj = TimelineProjection::new(execution_id);
@@ -309,15 +353,25 @@ async fn main() {
                     },
                 }
             }
-            TraceCmd::Events { execution_id, format } => {
-                let store = PersistentEventStoreProjection::new(workspace_root.join(".fusion/events"));
+            TraceCmd::Events {
+                execution_id,
+                format,
+            } => {
+                let store =
+                    PersistentEventStoreProjection::new(workspace_root.join(".fusion/events"));
                 let events = store.load_events(&execution_id).await.unwrap_or_default();
 
                 match format {
                     OutputFormat::Text => {
-                        println!("Events for execution: {execution_id} (count: {})", events.len());
+                        println!(
+                            "Events for execution: {execution_id} (count: {})",
+                            events.len()
+                        );
                         for env in &events {
-                            println!("[seq: {}] [schema: {}] {:?}", env.sequence_number, env.schema_version, env.payload);
+                            println!(
+                                "[seq: {}] [schema: {}] {:?}",
+                                env.sequence_number, env.schema_version, env.payload
+                            );
                         }
                     }
                     OutputFormat::Json => match serde_json::to_string_pretty(&events) {
@@ -349,7 +403,11 @@ async fn main() {
                     std::process::exit(1);
                 }
             }
-            CapabilityCmd::Publish { pkg_path, registry, key } => {
+            CapabilityCmd::Publish {
+                pkg_path,
+                registry,
+                key,
+            } => {
                 let rt = match tokio::runtime::Runtime::new() {
                     Ok(r) => r,
                     Err(e) => {
@@ -357,9 +415,11 @@ async fn main() {
                         std::process::exit(1);
                     }
                 };
-                if let Err(e) = rt.block_on(
-                    commands::publish::execute_publish(&pkg_path, &registry, key.as_deref())
-                ) {
+                if let Err(e) = rt.block_on(commands::publish::execute_publish(
+                    &pkg_path,
+                    &registry,
+                    key.as_deref(),
+                )) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
@@ -409,14 +469,20 @@ pub fn render_policy_evaluation(eval: &PolicyEvaluation) -> String {
     if !eval.waived_failures.is_empty() {
         out.push_str("Waived Failures:\n");
         for w in &eval.waived_failures {
-            out.push_str(&format!("  [{}] {} (approved by: {})\n", w.waiver.id, w.gate, w.waiver.approved_by));
+            out.push_str(&format!(
+                "  [{}] {} (approved by: {})\n",
+                w.waiver.id, w.gate, w.waiver.approved_by
+            ));
         }
     } else {
         out.push_str("Waived Failures: None\n");
     }
 
     if !eval.advisory_failures.is_empty() {
-        out.push_str(&format!("Advisory Failures: {:?}\n", eval.advisory_failures));
+        out.push_str(&format!(
+            "Advisory Failures: {:?}\n",
+            eval.advisory_failures
+        ));
     } else {
         out.push_str("Advisory Failures: None\n");
     }
@@ -467,39 +533,62 @@ mod tests {
     #[test]
     fn test_parse_capability_new() {
         let cli = Cli::try_parse_from(["fusion", "capability", "new", "my-cap"]).unwrap();
-        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::New { .. })));
+        assert!(matches!(
+            cli.command,
+            Commands::Capability(CapabilityCmd::New { .. })
+        ));
     }
 
     #[test]
     fn test_parse_capability_build() {
         let cli = Cli::try_parse_from(["fusion", "capability", "build"]).unwrap();
-        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Build { .. })));
+        assert!(matches!(
+            cli.command,
+            Commands::Capability(CapabilityCmd::Build { .. })
+        ));
     }
 
     #[test]
     fn test_parse_capability_test() {
         let cli = Cli::try_parse_from(["fusion", "capability", "test"]).unwrap();
-        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Test { .. })));
+        assert!(matches!(
+            cli.command,
+            Commands::Capability(CapabilityCmd::Test { .. })
+        ));
     }
 
     #[test]
     fn test_parse_capability_publish() {
         let cli = Cli::try_parse_from([
-            "fusion", "capability", "publish", "pkg.fusionpkg",
-            "--registry", "http://localhost",
-        ]).unwrap();
-        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Publish { .. })));
+            "fusion",
+            "capability",
+            "publish",
+            "pkg.fusionpkg",
+            "--registry",
+            "http://localhost",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Capability(CapabilityCmd::Publish { .. })
+        ));
     }
 
     #[test]
     fn test_parse_capability_dev() {
         let cli = Cli::try_parse_from(["fusion", "capability", "dev"]).unwrap();
-        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Dev { .. })));
+        assert!(matches!(
+            cli.command,
+            Commands::Capability(CapabilityCmd::Dev { .. })
+        ));
     }
 
     #[test]
     fn test_parse_capability_inspect() {
         let cli = Cli::try_parse_from(["fusion", "capability", "inspect"]).unwrap();
-        assert!(matches!(cli.command, Commands::Capability(CapabilityCmd::Inspect)));
+        assert!(matches!(
+            cli.command,
+            Commands::Capability(CapabilityCmd::Inspect)
+        ));
     }
 }

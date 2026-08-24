@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::release::signing::SignedAttestation;
+use serde::{Deserialize, Serialize};
 
 pub const ENVELOPE_VERSION: &str = "v1";
 

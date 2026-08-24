@@ -1,8 +1,8 @@
+use crate::events::{EventBus, ExecutionEventEnvelope};
+use crate::release::gate::GateError;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::events::{EventBus, ExecutionEventEnvelope};
-use crate::release::gate::GateError;
 
 #[async_trait]
 pub trait EventProjection: Send + Sync {
@@ -16,11 +16,14 @@ pub struct ProjectionDispatcher {
 
 impl ProjectionDispatcher {
     pub fn new() -> Self {
-        Self { projections: Vec::new() }
+        Self {
+            projections: Vec::new(),
+        }
     }
 
     pub fn register(&mut self, projection: impl EventProjection + 'static) {
-        self.projections.push(Arc::new(Mutex::new(Box::new(projection))));
+        self.projections
+            .push(Arc::new(Mutex::new(Box::new(projection))));
     }
 
     pub fn spawn_listener(self, bus: &dyn EventBus) -> tokio::task::JoinHandle<()> {
@@ -89,11 +92,11 @@ impl EventProjection for LoggingProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::bus::BroadcastEventBus;
+    use crate::events::payload::ExecutionEvent;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::sync::broadcast;
-    use crate::events::bus::BroadcastEventBus;
-    use crate::events::payload::ExecutionEvent;
 
     struct RawBroadcastBus {
         tx: broadcast::Sender<ExecutionEventEnvelope>,
@@ -102,9 +105,10 @@ mod tests {
     #[async_trait]
     impl EventBus for RawBroadcastBus {
         async fn publish(&self, envelope: ExecutionEventEnvelope) -> Result<(), GateError> {
-            self.tx.send(envelope).map(|_| ()).map_err(|_| {
-                GateError::ExecutionFailed("no receivers".into())
-            })
+            self.tx
+                .send(envelope)
+                .map(|_| ())
+                .map_err(|_| GateError::ExecutionFailed("no receivers".into()))
         }
         fn subscribe(&self) -> broadcast::Receiver<ExecutionEventEnvelope> {
             self.tx.subscribe()
@@ -121,7 +125,10 @@ mod tests {
             "Counting"
         }
 
-        async fn handle_event(&mut self, _envelope: &ExecutionEventEnvelope) -> Result<(), GateError> {
+        async fn handle_event(
+            &mut self,
+            _envelope: &ExecutionEventEnvelope,
+        ) -> Result<(), GateError> {
             self.count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -137,7 +144,10 @@ mod tests {
             "TestCounter"
         }
 
-        async fn handle_event(&mut self, _envelope: &ExecutionEventEnvelope) -> Result<(), GateError> {
+        async fn handle_event(
+            &mut self,
+            _envelope: &ExecutionEventEnvelope,
+        ) -> Result<(), GateError> {
             self.count += 1;
             Ok(())
         }
@@ -182,7 +192,9 @@ mod tests {
         let count = Arc::new(AtomicUsize::new(0));
 
         let mut dispatcher = ProjectionDispatcher::new();
-        dispatcher.register(CountingProjection { count: count.clone() });
+        dispatcher.register(CountingProjection {
+            count: count.clone(),
+        });
         let handle = dispatcher.spawn_listener(&bus);
 
         tx.send(sample_env()).unwrap();
@@ -214,7 +226,9 @@ mod tests {
         let count = Arc::new(AtomicUsize::new(0));
 
         let mut dispatcher = ProjectionDispatcher::new();
-        dispatcher.register(CountingProjection { count: count.clone() });
+        dispatcher.register(CountingProjection {
+            count: count.clone(),
+        });
         let handle = dispatcher.spawn_listener(&bus);
 
         tx.send(sample_env()).unwrap();

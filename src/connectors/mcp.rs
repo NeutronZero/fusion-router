@@ -1,3 +1,4 @@
+use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
@@ -5,7 +6,6 @@ use fusion_plugin_api::{
 };
 use serde_json::json;
 use std::sync::Arc;
-use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 
 pub struct McpPlugin;
 
@@ -26,7 +26,9 @@ impl CapabilityPlugin for McpPlugin {
         vec![CapabilityContract {
             id: CapabilityId::new("mcp.tool.invoke"),
             version: semver::Version::new(0, 1, 0),
-            description: "Invokes an MCP tool (not implemented — fails closed until an MCP client exists)".into(),
+            description:
+                "Invokes an MCP tool (not implemented — fails closed until an MCP client exists)"
+                    .into(),
             inputs_schema: json!({"type": "object", "properties": {"tool": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"result": {"type": "string"}}}),
             permissions: vec![Permission::Network],

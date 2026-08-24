@@ -6,7 +6,9 @@
 //! the public API surface.
 
 use fusion_router::executor::{DefaultExecutor, Executor};
-use fusion_router::types::{ExecutionNode, ExecutionNodeKind, NodeExecContext, NodeExecutionResult, StrategyKind};
+use fusion_router::types::{
+    ExecutionNode, ExecutionNodeKind, NodeExecContext, NodeExecutionResult, StrategyKind,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -23,28 +25,32 @@ impl fusion_router::providers::ChatProvider for StubProvider {
     ) -> anyhow::Result<fusion_router::types::ChatCompletionResponse> {
         Err(anyhow::anyhow!("stub provider"))
     }
-    fn name(&self) -> &str { "stub" }
+    fn name(&self) -> &str {
+        "stub"
+    }
 }
 
 /// Compile-time assertion: `DefaultExecutor` implements the `Executor` trait,
 /// confirming it is a runtime adapter — not a standalone strategy engine.
 #[tokio::test]
 async fn executor_implements_executor_trait() {
-    let executor = Arc::new(DefaultExecutor::new(
-        Arc::new(StubProvider),
-        HashMap::new(),
-    ));
+    let executor = Arc::new(DefaultExecutor::new(Arc::new(StubProvider), HashMap::new()));
     let node = ExecutionNode {
         id: uuid::Uuid::new_v4(),
         kind: ExecutionNodeKind::LLMGenerate,
         strategy: StrategyKind::Single,
         model: "stub-model".into(),
-        retry_policy: fusion_router::types::RetryPolicy { max_retries: 0, backoff_ms: 0 },
+        retry_policy: fusion_router::types::RetryPolicy {
+            max_retries: 0,
+            backoff_ms: 0,
+        },
         fallback: None,
         config: HashMap::new(),
         subgraph: None,
     };
-    let result: NodeExecutionResult = executor.execute_node(&node, &NodeExecContext::default()).await;
+    let result: NodeExecutionResult = executor
+        .execute_node(&node, &NodeExecContext::default())
+        .await;
     // The adapter delegates to fusion-runtime; a stub provider will fail,
     // but the delegation path itself is exercised.
     assert!(

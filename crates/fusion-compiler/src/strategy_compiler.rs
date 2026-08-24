@@ -4,8 +4,8 @@
 //! expansion path. Runs as a `CompilerPass` before `lower_to_graph` to
 //! guarantee that zero passthrough fallbacks survive compilation.
 
-use std::collections::HashSet;
 use fusion_types::*;
+use std::collections::HashSet;
 
 /// Delegate compiler trait for lowering custom strategies into executable subgraphs.
 pub trait StrategyCompiler: Send + Sync {
@@ -50,7 +50,11 @@ impl StrategyLoweringPass {
         }
     }
 
-    pub fn register_compiler(mut self, name: impl Into<String>, compiler: std::sync::Arc<dyn StrategyCompiler>) -> Self {
+    pub fn register_compiler(
+        mut self,
+        name: impl Into<String>,
+        compiler: std::sync::Arc<dyn StrategyCompiler>,
+    ) -> Self {
         let n = name.into();
         self.registered_custom.insert(n.clone());
         self.custom_compilers.insert(n, compiler);
@@ -168,10 +172,7 @@ fn validate_debate_config(node: &IRNode) -> Result<(), crate::CompilerError> {
                 return Err(crate::CompilerError::ValidationError {
                     pass: "strategy_lowering".into(),
                     node_id: Some(node.id),
-                    message: format!(
-                        "Debate requires at least 2 roles, got {}",
-                        roles.len()
-                    ),
+                    message: format!("Debate requires at least 2 roles, got {}", roles.len()),
                 });
             }
         }
@@ -206,7 +207,10 @@ mod tests {
     use fusion_core::NanoUSD;
     use std::collections::HashMap;
 
-    fn ir_with_strategy(strategy: StrategyKind, config: HashMap<String, serde_json::Value>) -> WorkflowIR {
+    fn ir_with_strategy(
+        strategy: StrategyKind,
+        config: HashMap<String, serde_json::Value>,
+    ) -> WorkflowIR {
         WorkflowIR {
             plan_id: uuid::Uuid::new_v4(),
             nodes: vec![IRNode {
@@ -326,10 +330,7 @@ mod tests {
     #[tokio::test]
     async fn custom_empty_name_rejected() {
         let pass = StrategyLoweringPass::new();
-        let ir = ir_with_strategy(
-            StrategyKind::Custom(String::new()),
-            HashMap::new(),
-        );
+        let ir = ir_with_strategy(StrategyKind::Custom(String::new()), HashMap::new());
         let err = pass.apply(ir).await.unwrap_err();
         assert!(err.to_string().contains("non-empty"));
     }
@@ -350,10 +351,7 @@ mod tests {
         let mut set = HashSet::new();
         set.insert("my_strategy".into());
         let pass = StrategyLoweringPass::with_registered_custom(set);
-        let ir = ir_with_strategy(
-            StrategyKind::Custom("my_strategy".into()),
-            HashMap::new(),
-        );
+        let ir = ir_with_strategy(StrategyKind::Custom("my_strategy".into()), HashMap::new());
         assert!(pass.apply(ir).await.is_ok());
     }
 }

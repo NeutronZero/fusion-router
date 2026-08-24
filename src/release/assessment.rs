@@ -1,10 +1,10 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 use crate::release::evaluator::PolicyEvaluation;
 use crate::release::gate::GateResult;
 use crate::release::policy::ReleaseEnvironment;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseAssessment {
@@ -22,7 +22,10 @@ impl ReleaseAssessment {
         gate_results: Vec<GateResult>,
     ) -> Self {
         let timestamp = Utc::now();
-        let payload = format!("{}:{}:{:?}", environment, timestamp, policy_evaluation.decision);
+        let payload = format!(
+            "{}:{}:{:?}",
+            environment, timestamp, policy_evaluation.decision
+        );
         let assessment_id = compute_assessment_id(&payload);
 
         Self {
@@ -73,7 +76,11 @@ mod tests {
     fn test_compute_assessment_id_format() {
         let id = compute_assessment_id("payload");
         let suffix = id.strip_prefix("asm-").unwrap();
-        assert_eq!(suffix.len(), 16, "suffix must be 16 hex digits, got: {suffix}");
+        assert_eq!(
+            suffix.len(),
+            16,
+            "suffix must be 16 hex digits, got: {suffix}"
+        );
         assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
     }
 

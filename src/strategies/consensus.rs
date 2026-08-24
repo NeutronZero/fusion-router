@@ -1,14 +1,12 @@
 use std::time::Duration;
 
-use super::{Parallelism, StreamingMode, Strategy, StrategyDescriptor};
+use super::{Parallelism, Strategy, StrategyDescriptor, StreamingMode};
 use crate::compiler::context::CompilationContext;
 use crate::compiler::diagnostics::CompilerDiagnostic;
 use crate::compiler::ir::{
     BarrierFailurePolicy, PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind, ReducerMode, StrategyIR,
 };
-use crate::types::{
-    ArtifactKind, RetryPolicy,
-};
+use crate::types::{ArtifactKind, RetryPolicy};
 
 const DEFAULT_CONSENSUS_COUNT: u32 = 3;
 
@@ -18,7 +16,9 @@ pub struct ConsensusStrategy {
 
 impl Default for ConsensusStrategy {
     fn default() -> Self {
-        Self { count: DEFAULT_CONSENSUS_COUNT }
+        Self {
+            count: DEFAULT_CONSENSUS_COUNT,
+        }
     }
 }
 
@@ -37,7 +37,11 @@ impl Strategy for ConsensusStrategy {
         }
     }
 
-    fn lower(&self, ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
+    fn lower(
+        &self,
+        ir: &StrategyIR,
+        ctx: &CompilationContext,
+    ) -> Result<PrimitiveGraph, CompilerDiagnostic> {
         let (count, members) = match ir {
             StrategyIR::Consensus { count, members } => (*count, members.clone()),
             _ => (self.count, Vec::new()),
@@ -64,7 +68,11 @@ impl Strategy for ConsensusStrategy {
         // each review independently); the member list is cycled when the
         // member count exceeds the list length, and members without an
         // explicit model fall back to the node's model.
-        let default_model = ctx.available_models.first().cloned().unwrap_or_else(|| "default".into());
+        let default_model = ctx
+            .available_models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "default".into());
         let member_pool: Vec<String> = members.into_iter().filter(|m| !m.is_empty()).collect();
         for i in 1..=count {
             let gen_id = format!("gen_{}", i);
@@ -114,7 +122,6 @@ impl Strategy for ConsensusStrategy {
 
         Ok(graph)
     }
-
 }
 
 #[cfg(test)]
@@ -126,11 +133,22 @@ mod tests {
     fn test_consensus_lowering() {
         let strategy = ConsensusStrategy::default();
         let ctx = CompilationContext::new();
-        let graph = strategy.lower(&StrategyIR::Consensus { count: 3, members: vec![] }, &ctx).unwrap();
+        let graph = strategy
+            .lower(
+                &StrategyIR::Consensus {
+                    count: 3,
+                    members: vec![],
+                },
+                &ctx,
+            )
+            .unwrap();
 
         // 1 FanOut + 3 LLMGenerate + 1 Barrier + 1 Reducer = 6 nodes
         assert_eq!(graph.nodes.len(), 6);
-        assert!(matches!(graph.nodes[0].kind, PrimitiveNodeKind::FanOut { count: 3 }));
+        assert!(matches!(
+            graph.nodes[0].kind,
+            PrimitiveNodeKind::FanOut { count: 3 }
+        ));
     }
 
     fn member_models(graph: &PrimitiveGraph) -> Vec<&str> {
@@ -173,7 +191,10 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(member_models(&graph), vec!["zen/model-a", "openrouter/model-b", "openrouter/model-c"]);
+        assert_eq!(
+            member_models(&graph),
+            vec!["zen/model-a", "openrouter/model-b", "openrouter/model-c"]
+        );
         assert_eq!(reducer_model(&graph), "openrouter/model-c");
     }
 
@@ -204,7 +225,13 @@ mod tests {
         let mut ctx = CompilationContext::new();
         ctx.available_models.push("node-model".into());
         let graph = strategy
-            .lower(&StrategyIR::Consensus { count: 2, members: vec![] }, &ctx)
+            .lower(
+                &StrategyIR::Consensus {
+                    count: 2,
+                    members: vec![],
+                },
+                &ctx,
+            )
             .unwrap();
 
         assert_eq!(member_models(&graph), vec!["node-model", "node-model"]);

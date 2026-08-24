@@ -1,10 +1,10 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use async_trait::async_trait;
 use fusion_router::providers::circuit_breaker::{CircuitBreaker, CircuitState};
 use fusion_router::providers::router::{ProviderRouter, ProviderTarget};
 use fusion_router::providers::ChatProvider;
 use fusion_router::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// A provider that succeeds for a fixed number of calls, then returns errors.
 /// Simulates a provider that goes down after an initial healthy period.
@@ -193,11 +193,7 @@ fn make_target(
     provider: Arc<dyn ChatProvider + Send + Sync>,
     breaker: CircuitBreaker,
 ) -> ProviderTarget {
-    ProviderTarget::new(
-        name.into(),
-        breaker,
-        Box::new(move || provider.clone()),
-    )
+    ProviderTarget::new(name.into(), breaker, Box::new(move || provider.clone()))
 }
 
 #[tokio::test]
@@ -208,15 +204,18 @@ async fn test_provider_outage_simulation() {
 
     // Phase 2: Create circuit breaker and verify initial Closed state
     let breaker = CircuitBreaker::new(3, 1, 60);
-    assert_eq!(breaker.state(), CircuitState::Closed, "breaker should start Closed");
-    assert!(breaker.can_execute(), "breaker should allow execution initially");
+    assert_eq!(
+        breaker.state(),
+        CircuitState::Closed,
+        "breaker should start Closed"
+    );
+    assert!(
+        breaker.can_execute(),
+        "breaker should allow execution initially"
+    );
 
     let primary_target = make_target("primary", failing.clone(), breaker);
-    let fallback_target = make_target(
-        "fallback",
-        fallback.clone(),
-        CircuitBreaker::new(3, 1, 60),
-    );
+    let fallback_target = make_target("fallback", fallback.clone(), CircuitBreaker::new(3, 1, 60));
     let default_target = make_target(
         "default",
         Arc::new(AlwaysOkProvider::new("default")),
@@ -234,7 +233,8 @@ async fn test_provider_outage_simulation() {
     for i in 0..2 {
         let resp = router.chat_completion(&req).await.unwrap();
         assert_eq!(
-            resp.model, "primary",
+            resp.model,
+            "primary",
             "request {}: primary should handle while healthy",
             i + 1
         );
@@ -245,7 +245,8 @@ async fn test_provider_outage_simulation() {
     for i in 2..5 {
         let resp = router.chat_completion(&req).await.unwrap();
         assert_eq!(
-            resp.model, "fallback",
+            resp.model,
+            "fallback",
             "request {}: fallback should handle during outage",
             i + 1
         );
@@ -255,7 +256,8 @@ async fn test_provider_outage_simulation() {
     for i in 5..8 {
         let resp = router.chat_completion(&req).await.unwrap();
         assert_eq!(
-            resp.model, "fallback",
+            resp.model,
+            "fallback",
             "request {}: fallback should handle after circuit open",
             i + 1
         );
@@ -286,11 +288,7 @@ async fn test_state_convergence_after_outage() {
     assert_eq!(breaker.state(), CircuitState::Closed);
 
     let primary_target = make_target("primary", primary_provider.clone(), breaker);
-    let fallback_target = make_target(
-        "fallback",
-        fallback.clone(),
-        CircuitBreaker::new(3, 2, 0),
-    );
+    let fallback_target = make_target("fallback", fallback.clone(), CircuitBreaker::new(3, 2, 0));
     let default_target = make_target(
         "default",
         Arc::new(AlwaysOkProvider::new("default")),
@@ -306,7 +304,12 @@ async fn test_state_convergence_after_outage() {
     // Phase 1: Closed — primary handles both requests
     for i in 0..2 {
         let resp = router.chat_completion(&req).await.unwrap();
-        assert_eq!(resp.model, "primary", "req {}: primary handles in closed state", i + 1);
+        assert_eq!(
+            resp.model,
+            "primary",
+            "req {}: primary handles in closed state",
+            i + 1
+        );
     }
 
     // Phase 2: Failure threshold reached — circuit opens after 3rd failure.
@@ -314,7 +317,12 @@ async fn test_state_convergence_after_outage() {
     // Req 5: primary fails → failure_count=3 → Open. Fallback handles.
     for i in 2..5 {
         let resp = router.chat_completion(&req).await.unwrap();
-        assert_eq!(resp.model, "fallback", "req {}: fallback handles as circuit opens", i + 1);
+        assert_eq!(
+            resp.model,
+            "fallback",
+            "req {}: fallback handles as circuit opens",
+            i + 1
+        );
     }
 
     // Phase 3: Circuit Open — primary skipped, fallback handles.
@@ -323,7 +331,12 @@ async fn test_state_convergence_after_outage() {
     // Reqs 6-8: oscillating Open↔HalfOpen while failing, fallback handles.
     for i in 5..8 {
         let resp = router.chat_completion(&req).await.unwrap();
-        assert_eq!(resp.model, "fallback", "req {}: fallback during open/half-open oscillation", i + 1);
+        assert_eq!(
+            resp.model,
+            "fallback",
+            "req {}: fallback during open/half-open oscillation",
+            i + 1
+        );
     }
 
     // Phase 4: Provider recovers — converges Closed→Open→HalfOpen→Closed.
@@ -344,7 +357,11 @@ async fn test_state_convergence_after_outage() {
     // Phase 5: Fully recovered — primary handles in Closed state.
     for i in 11..14 {
         let resp = router.chat_completion(&req).await.unwrap();
-        assert_eq!(resp.model, "primary", "req {}: primary handles after full recovery", i);
+        assert_eq!(
+            resp.model, "primary",
+            "req {}: primary handles after full recovery",
+            i
+        );
     }
 
     // Call count verification:

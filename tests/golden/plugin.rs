@@ -10,15 +10,20 @@ struct TestProvider;
 
 #[async_trait::async_trait]
 impl ChatProvider for TestProvider {
-    fn name(&self) -> &str { "test-plugin" }
+    fn name(&self) -> &str {
+        "test-plugin"
+    }
 
     async fn chat_completion(
         &self,
         _request: &ChatCompletionRequest,
     ) -> anyhow::Result<fusion_router::types::ChatCompletionResponse> {
         Ok(fusion_router::types::ChatCompletionResponse {
-            id: "test".into(), object: "chat.completion".into(),
-            created: 0, model: "test".into(), choices: vec![],
+            id: "test".into(),
+            object: "chat.completion".into(),
+            created: 0,
+            model: "test".into(),
+            choices: vec![],
             native_tool_calls: None,
             usage: None,
         })
@@ -39,7 +44,10 @@ fn test_plugin_registry_register_provider() {
 #[test]
 fn test_plugin_manifest_discover_nonexistent_dir() {
     let manifests = PluginManifest::discover("/nonexistent/plugins/");
-    assert!(manifests.is_empty(), "Non-existent dir should yield empty manifests");
+    assert!(
+        manifests.is_empty(),
+        "Non-existent dir should yield empty manifests"
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -63,7 +71,10 @@ impl Strategy for TestStrategy {
             parallelism: fusion_router::strategies::Parallelism::Sequential,
             requires_barrier: false,
             supports_streaming: fusion_router::strategies::StreamingMode::None,
-            retry_policy: fusion_router::types::RetryPolicy { max_retries: 1, backoff_ms: 100 },
+            retry_policy: fusion_router::types::RetryPolicy {
+                max_retries: 1,
+                backoff_ms: 100,
+            },
             expected_outputs: vec![fusion_router::types::ArtifactKind::Generic],
         }
     }
@@ -72,7 +83,10 @@ impl Strategy for TestStrategy {
         &self,
         _ir: &fusion_router::compiler::ir::StrategyIR,
         _ctx: &fusion_router::compiler::context::CompilationContext,
-    ) -> Result<fusion_router::compiler::ir::PrimitiveGraph, fusion_router::compiler::diagnostics::CompilerDiagnostic> {
+    ) -> Result<
+        fusion_router::compiler::ir::PrimitiveGraph,
+        fusion_router::compiler::diagnostics::CompilerDiagnostic,
+    > {
         let mut graph = fusion_router::compiler::ir::PrimitiveGraph::new("test_graph");
         graph.add_node(fusion_router::compiler::ir::PrimitiveNode {
             id: "test_node".into(),
@@ -84,16 +98,12 @@ impl Strategy for TestStrategy {
         });
         Ok(graph)
     }
-
 }
 
 #[test]
 fn test_plugin_registry_register_strategy() {
     let mut mgr = PluginManager::new();
-    mgr.register_strategy(
-        StrategyKind::Chain,
-        Box::new(TestStrategy),
-    );
+    mgr.register_strategy(StrategyKind::Chain, Box::new(TestStrategy));
 
     let registry = mgr.registry();
     assert!(registry.strategies.contains_key(&StrategyKind::Chain));
@@ -103,9 +113,14 @@ struct TestPass;
 
 #[async_trait::async_trait]
 impl CompilerPass for TestPass {
-    fn name(&self) -> &str { "test-pass" }
+    fn name(&self) -> &str {
+        "test-pass"
+    }
 
-    async fn apply(&self, ir: fusion_router::types::WorkflowIR) -> Result<fusion_router::types::WorkflowIR, fusion_router::types::CompilerError> {
+    async fn apply(
+        &self,
+        ir: fusion_router::types::WorkflowIR,
+    ) -> Result<fusion_router::types::WorkflowIR, fusion_router::types::CompilerError> {
         Ok(ir)
     }
 }
@@ -132,8 +147,8 @@ fn test_plugin_manager_default_is_empty() {
 
 #[test]
 fn test_plugin_registry_register_tool() {
+    use fusion_router::tools::{builtin::CalculatorTool, Tool};
     use std::sync::Arc;
-    use fusion_router::tools::{Tool, builtin::CalculatorTool};
 
     let mut mgr = PluginManager::new();
     let tool: Arc<dyn Tool + Send + Sync> = Arc::new(CalculatorTool);

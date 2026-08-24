@@ -2,10 +2,10 @@
 //!
 //! Decouples static session identity from transient execution snapshots.
 
+use crate::types::execution_context::ExecutionState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-use crate::types::execution_context::ExecutionState;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionId(pub Uuid);

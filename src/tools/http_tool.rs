@@ -60,13 +60,19 @@ impl HTTPRequestTool {
     fn validate_url(&self, url_str: &str) -> Result<reqwest::Url, String> {
         let url = reqwest::Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
         let scheme = url.scheme().to_ascii_lowercase();
-        if !self.allowed_schemes.iter().any(|s| s.eq_ignore_ascii_case(&scheme)) {
+        if !self
+            .allowed_schemes
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(&scheme))
+        {
             return Err(format!(
                 "URL scheme '{}' is not allowed (allowed: {:?})",
                 scheme, self.allowed_schemes
             ));
         }
-        let host = url.host().ok_or_else(|| "URL must have a host".to_string())?;
+        let host = url
+            .host()
+            .ok_or_else(|| "URL must have a host".to_string())?;
         match host {
             url::Host::Ipv4(v4) => {
                 if !self.is_host_allowlisted(&v4.to_string())
@@ -222,11 +228,13 @@ impl Tool for HTTPRequestTool {
     }
 
     async fn execute(&self, args: Value) -> Result<Value, String> {
-        let method = args.get("method")
+        let method = args
+            .get("method")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing 'method' argument".to_string())?;
 
-        let url_str = args.get("url")
+        let url_str = args
+            .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing 'url' argument".to_string())?;
 
@@ -263,7 +271,9 @@ impl Tool for HTTPRequestTool {
             }
         }
 
-        let response = request.send().await
+        let response = request
+            .send()
+            .await
             .map_err(|e| format!("HTTP request failed: {}", e))?;
 
         let status = response.status().as_u16();
@@ -292,10 +302,12 @@ mod tests {
     #[tokio::test]
     async fn test_http_tool_invalid_url() {
         let tool = HTTPRequestTool::new();
-        let result = tool.execute(serde_json::json!({
-            "method": "GET",
-            "url": "not-a-valid-url"
-        })).await;
+        let result = tool
+            .execute(serde_json::json!({
+                "method": "GET",
+                "url": "not-a-valid-url"
+            }))
+            .await;
         assert!(result.is_err());
     }
 
@@ -310,10 +322,12 @@ mod tests {
     #[tokio::test]
     async fn test_http_tool_unsupported_method() {
         let tool = loopback_allowlisted_tool();
-        let result = tool.execute(serde_json::json!({
-            "method": "PATCH",
-            "url": "http://127.0.0.1:8080"
-        })).await;
+        let result = tool
+            .execute(serde_json::json!({
+                "method": "PATCH",
+                "url": "http://127.0.0.1:8080"
+            }))
+            .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Unsupported"));
     }
@@ -337,9 +351,7 @@ mod tests {
     fn test_http_tool_rejects_private_ranges() {
         let tool = HTTPRequestTool::new();
         for host in ["10.0.0.1", "172.16.1.1", "192.168.1.5"] {
-            let err = tool
-                .validate_url(&format!("https://{host}/x"))
-                .unwrap_err();
+            let err = tool.validate_url(&format!("https://{host}/x")).unwrap_err();
             assert!(err.contains("blocked"), "{} should be blocked", host);
         }
     }
@@ -376,7 +388,10 @@ mod tests {
         // "localhost" resolves to 127.0.0.1/::1 locally; the DNS recheck
         // must reject it even though the literal URL parse succeeded.
         let err = tool.validate_host("localhost").await.unwrap_err();
-        assert!(err.contains("blocked"), "localhost must be blocked, got: {err}");
+        assert!(
+            err.contains("blocked"),
+            "localhost must be blocked, got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -384,22 +399,29 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            let app = axum::Router::new().route(
-                "/hello",
-                axum::routing::get(|| async { "hello from tool" }),
-            );
+            let app = axum::Router::new()
+                .route("/hello", axum::routing::get(|| async { "hello from tool" }));
             axum::serve(listener, app).await.unwrap();
         });
 
         let tool = loopback_allowlisted_tool();
-        let result = tool.execute(serde_json::json!({
-            "method": "GET",
-            "url": format!("http://{}/hello", addr)
-        })).await;
-        assert!(result.is_ok(), "allowlisted host should work: {:?}", result.err());
+        let result = tool
+            .execute(serde_json::json!({
+                "method": "GET",
+                "url": format!("http://{}/hello", addr)
+            }))
+            .await;
+        assert!(
+            result.is_ok(),
+            "allowlisted host should work: {:?}",
+            result.err()
+        );
         let val = result.unwrap();
         assert_eq!(val["status"], 200);
-        assert!(val["body"].as_str().unwrap_or("").contains("hello from tool"));
+        assert!(val["body"]
+            .as_str()
+            .unwrap_or("")
+            .contains("hello from tool"));
         assert_eq!(val["truncated"], false);
     }
 
@@ -422,11 +444,16 @@ mod tests {
         });
 
         let tool = loopback_allowlisted_tool();
-        let result = tool.execute(serde_json::json!({
-            "method": "GET",
-            "url": format!("http://{}/redirect", addr)
-        })).await;
-        assert!(result.is_ok(), "redirect response must be returned, not followed");
+        let result = tool
+            .execute(serde_json::json!({
+                "method": "GET",
+                "url": format!("http://{}/redirect", addr)
+            }))
+            .await;
+        assert!(
+            result.is_ok(),
+            "redirect response must be returned, not followed"
+        );
         let val = result.unwrap();
         assert_eq!(val["status"], 302, "redirect must not be followed");
         assert!(
@@ -452,11 +479,17 @@ mod tests {
         });
 
         let tool = loopback_allowlisted_tool();
-        let result = tool.execute(serde_json::json!({
-            "method": "GET",
-            "url": format!("http://{}/big", addr)
-        })).await;
-        assert!(result.is_ok(), "oversized body must be capped, not failed: {:?}", result.err());
+        let result = tool
+            .execute(serde_json::json!({
+                "method": "GET",
+                "url": format!("http://{}/big", addr)
+            }))
+            .await;
+        assert!(
+            result.is_ok(),
+            "oversized body must be capped, not failed: {:?}",
+            result.err()
+        );
         let val = result.unwrap();
         assert_eq!(val["status"], 200);
         assert_eq!(val["truncated"], true, "body must be flagged truncated");
@@ -482,20 +515,26 @@ mod tests {
         });
 
         let tool = loopback_allowlisted_tool();
-        let result = tool.execute(serde_json::json!({
-            "method": "GET",
-            "url": format!("http://{}/echo", addr),
-            "headers": {
-                "Authorization": "Bearer leaked-secret",
-                "Host": "evil.example.com",
-                "X-Custom": "kept"
-            }
-        })).await;
+        let result = tool
+            .execute(serde_json::json!({
+                "method": "GET",
+                "url": format!("http://{}/echo", addr),
+                "headers": {
+                    "Authorization": "Bearer leaked-secret",
+                    "Host": "evil.example.com",
+                    "X-Custom": "kept"
+                }
+            }))
+            .await;
         assert!(result.is_ok(), "request should succeed: {:?}", result.err());
         let val = result.unwrap();
-        let body: Value = serde_json::from_str(val["body"].as_str().unwrap_or(""))
-            .unwrap_or(Value::Null);
-        assert_eq!(body["auth"], Value::Null, "Authorization override must be dropped");
+        let body: Value =
+            serde_json::from_str(val["body"].as_str().unwrap_or("")).unwrap_or(Value::Null);
+        assert_eq!(
+            body["auth"],
+            Value::Null,
+            "Authorization override must be dropped"
+        );
         assert_ne!(
             body["host_header"].as_str().unwrap_or(""),
             "evil.example.com",

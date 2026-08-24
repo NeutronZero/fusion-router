@@ -6,7 +6,7 @@ use uuid::Uuid;
 use fusion_router::compiler::{build_compiler, Compiler};
 use fusion_router::resource::DefaultResourceManager;
 use fusion_router::types::{
-    IRMetadata, IRNode, IRNodeKind, IREdge, NanoUSD, Quota, StrategyKind, WorkflowIR,
+    IREdge, IRMetadata, IRNode, IRNodeKind, NanoUSD, Quota, StrategyKind, WorkflowIR,
 };
 
 fn build_large_ir(node_count: usize) -> WorkflowIR {
@@ -18,7 +18,11 @@ fn build_large_ir(node_count: usize) -> WorkflowIR {
             config.insert("temperature".to_string(), serde_json::json!(0.7));
             IRNode {
                 id: Uuid::new_v4(),
-                kind: if i % 5 == 0 { IRNodeKind::Gate } else { IRNodeKind::Generate },
+                kind: if i % 5 == 0 {
+                    IRNodeKind::Gate
+                } else {
+                    IRNodeKind::Generate
+                },
                 strategy: StrategyKind::Single,
                 model: Some("gpt-4".to_string()),
                 config,
@@ -60,17 +64,20 @@ fn bench_compilation(c: &mut Criterion) {
 
     c.bench_function("compile_10_nodes", |b| {
         let ir = build_large_ir(10);
-        b.to_async(&rt).iter(|| compiler.compile(black_box(ir.clone())));
+        b.to_async(&rt)
+            .iter(|| compiler.compile(black_box(ir.clone())));
     });
 
     c.bench_function("compile_100_nodes", |b| {
         let ir = build_large_ir(100);
-        b.to_async(&rt).iter(|| compiler.compile(black_box(ir.clone())));
+        b.to_async(&rt)
+            .iter(|| compiler.compile(black_box(ir.clone())));
     });
 
     c.bench_function("compile_500_nodes", |b| {
         let ir = build_large_ir(500);
-        b.to_async(&rt).iter(|| compiler.compile(black_box(ir.clone())));
+        b.to_async(&rt)
+            .iter(|| compiler.compile(black_box(ir.clone())));
     });
 }
 

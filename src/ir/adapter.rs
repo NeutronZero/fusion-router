@@ -45,22 +45,26 @@ pub fn workflow_to_types(ir: &WorkflowIR) -> Result<TypesWorkflowIR, String> {
         // The execution ABI intentionally has fewer operational node kinds.
         // Preserve the nine-kind planning vocabulary explicitly at this
         // boundary so lowering is not mistaken for semantic loss.
-        config.insert("semantic_kind".to_string(), serde_json::json!(format!("{:?}", node.kind())));
+        config.insert(
+            "semantic_kind".to_string(),
+            serde_json::json!(format!("{:?}", node.kind())),
+        );
         let model = node.selected_model().map(String::from);
-        let strategy = if let Some(strat_str) = node.config().get("strategy").and_then(|v| v.as_str()) {
-            match strat_str {
-                "Consensus" => crate::types::StrategyKind::Consensus,
-                "Reflection" => crate::types::StrategyKind::Reflection,
-                "Chain" => crate::types::StrategyKind::Chain,
-                "Debate" => crate::types::StrategyKind::Debate,
-                "ReAct" => crate::types::StrategyKind::ReAct,
-                "Fusion" => crate::types::StrategyKind::Fusion,
-                "Single" => crate::types::StrategyKind::Single,
-                custom => crate::types::StrategyKind::Custom(custom.to_string()),
-            }
-        } else {
-            crate::types::StrategyKind::Single
-        };
+        let strategy =
+            if let Some(strat_str) = node.config().get("strategy").and_then(|v| v.as_str()) {
+                match strat_str {
+                    "Consensus" => crate::types::StrategyKind::Consensus,
+                    "Reflection" => crate::types::StrategyKind::Reflection,
+                    "Chain" => crate::types::StrategyKind::Chain,
+                    "Debate" => crate::types::StrategyKind::Debate,
+                    "ReAct" => crate::types::StrategyKind::ReAct,
+                    "Fusion" => crate::types::StrategyKind::Fusion,
+                    "Single" => crate::types::StrategyKind::Single,
+                    custom => crate::types::StrategyKind::Custom(custom.to_string()),
+                }
+            } else {
+                crate::types::StrategyKind::Single
+            };
         nodes.push(crate::types::IRNode {
             id: uuid_for(node.id()),
             kind: node_kind_of(&node.kind()),
@@ -70,17 +74,14 @@ pub fn workflow_to_types(ir: &WorkflowIR) -> Result<TypesWorkflowIR, String> {
         });
     }
 
-    let node_ids: std::collections::HashSet<uuid::Uuid> =
-        nodes.iter().map(|n| n.id).collect();
+    let node_ids: std::collections::HashSet<uuid::Uuid> = nodes.iter().map(|n| n.id).collect();
 
     let mut edges = Vec::with_capacity(ir.edges().len());
     for edge in ir.edges() {
         let from = uuid_for(edge.from());
         let to = uuid_for(edge.to());
         if !node_ids.contains(&from) || !node_ids.contains(&to) {
-            return Err(format!(
-                "edge references unknown node ({from} -> {to})"
-            ));
+            return Err(format!("edge references unknown node ({from} -> {to})"));
         }
         edges.push(crate::types::IREdge {
             from,
@@ -112,7 +113,10 @@ mod tests {
 
     fn sample_ir() -> WorkflowIR {
         let mut config = BTreeMap::new();
-        config.insert("goal".into(), serde_json::Value::String("build a parser".into()));
+        config.insert(
+            "goal".into(),
+            serde_json::Value::String("build a parser".into()),
+        );
         WorkflowBuilder::new()
             .metadata(WorkflowMetadata {
                 policy_applied: vec!["pol".into()],
@@ -161,10 +165,19 @@ mod tests {
         assert_eq!(types.edges[0].from, uuid_for("n1"));
         assert_eq!(types.edges[0].to, uuid_for("n2"));
         assert_eq!(types.nodes[0].kind, IRNodeKind::Generate);
-        assert_eq!(types.nodes[0].config.get("semantic_kind").and_then(|v| v.as_str()), Some("Task"));
+        assert_eq!(
+            types.nodes[0]
+                .config
+                .get("semantic_kind")
+                .and_then(|v| v.as_str()),
+            Some("Task")
+        );
         assert_eq!(types.nodes[1].kind, IRNodeKind::Transform);
         assert_eq!(types.metadata.policy_applied, vec!["pol".to_string()]);
-        assert_eq!(types.metadata.estimated_cost, crate::types::NanoUSD::from_nanos(1_500_000_000));
+        assert_eq!(
+            types.metadata.estimated_cost,
+            crate::types::NanoUSD::from_nanos(1_500_000_000)
+        );
         assert_eq!(types.metadata.estimated_tokens, 100);
     }
 

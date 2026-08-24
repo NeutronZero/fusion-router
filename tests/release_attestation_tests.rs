@@ -1,4 +1,3 @@
-use uuid::Uuid;
 use fusion_router::release::archive::{ArchiveBackend, FilesystemArchiveBackend};
 use fusion_router::release::assessment::ReleaseAssessment;
 use fusion_router::release::attestation::{AttestationBuilder, ReleaseAttestation};
@@ -10,6 +9,7 @@ use fusion_router::release::policy::{PolicyDefinition, ReleaseEnvironment};
 use fusion_router::release::signing::{MockSigner, SignedAttestation, Signer};
 use fusion_router::release::verifier::AttestationVerifier;
 use fusion_router::release::waiver::WaiverSet;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn test_end_to_end_attestation_flow() {
@@ -34,13 +34,20 @@ async fn test_end_to_end_attestation_flow() {
 
     let signer = MockSigner::default();
     let signature = signer.sign(&canonical_bytes).unwrap();
-    let signed = SignedAttestation { attestation, signature };
+    let signed = SignedAttestation {
+        attestation,
+        signature,
+    };
     let envelope = AttestationEnvelope::new(signed);
 
     let temp_path = std::env::temp_dir().join(format!("fusion_test_e2e_{}", Uuid::new_v4()));
     let archive = FilesystemArchiveBackend::new(temp_path.clone());
 
-    let assessment_id = &envelope.signed_attestation.attestation.assessment.assessment_id;
+    let assessment_id = &envelope
+        .signed_attestation
+        .attestation
+        .assessment
+        .assessment_id;
     assert!(!archive.exists(assessment_id));
 
     let stored_path = archive.store(&envelope).unwrap();
@@ -89,7 +96,10 @@ async fn test_attestation_tampered_payload_rejected() {
     // Tamper with attestation schema version
     let mut tampered_attestation = attestation;
     tampered_attestation.schema_version = "invalid-schema-v999".into();
-    let signed = SignedAttestation { attestation: tampered_attestation, signature };
+    let signed = SignedAttestation {
+        attestation: tampered_attestation,
+        signature,
+    };
     let envelope = AttestationEnvelope::new(signed);
 
     let report = AttestationVerifier::verify(&envelope, &signer).unwrap();

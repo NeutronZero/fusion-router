@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use serde::Deserialize;
 use crate::types::NanoUSD;
+use serde::Deserialize;
+use std::collections::HashMap;
 
 use crate::config::defaults::*;
 use crate::feature_gate::FeatureConfig;
@@ -155,10 +155,16 @@ pub struct ProviderLimitConfig {
 }
 
 fn deserialize_usd<'de, D>(deserializer: D) -> Result<NanoUSD, D::Error>
-where D: serde::Deserializer<'de> {
+where
+    D: serde::Deserializer<'de>,
+{
     #[derive(Deserialize)]
     #[serde(untagged)]
-    enum Money { Integer(u64), Decimal(f64), Text(String) }
+    enum Money {
+        Integer(u64),
+        Decimal(f64),
+        Text(String),
+    }
     let value = Money::deserialize(deserializer)?;
     let text = match value {
         Money::Integer(value) => value.to_string(),
@@ -169,19 +175,27 @@ where D: serde::Deserializer<'de> {
 }
 
 fn deserialize_usd_opt<'de, D>(deserializer: D) -> Result<Option<NanoUSD>, D::Error>
-where D: serde::Deserializer<'de> {
+where
+    D: serde::Deserializer<'de>,
+{
     #[derive(Deserialize)]
     #[serde(untagged)]
-    enum Money { Integer(u64), Decimal(f64), Text(String) }
+    enum Money {
+        Integer(u64),
+        Decimal(f64),
+        Text(String),
+    }
     let value = Option::<Money>::deserialize(deserializer)?;
-    value.map(|money| {
-        let text = match money {
-            Money::Integer(value) => value.to_string(),
-            Money::Decimal(value) => value.to_string(),
-            Money::Text(value) => value,
-        };
-        NanoUSD::checked_from_decimal_usd(&text).map_err(serde::de::Error::custom)
-    }).transpose()
+    value
+        .map(|money| {
+            let text = match money {
+                Money::Integer(value) => value.to_string(),
+                Money::Decimal(value) => value.to_string(),
+                Money::Text(value) => value,
+            };
+            NanoUSD::checked_from_decimal_usd(&text).map_err(serde::de::Error::custom)
+        })
+        .transpose()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -317,7 +331,9 @@ pub struct StrategyConfig {
 
 impl Default for StrategyConfig {
     fn default() -> Self {
-        Self { consensus_count: default_consensus_count() }
+        Self {
+            consensus_count: default_consensus_count(),
+        }
     }
 }
 
@@ -349,6 +365,3 @@ impl Default for ToolsConfig {
         }
     }
 }
-
-
-

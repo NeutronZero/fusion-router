@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use crate::operations::{OperationError, PackageVerifier};
-use crate::telemetry::audit::{AuditLog, AuditEntry};
+use crate::telemetry::audit::{AuditEntry, AuditLog};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PackageAttestationStatus {
@@ -20,7 +20,10 @@ pub struct AttestationViewer {
 
 impl AttestationViewer {
     pub fn new(verifier: Arc<dyn PackageVerifier>, audit_log: Arc<AuditLog>) -> Self {
-        Self { verifier, audit_log }
+        Self {
+            verifier,
+            audit_log,
+        }
     }
 
     pub fn list_packages(&self) -> Result<Vec<PackageAttestationStatus>, OperationError> {
@@ -53,7 +56,11 @@ impl AttestationViewer {
     }
 
     #[allow(dead_code)]
-    pub fn re_verify(&self, package_id: &str, version: &str) -> Result<PackageAttestationStatus, OperationError> {
+    pub fn re_verify(
+        &self,
+        package_id: &str,
+        version: &str,
+    ) -> Result<PackageAttestationStatus, OperationError> {
         let verification = self.verifier.verify_package(package_id, version)?;
         self.audit_log.record(AuditEntry {
             timestamp: chrono::Utc::now().timestamp(),
@@ -77,8 +84,8 @@ impl AttestationViewer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::telemetry::audit::AuditLog;
     use crate::operations::MockPackageVerifier;
+    use crate::telemetry::audit::AuditLog;
 
     #[test]
     fn test_list_attestations_empty() {

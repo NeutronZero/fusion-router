@@ -1,8 +1,8 @@
-use async_trait::async_trait;
-use std::collections::HashMap;
-use crate::types::{ChatCompletionRequest, ChatCompletionResponse, Choice, ChatMessage, Usage};
 use super::{Model, ModelCapabilities, ModelPricing, TransportRequest, TransportResponse};
 use crate::config::CapabilityDescriptor;
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice, Usage};
+use async_trait::async_trait;
+use std::collections::HashMap;
 
 /// A model backed by any OpenAI-compatible `/v1/chat/completions` endpoint.
 ///
@@ -42,10 +42,21 @@ impl GenericOpenAIModel {
             supports_structured_output: model_cfg.supports_structured_output.unwrap_or(false),
         };
         let pricing = ModelPricing {
-            input_cost_per_1k: model_cfg.input_cost_per_1k.unwrap_or(crate::types::NanoUSD::ZERO),
-            output_cost_per_1k: model_cfg.output_cost_per_1k.unwrap_or(crate::types::NanoUSD::ZERO),
+            input_cost_per_1k: model_cfg
+                .input_cost_per_1k
+                .unwrap_or(crate::types::NanoUSD::ZERO),
+            output_cost_per_1k: model_cfg
+                .output_cost_per_1k
+                .unwrap_or(crate::types::NanoUSD::ZERO),
         };
-        Self { model_id, provider_name, base_url, caps, pricing, prefix }
+        Self {
+            model_id,
+            provider_name,
+            base_url,
+            caps,
+            pricing,
+            prefix,
+        }
     }
 }
 
@@ -71,7 +82,11 @@ impl Model for GenericOpenAIModel {
         None
     }
 
-    fn format_request(&self, req: &ChatCompletionRequest, api_key: &str) -> anyhow::Result<TransportRequest> {
+    fn format_request(
+        &self,
+        req: &ChatCompletionRequest,
+        api_key: &str,
+    ) -> anyhow::Result<TransportRequest> {
         let url = format!("{}/chat/completions", self.base_url);
 
         let mut headers = HashMap::new();
@@ -82,7 +97,10 @@ impl Model for GenericOpenAIModel {
         let api_model = if self.prefix.is_empty() {
             req.model.clone()
         } else {
-            req.model.strip_prefix(&self.prefix).unwrap_or(&req.model).to_string()
+            req.model
+                .strip_prefix(&self.prefix)
+                .unwrap_or(&req.model)
+                .to_string()
         };
 
         let mut body = serde_json::json!({
@@ -96,14 +114,24 @@ impl Model for GenericOpenAIModel {
             body["tools"] = serde_json::json!(super::tool_definitions_wire(tools));
         }
 
-        Ok(TransportRequest { url, method: "POST".to_string(), headers, body })
+        Ok(TransportRequest {
+            url,
+            method: "POST".to_string(),
+            headers,
+            body,
+        })
     }
 
-    fn normalize_response(&self, resp: TransportResponse) -> anyhow::Result<ChatCompletionResponse> {
+    fn normalize_response(
+        &self,
+        resp: TransportResponse,
+    ) -> anyhow::Result<ChatCompletionResponse> {
         let body = resp.body;
         let id = body["id"].as_str().unwrap_or("gen-id").to_string();
         let model = body["model"].as_str().unwrap_or(&self.model_id).to_string();
-        let created = body["created"].as_i64().unwrap_or_else(|| chrono::Utc::now().timestamp());
+        let created = body["created"]
+            .as_i64()
+            .unwrap_or_else(|| chrono::Utc::now().timestamp());
 
         let choices: Vec<Choice> = body["choices"]
             .as_array()
@@ -112,12 +140,16 @@ impl Model for GenericOpenAIModel {
                     .enumerate()
                     .map(|(i, c)| {
                         let content = super::message_content(c);
-                        let finish_reason = c["finish_reason"].as_str().unwrap_or("stop").to_string();
+                        let finish_reason =
+                            c["finish_reason"].as_str().unwrap_or("stop").to_string();
                         super::ensure_non_truncated(c, &content)?;
                         Ok(Choice {
                             index: i as u32,
                             message: ChatMessage {
-                                role: c["message"]["role"].as_str().unwrap_or("assistant").to_string(),
+                                role: c["message"]["role"]
+                                    .as_str()
+                                    .unwrap_or("assistant")
+                                    .to_string(),
                                 content,
                             },
                             finish_reason,
@@ -184,8 +216,14 @@ mod tests {
         assert!(!caps.supports_vision);
         assert!(caps.supports_tools);
         let pricing = model.pricing();
-        assert_eq!(pricing.input_cost_per_1k, crate::types::NanoUSD::from_nanos(1_000_000));
-        assert_eq!(pricing.output_cost_per_1k, crate::types::NanoUSD::from_nanos(2_000_000));
+        assert_eq!(
+            pricing.input_cost_per_1k,
+            crate::types::NanoUSD::from_nanos(1_000_000)
+        );
+        assert_eq!(
+            pricing.output_cost_per_1k,
+            crate::types::NanoUSD::from_nanos(2_000_000)
+        );
     }
 
     #[test]
@@ -211,7 +249,10 @@ mod tests {
         };
         let transport_req = model.format_request(&req, "sk-test").unwrap();
         assert_eq!(transport_req.body["model"], "gpt-4o");
-        assert_eq!(transport_req.url, "https://api.openai.com/v1/chat/completions");
+        assert_eq!(
+            transport_req.url,
+            "https://api.openai.com/v1/chat/completions"
+        );
         assert_eq!(
             transport_req.headers.get("Authorization").unwrap(),
             "Bearer sk-test"

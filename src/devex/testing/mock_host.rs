@@ -19,7 +19,10 @@ pub struct MockHostServices {
 }
 
 impl MockHostServices {
-    pub fn new(secrets: HashMap<String, String>, http_responses: HashMap<String, (u16, Vec<u8>)>) -> Self {
+    pub fn new(
+        secrets: HashMap<String, String>,
+        http_responses: HashMap<String, (u16, Vec<u8>)>,
+    ) -> Self {
         Self {
             emitted_events: Arc::new(Mutex::new(Vec::new())),
             logs: Arc::new(Mutex::new(Vec::new())),
@@ -56,11 +59,10 @@ impl CapabilityHostServices for MockHostServices {
 
     async fn http_request(&self, req: Request) -> Result<Response, GateError> {
         let url = req.url().to_string();
-        let (status, body) = self
-            .http_responses
-            .get(&url)
-            .cloned()
-            .ok_or_else(|| GateError::ExecutionFailed(format!("no mock response for: {url}")))?;
+        let (status, body) =
+            self.http_responses.get(&url).cloned().ok_or_else(|| {
+                GateError::ExecutionFailed(format!("no mock response for: {url}"))
+            })?;
 
         let http_resp = http::Response::builder()
             .status(status)

@@ -1,6 +1,6 @@
-use std::sync::Arc;
-use std::collections::HashMap;
 use crate::operations::{OperationError, RuntimeModuleCache};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InstanceDetail {
@@ -25,21 +25,27 @@ impl RuntimeInspector {
 
     pub fn list_instances(&self) -> Result<Vec<InstanceDetail>, OperationError> {
         let keys = self.module_cache.keys();
-        let details = keys.into_iter().map(|key| InstanceDetail {
-            capability_id: key.0.to_string(),
-            version: key.1.to_string(),
-            memory_usage_bytes: 0,
-            fuel_consumed: 0,
-            invocation_count: 0,
-            last_error: None,
-            host_call_breakdown: HashMap::new(),
-            uptime_secs: 0.0,
-        }).collect();
+        let details = keys
+            .into_iter()
+            .map(|key| InstanceDetail {
+                capability_id: key.0.to_string(),
+                version: key.1.to_string(),
+                memory_usage_bytes: 0,
+                fuel_consumed: 0,
+                invocation_count: 0,
+                last_error: None,
+                host_call_breakdown: HashMap::new(),
+                uptime_secs: 0.0,
+            })
+            .collect();
         Ok(details)
     }
 
     #[allow(dead_code)]
-    pub fn get_instance(&self, capability_id: &str) -> Result<Option<InstanceDetail>, OperationError> {
+    pub fn get_instance(
+        &self,
+        capability_id: &str,
+    ) -> Result<Option<InstanceDetail>, OperationError> {
         let keys = self.module_cache.keys();
         for key in keys {
             if key.0.as_str() == capability_id {

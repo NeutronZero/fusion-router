@@ -1,13 +1,13 @@
 #![cfg(feature = "wasm-plugins")]
 
-use std::sync::Arc;
-use wasmtime::{Config, Engine, Linker, Module, Store};
-use fusion_plugin_api::{CapabilityContract, CapabilityId, Permission};
 use fusion_kernel::capability::{CapabilityRegistry, InMemoryCapabilityRegistry};
+use fusion_plugin_api::{CapabilityContract, CapabilityId, Permission};
 use fusion_router::events::bus::BroadcastEventBus;
 use fusion_router::runtime::host_services::CapabilityHostServices;
 use fusion_router::runtime::linker::configure_linker;
 use fusion_router::telemetry::metrics::FusionMetrics;
+use std::sync::Arc;
+use wasmtime::{Config, Engine, Linker, Module, Store};
 
 fn make_engine() -> Engine {
     let config = Config::new();
@@ -41,7 +41,7 @@ fn make_host(permissions: Vec<Permission>) -> Arc<dyn CapabilityHostServices> {
             uuid::Uuid::new_v4(),
             uuid::Uuid::new_v4(),
             None,
-        )
+        ),
     )
 }
 
@@ -68,9 +68,15 @@ fn test_wasm_calls_emit_event() {
     let module = Module::new(&engine, wat).unwrap();
     let mut store = Store::new(&engine, host);
     let instance = linker.instantiate(&mut store, &module).unwrap();
-    let invoke = instance.get_typed_func::<(i32, i32), i32>(&mut store, "capability_invoke").unwrap();
+    let invoke = instance
+        .get_typed_func::<(i32, i32), i32>(&mut store, "capability_invoke")
+        .unwrap();
     let result = invoke.call(&mut store, (0, 0));
-    assert!(result.is_ok(), "emit_event should not trap: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "emit_event should not trap: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -96,9 +102,15 @@ fn test_wasm_fetch_secret_permission_denied() {
     let module = Module::new(&engine, wat).unwrap();
     let mut store = Store::new(&engine, host);
     let instance = linker.instantiate(&mut store, &module).unwrap();
-    let invoke = instance.get_typed_func::<(i32, i32), i32>(&mut store, "capability_invoke").unwrap();
+    let invoke = instance
+        .get_typed_func::<(i32, i32), i32>(&mut store, "capability_invoke")
+        .unwrap();
     let result = invoke.call(&mut store, (0, 0));
-    assert!(result.is_ok(), "fetch_secret should not trap even on denied: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "fetch_secret should not trap even on denied: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -124,9 +136,14 @@ fn test_wasm_http_request_permission_denied() {
     let module = Module::new(&engine, wat).unwrap();
     let mut store = Store::new(&engine, host);
     let instance = linker.instantiate(&mut store, &module).unwrap();
-    let invoke = instance.get_typed_func::<(i32, i32), i32>(&mut store, "capability_invoke").unwrap();
+    let invoke = instance
+        .get_typed_func::<(i32, i32), i32>(&mut store, "capability_invoke")
+        .unwrap();
     let result = invoke.call(&mut store, (0, 0));
-    assert!(result.is_ok(), "http_request should not trap even on denied");
+    assert!(
+        result.is_ok(),
+        "http_request should not trap even on denied"
+    );
 }
 
 #[test]
@@ -152,7 +169,9 @@ fn test_wasm_log_no_trap() {
     let module = Module::new(&engine, wat).unwrap();
     let mut store = Store::new(&engine, host);
     let instance = linker.instantiate(&mut store, &module).unwrap();
-    let invoke = instance.get_typed_func::<(i32, i32), i32>(&mut store, "capability_invoke").unwrap();
+    let invoke = instance
+        .get_typed_func::<(i32, i32), i32>(&mut store, "capability_invoke")
+        .unwrap();
     let result = invoke.call(&mut store, (0, 0));
     assert!(result.is_ok(), "log should not trap");
 }

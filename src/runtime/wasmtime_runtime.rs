@@ -1,13 +1,13 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use async_trait::async_trait;
-use wasmtime::{Config, Engine, Linker, Memory, Module, ResourceLimiter, Store, TypedFunc};
+use crate::runtime::config::SandboxConfig;
 use crate::runtime::context::RuntimeContext;
 use crate::runtime::module_cache::RuntimeModuleCache;
 use crate::runtime::sandbox_instance::SandboxInstance;
 use crate::runtime::sandbox_runtime::SandboxRuntime;
-use crate::runtime::config::SandboxConfig;
 use crate::runtime::RuntimeError;
+use async_trait::async_trait;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use wasmtime::{Config, Engine, Linker, Memory, Module, ResourceLimiter, Store, TypedFunc};
 
 pub struct WasmtimeSandboxRuntime {
     engine: Engine,
@@ -21,7 +21,12 @@ struct StoreData {
 }
 
 impl ResourceLimiter for StoreData {
-    fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> Result<bool, wasmtime::Error> {
+    fn memory_growing(
+        &mut self,
+        _current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> Result<bool, wasmtime::Error> {
         if desired > self.memory_limit {
             self.growth_rejected.store(true, Ordering::SeqCst);
             Ok(false)
@@ -30,7 +35,12 @@ impl ResourceLimiter for StoreData {
         }
     }
 
-    fn table_growing(&mut self, _current: usize, _desired: usize, _maximum: Option<usize>) -> Result<bool, wasmtime::Error> {
+    fn table_growing(
+        &mut self,
+        _current: usize,
+        _desired: usize,
+        _maximum: Option<usize>,
+    ) -> Result<bool, wasmtime::Error> {
         Ok(true)
     }
 }
@@ -77,22 +87,30 @@ impl SandboxRuntime for WasmtimeSandboxRuntime {
         };
 
         let mut store = Store::new(&self.engine, store_data);
-        store.set_fuel(self.config.fuel_amount)
+        store
+            .set_fuel(self.config.fuel_amount)
             .map_err(|e| RuntimeError::CompilationFailed(e.to_string()))?;
 
         store.limiter(move |data: &mut StoreData| data as &mut dyn ResourceLimiter);
 
         let linker = Linker::new(&self.engine);
-        let instance = linker.instantiate(&mut store, &module)
+        let instance = linker
+            .instantiate(&mut store, &module)
             .map_err(|e| RuntimeError::CompilationFailed(e.to_string()))?;
 
-        let memory = instance.get_memory(&mut store, "memory")
+        let memory = instance
+            .get_memory(&mut store, "memory")
             .ok_or_else(|| RuntimeError::CompilationFailed("memory export not found".into()))?;
 
-        let allocate = instance.get_typed_func::<i32, i32>(&mut store, "allocate").ok();
+        let allocate = instance
+            .get_typed_func::<i32, i32>(&mut store, "allocate")
+            .ok();
 
-        let invoke = instance.get_typed_func::<(i32, i32), (i32, i32)>(&mut store, "capability_invoke")
-            .map_err(|e| RuntimeError::CompilationFailed(format!("capability_invoke export not found: {e}")))?;
+        let invoke = instance
+            .get_typed_func::<(i32, i32), (i32, i32)>(&mut store, "capability_invoke")
+            .map_err(|e| {
+                RuntimeError::CompilationFailed(format!("capability_invoke export not found: {e}"))
+            })?;
 
         let fuel_initial = store.get_fuel().unwrap_or(0);
 
@@ -123,10 +141,14 @@ impl WasmtimeSandboxInstance {
         if let Some(trap) = err.downcast_ref::<wasmtime::Trap>() {
             return match trap {
                 wasmtime::Trap::OutOfFuel => RuntimeError::FuelExhausted,
-                _ => RuntimeError::ExecutionTrap { message: err.to_string() },
+                _ => RuntimeError::ExecutionTrap {
+                    message: err.to_string(),
+                },
             };
         }
-        RuntimeError::ExecutionTrap { message: err.to_string() }
+        RuntimeError::ExecutionTrap {
+            message: err.to_string(),
+        }
     }
 }
 
@@ -138,15 +160,20 @@ impl SandboxInstance for WasmtimeSandboxInstance {
         let len = input.len() as i32;
 
         let ptr = if let Some(ref alloc) = self.allocate {
-            alloc.call(&mut self.store, len).map_err(Self::map_trap_error)?
+            alloc
+                .call(&mut self.store, len)
+                .map_err(Self::map_trap_error)?
         } else {
             0
         };
 
-        self.memory.write(&mut self.store, ptr as usize, input)
+        self.memory
+            .write(&mut self.store, ptr as usize, input)
             .map_err(|_| RuntimeError::OutOfMemory)?;
 
-        let (out_ptr, out_len) = self.invoke.call(&mut self.store, (ptr, len))
+        let (out_ptr, out_len) = self
+            .invoke
+            .call(&mut self.store, (ptr, len))
             .map_err(Self::map_trap_error)?;
 
         if self.growth_rejected.load(Ordering::SeqCst) {
@@ -161,7 +188,8 @@ impl SandboxInstance for WasmtimeSandboxInstance {
         }
 
         let mut output = vec![0u8; out_len as usize];
-        self.memory.read(&self.store, out_ptr as usize, &mut output)
+        self.memory
+            .read(&self.store, out_ptr as usize, &mut output)
             .map_err(|_| RuntimeError::OutOfMemory)?;
 
         Ok(output)
@@ -176,34 +204,48 @@ impl SandboxInstance for WasmtimeSandboxInstance {
     }
 
     fn fuel_consumed(&self) -> u64 {
-        self.fuel_initial.saturating_sub(self.store.get_fuel().unwrap_or(0))
+        self.fuel_initial
+            .saturating_sub(self.store.get_fuel().unwrap_or(0))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use uuid::Uuid;
     use crate::runtime::config::SandboxConfig;
     use crate::runtime::context::RuntimeContext;
     use crate::runtime::host_services::CapabilityHostServices;
     use crate::runtime::module_cache::RuntimeModuleCache;
     use crate::runtime::telemetry_context::TelemetryContext;
+    use std::sync::Arc;
+    use uuid::Uuid;
 
     struct MockHostServices;
 
     #[async_trait]
     impl CapabilityHostServices for MockHostServices {
-        async fn emit_event(&self, _event: crate::events::payload::ExecutionEvent) -> Result<(), crate::release::gate::GateError> {
+        async fn emit_event(
+            &self,
+            _event: crate::events::payload::ExecutionEvent,
+        ) -> Result<(), crate::release::gate::GateError> {
             Ok(())
         }
         async fn log(&self, _level: tracing::Level, _message: &str) {}
-        async fn fetch_secret(&self, _secret_name: &str) -> Result<String, crate::release::gate::GateError> {
-            Err(crate::release::gate::GateError::PermissionDenied("mock denied".into()))
+        async fn fetch_secret(
+            &self,
+            _secret_name: &str,
+        ) -> Result<String, crate::release::gate::GateError> {
+            Err(crate::release::gate::GateError::PermissionDenied(
+                "mock denied".into(),
+            ))
         }
-        async fn http_request(&self, _req: reqwest::Request) -> Result<reqwest::Response, crate::release::gate::GateError> {
-            Err(crate::release::gate::GateError::PermissionDenied("mock denied".into()))
+        async fn http_request(
+            &self,
+            _req: reqwest::Request,
+        ) -> Result<reqwest::Response, crate::release::gate::GateError> {
+            Err(crate::release::gate::GateError::PermissionDenied(
+                "mock denied".into(),
+            ))
         }
         fn record_metric(&self, _name: &str, _value: f64) {}
     }
@@ -365,7 +407,10 @@ mod tests {
 
         let result = instance.invoke(b"data").await;
         assert!(
-            matches!(&result, Err(RuntimeError::OutOfMemory) | Err(RuntimeError::ExecutionTrap { .. })),
+            matches!(
+                &result,
+                Err(RuntimeError::OutOfMemory) | Err(RuntimeError::ExecutionTrap { .. })
+            ),
             "expected memory error, got {result:?}"
         );
     }
@@ -441,9 +486,7 @@ mod tests {
         let cache = Arc::new(RuntimeModuleCache::new());
         let runtime = WasmtimeSandboxRuntime::new(config, cache).unwrap();
 
-        let result = runtime
-            .instantiate(b"not valid wasm", test_context())
-            .await;
+        let result = runtime.instantiate(b"not valid wasm", test_context()).await;
 
         match result {
             Err(RuntimeError::CompilationFailed(_)) => {}

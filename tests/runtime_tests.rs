@@ -1,22 +1,28 @@
 #![cfg(feature = "wasm-plugins")]
 
-use std::sync::Arc;
-use uuid::Uuid;
 use fusion_router::events::ExecutionEvent;
 use fusion_router::release::gate::GateError;
 use fusion_router::runtime::{
     CapabilityHostServices, RuntimeContext, RuntimeError, RuntimeModuleCache, SandboxConfig,
     SandboxRuntime, TelemetryContext, WasmtimeSandboxRuntime,
 };
+use std::sync::Arc;
+use uuid::Uuid;
 
 struct MockHostServices;
 
 #[async_trait::async_trait]
 impl CapabilityHostServices for MockHostServices {
-    async fn emit_event(&self, _event: ExecutionEvent) -> Result<(), GateError> { Ok(()) }
+    async fn emit_event(&self, _event: ExecutionEvent) -> Result<(), GateError> {
+        Ok(())
+    }
     async fn log(&self, _level: tracing::Level, _message: &str) {}
-    async fn fetch_secret(&self, _secret_name: &str) -> Result<String, GateError> { Err(GateError::PermissionDenied("mock denied".into())) }
-    async fn http_request(&self, _req: reqwest::Request) -> Result<reqwest::Response, GateError> { Err(GateError::PermissionDenied("mock denied".into())) }
+    async fn fetch_secret(&self, _secret_name: &str) -> Result<String, GateError> {
+        Err(GateError::PermissionDenied("mock denied".into()))
+    }
+    async fn http_request(&self, _req: reqwest::Request) -> Result<reqwest::Response, GateError> {
+        Err(GateError::PermissionDenied("mock denied".into()))
+    }
     fn record_metric(&self, _name: &str, _value: f64) {}
 }
 
@@ -246,7 +252,10 @@ async fn response_within_cap_passes_through() {
         .unwrap();
 
     let result = instance.invoke(b"x").await;
-    assert!(result.is_ok(), "expected in-cap response to succeed, got {result:?}");
+    assert!(
+        result.is_ok(),
+        "expected in-cap response to succeed, got {result:?}"
+    );
     assert_eq!(result.unwrap().len(), 4);
 }
 
@@ -265,10 +274,7 @@ async fn module_without_memory_export_fails_on_instantiate() {
         )
     "#;
 
-    match runtime
-        .instantiate(wat.as_bytes(), test_context())
-        .await
-    {
+    match runtime.instantiate(wat.as_bytes(), test_context()).await {
         Err(RuntimeError::CompilationFailed(_)) => {}
         Err(other) => panic!("expected CompilationFailed, got {other:?}"),
         Ok(_) => panic!("expected instantiation to fail for module without memory"),

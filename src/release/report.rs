@@ -17,7 +17,9 @@ pub struct GateReport {
 impl GateReport {
     pub fn new(results: Vec<GateResult>, version: String) -> Self {
         let overall = results.iter().all(|r| r.passed);
-        let duration = results.iter().fold(Duration::ZERO, |acc, r| acc + r.duration);
+        let duration = results
+            .iter()
+            .fold(Duration::ZERO, |acc, r| acc + r.duration);
         let timestamp = Utc::now();
 
         Self {
@@ -37,11 +39,17 @@ impl GateReport {
         let mut output = String::new();
         output.push_str(&format!("Release Gate Report v{}\n", self.version));
         output.push_str(&format!("Timestamp: {}\n", self.timestamp));
-        output.push_str(&format!("Overall: {}\n\n", if self.overall { "PASS" } else { "FAIL" }));
+        output.push_str(&format!(
+            "Overall: {}\n\n",
+            if self.overall { "PASS" } else { "FAIL" }
+        ));
 
         for gate in &self.gates {
             let status = if gate.passed { "PASS" } else { "FAIL" };
-            output.push_str(&format!("[{}] {} - {}\n", status, gate.gate_id, gate.summary));
+            output.push_str(&format!(
+                "[{}] {} - {}\n",
+                status, gate.gate_id, gate.summary
+            ));
         }
 
         output.push_str(&format!("\nDuration: {:.2?}", self.duration));

@@ -1,8 +1,8 @@
-use async_trait::async_trait;
-use std::path::PathBuf;
 use crate::events::projection::EventProjection;
 use crate::events::ExecutionEventEnvelope;
 use crate::release::gate::GateError;
+use async_trait::async_trait;
+use std::path::PathBuf;
 
 pub struct PersistentEventStoreProjection {
     storage_dir: PathBuf,
@@ -13,15 +13,18 @@ impl PersistentEventStoreProjection {
         Self { storage_dir }
     }
 
-    pub async fn load_events(&self, execution_id: &str) -> Result<Vec<ExecutionEventEnvelope>, GateError> {
+    pub async fn load_events(
+        &self,
+        execution_id: &str,
+    ) -> Result<Vec<ExecutionEventEnvelope>, GateError> {
         let file_path = self.storage_dir.join(format!("{execution_id}.jsonl"));
         if !tokio::fs::try_exists(&file_path).await.unwrap_or(false) {
             return Ok(vec![]);
         }
 
-        let content = tokio::fs::read_to_string(&file_path)
-            .await
-            .map_err(|e| GateError::ExecutionFailed(format!("read events file {}: {e}", file_path.display())))?;
+        let content = tokio::fs::read_to_string(&file_path).await.map_err(|e| {
+            GateError::ExecutionFailed(format!("read events file {}: {e}", file_path.display()))
+        })?;
 
         let mut events = Vec::new();
         for line in content.lines() {
@@ -45,7 +48,9 @@ impl EventProjection for PersistentEventStoreProjection {
     }
 
     async fn handle_event(&mut self, envelope: &ExecutionEventEnvelope) -> Result<(), GateError> {
-        let file_path = self.storage_dir.join(format!("{}.jsonl", envelope.execution_id));
+        let file_path = self
+            .storage_dir
+            .join(format!("{}.jsonl", envelope.execution_id));
         if let Some(parent) = file_path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
         }
@@ -59,11 +64,15 @@ impl EventProjection for PersistentEventStoreProjection {
             .append(true)
             .open(&file_path)
             .await
-            .map_err(|e| GateError::ExecutionFailed(format!("open event log {}: {e}", file_path.display())))?;
+            .map_err(|e| {
+                GateError::ExecutionFailed(format!("open event log {}: {e}", file_path.display()))
+            })?;
 
         file.write_all(format!("{json}\n").as_bytes())
             .await
-            .map_err(|e| GateError::ExecutionFailed(format!("write event log {}: {e}", file_path.display())))?;
+            .map_err(|e| {
+                GateError::ExecutionFailed(format!("write event log {}: {e}", file_path.display()))
+            })?;
 
         Ok(())
     }
@@ -76,7 +85,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_persistent_event_store_append_and_load() {
-        let temp_dir = std::env::temp_dir().join(format!("fusion_store_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("fusion_store_test_{}", uuid::Uuid::new_v4()));
         let mut store = PersistentEventStoreProjection::new(temp_dir.clone());
 
         let env1 = ExecutionEventEnvelope::new(
@@ -116,7 +126,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_events_missing_file_returns_empty() {
-        let temp_dir = std::env::temp_dir().join(format!("fusion_store_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("fusion_store_test_{}", uuid::Uuid::new_v4()));
         let store = PersistentEventStoreProjection::new(temp_dir.clone());
 
         let loaded = store.load_events("never-written").await.unwrap();
@@ -127,7 +138,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_events_skips_blank_lines_and_sorts() {
-        let temp_dir = std::env::temp_dir().join(format!("fusion_store_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("fusion_store_test_{}", uuid::Uuid::new_v4()));
         let store = PersistentEventStoreProjection::new(temp_dir.clone());
 
         let env2 = ExecutionEventEnvelope::new(

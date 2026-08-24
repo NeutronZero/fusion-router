@@ -1,6 +1,6 @@
-use std::path::PathBuf;
 use crate::release::envelope::AttestationEnvelope;
 use crate::release::gate::GateError;
+use std::path::PathBuf;
 
 pub trait ArchiveBackend: Send + Sync {
     fn store(&self, envelope: &AttestationEnvelope) -> Result<PathBuf, GateError>;
@@ -20,7 +20,9 @@ impl FilesystemArchiveBackend {
 
     fn validate_id(id: &str) -> Result<(), GateError> {
         if id.contains('/') || id.contains('\\') || id.contains("..") {
-            return Err(GateError::ExecutionFailed("invalid assessment ID: path traversal detected".to_string()));
+            return Err(GateError::ExecutionFailed(
+                "invalid assessment ID: path traversal detected".to_string(),
+            ));
         }
         Ok(())
     }
@@ -28,7 +30,11 @@ impl FilesystemArchiveBackend {
 
 impl ArchiveBackend for FilesystemArchiveBackend {
     fn store(&self, envelope: &AttestationEnvelope) -> Result<PathBuf, GateError> {
-        let assessment_id = &envelope.signed_attestation.attestation.assessment.assessment_id;
+        let assessment_id = &envelope
+            .signed_attestation
+            .attestation
+            .assessment
+            .assessment_id;
         Self::validate_id(assessment_id)?;
         let file_name = format!("{assessment_id}.json");
         let target_path = self.archive_dir.join(file_name);
@@ -48,8 +54,9 @@ impl ArchiveBackend for FilesystemArchiveBackend {
         let json = serde_json::to_string_pretty(envelope)
             .map_err(|e| GateError::ExecutionFailed(format!("serialize envelope error: {e}")))?;
 
-        std::fs::write(&target_path, json)
-            .map_err(|e| GateError::ExecutionFailed(format!("write envelope to {}: {e}", target_path.display())))?;
+        std::fs::write(&target_path, json).map_err(|e| {
+            GateError::ExecutionFailed(format!("write envelope to {}: {e}", target_path.display()))
+        })?;
 
         Ok(target_path)
     }
@@ -70,11 +77,13 @@ impl ArchiveBackend for FilesystemArchiveBackend {
             )));
         }
 
-        let content = std::fs::read_to_string(&target_path)
-            .map_err(|e| GateError::ExecutionFailed(format!("read attestation {}: {e}", target_path.display())))?;
+        let content = std::fs::read_to_string(&target_path).map_err(|e| {
+            GateError::ExecutionFailed(format!("read attestation {}: {e}", target_path.display()))
+        })?;
 
-        serde_json::from_str(&content)
-            .map_err(|e| GateError::ExecutionFailed(format!("parse attestation {}: {e}", target_path.display())))
+        serde_json::from_str(&content).map_err(|e| {
+            GateError::ExecutionFailed(format!("parse attestation {}: {e}", target_path.display()))
+        })
     }
 
     fn exists(&self, assessment_id: &str) -> bool {
@@ -95,8 +104,9 @@ impl ArchiveBackend for FilesystemArchiveBackend {
             return Ok(vec![]);
         }
 
-        let entries = std::fs::read_dir(&self.archive_dir)
-            .map_err(|e| GateError::ExecutionFailed(format!("read_dir {}: {e}", self.archive_dir.display())))?;
+        let entries = std::fs::read_dir(&self.archive_dir).map_err(|e| {
+            GateError::ExecutionFailed(format!("read_dir {}: {e}", self.archive_dir.display()))
+        })?;
 
         let mut results = Vec::new();
         for entry in entries.flatten() {
@@ -113,12 +123,12 @@ impl ArchiveBackend for FilesystemArchiveBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
     use crate::release::assessment::ReleaseAssessment;
     use crate::release::attestation::ReleaseAttestation;
     use crate::release::evaluator::{PolicyEvaluation, PolicySummary, ReleaseDecision};
     use crate::release::policy::ReleaseEnvironment;
     use crate::release::signing::{MockSigner, Signer};
+    use uuid::Uuid;
 
     #[test]
     fn test_filesystem_archive_store_load_and_append_only() {
@@ -138,9 +148,14 @@ mod tests {
         let id = assessment.assessment_id.clone();
         let attestation = ReleaseAttestation::new(assessment);
         let signer = MockSigner::default();
-        let canonical_bytes = crate::release::attestation::AttestationBuilder::to_canonical_bytes(&attestation).unwrap();
+        let canonical_bytes =
+            crate::release::attestation::AttestationBuilder::to_canonical_bytes(&attestation)
+                .unwrap();
         let sig = signer.sign(&canonical_bytes).unwrap();
-        let signed = crate::release::signing::SignedAttestation { attestation, signature: sig };
+        let signed = crate::release::signing::SignedAttestation {
+            attestation,
+            signature: sig,
+        };
         let envelope = AttestationEnvelope::new(signed);
 
         assert!(!archive.exists(&id));
@@ -154,7 +169,14 @@ mod tests {
 
         // Test load and list
         let loaded = archive.load(&id).unwrap();
-        assert_eq!(loaded.signed_attestation.attestation.assessment.assessment_id, id);
+        assert_eq!(
+            loaded
+                .signed_attestation
+                .attestation
+                .assessment
+                .assessment_id,
+            id
+        );
         let list = archive.list().unwrap();
         assert!(list.contains(&id));
 
@@ -183,16 +205,24 @@ mod tests {
         let id = assessment.assessment_id.clone();
         let attestation = ReleaseAttestation::new(assessment);
         let signer = MockSigner::default();
-        let canonical_bytes = crate::release::attestation::AttestationBuilder::to_canonical_bytes(&attestation).unwrap();
+        let canonical_bytes =
+            crate::release::attestation::AttestationBuilder::to_canonical_bytes(&attestation)
+                .unwrap();
         let sig = signer.sign(&canonical_bytes).unwrap();
-        let signed = crate::release::signing::SignedAttestation { attestation, signature: sig };
+        let signed = crate::release::signing::SignedAttestation {
+            attestation,
+            signature: sig,
+        };
         let envelope = AttestationEnvelope::new(signed);
 
         assert!(!archive.exists(&id));
 
         let store_err = archive.store(&envelope);
         assert!(store_err.is_err());
-        assert!(store_err.unwrap_err().to_string().contains("path traversal"));
+        assert!(store_err
+            .unwrap_err()
+            .to_string()
+            .contains("path traversal"));
 
         let load_err = archive.load(&id);
         assert!(load_err.is_err());

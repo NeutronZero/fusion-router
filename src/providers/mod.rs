@@ -3,19 +3,19 @@ use futures::stream::{self, BoxStream};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-pub mod zen_model;
-pub mod openrouter_model;
-pub mod ollama_model;
-pub mod generic_openai_model;
-pub mod router;
-pub mod ollama;
-pub mod zen;
-pub mod openrouter;
 pub mod circuit_breaker;
 pub mod circuit_breaking_provider;
-pub mod registry;
 pub mod factory;
+pub mod generic_openai_model;
+pub mod ollama;
+pub mod ollama_model;
+pub mod openrouter;
+pub mod openrouter_model;
 pub mod provider_with_headers;
+pub mod registry;
+pub mod router;
+pub mod zen;
+pub mod zen_model;
 
 #[allow(unused_imports)]
 pub use registry::ProviderRegistry;
@@ -79,20 +79,34 @@ pub struct ModelRequirements {
 
 impl ModelRequirements {
     pub fn matches(&self, capabilities: &ModelCapabilities, pricing: &ModelPricing) -> bool {
-        if self.requires_tools && !capabilities.supports_tools { return false; }
-        if self.requires_streaming && !capabilities.supports_streaming { return false; }
-        if self.requires_vision && !capabilities.supports_vision { return false; }
+        if self.requires_tools && !capabilities.supports_tools {
+            return false;
+        }
+        if self.requires_streaming && !capabilities.supports_streaming {
+            return false;
+        }
+        if self.requires_vision && !capabilities.supports_vision {
+            return false;
+        }
         if let Some(min_ctx) = self.min_context_tokens {
-            if capabilities.max_context_tokens < min_ctx { return false; }
+            if capabilities.max_context_tokens < min_ctx {
+                return false;
+            }
         }
         if let Some(min_code) = self.min_coding_score {
-            if capabilities.coding_score < min_code { return false; }
+            if capabilities.coding_score < min_code {
+                return false;
+            }
         }
         if let Some(min_reason) = self.min_reasoning_score {
-            if capabilities.reasoning_score < min_reason { return false; }
+            if capabilities.reasoning_score < min_reason {
+                return false;
+            }
         }
         if let Some(max_cost) = self.max_cost_per_1k_tokens {
-            if (pricing.input_cost_per_1k + pricing.output_cost_per_1k) > max_cost { return false; }
+            if (pricing.input_cost_per_1k + pricing.output_cost_per_1k) > max_cost {
+                return false;
+            }
         }
         true
     }
@@ -130,9 +144,7 @@ pub fn ensure_non_truncated(choice: &serde_json::Value, content: &str) -> anyhow
 /// (`{"type": "function", "function": {name, description, parameters}}`).
 /// `ToolDefinition` itself is the domain model; this maps it onto the
 /// provider transport contract (ADR-037).
-pub fn tool_definitions_wire(
-    tools: &[crate::types::ToolDefinition],
-) -> Vec<serde_json::Value> {
+pub fn tool_definitions_wire(tools: &[crate::types::ToolDefinition]) -> Vec<serde_json::Value> {
     tools
         .iter()
         .map(|t| {
@@ -152,7 +164,8 @@ pub fn tool_definitions_wire(
 ///
 /// `container` names the node holding the message: `"choices"` (OpenAI wire
 /// shape, index `choice_index`) or `"message"` (Ollama wire shape, index -1).
-pub fn native_tool_calls_from(    body: &serde_json::Value,
+pub fn native_tool_calls_from(
+    body: &serde_json::Value,
     container: &str,
     choice_index: i32,
 ) -> Option<Vec<crate::types::ToolCall>> {
@@ -182,7 +195,11 @@ pub fn native_tool_calls_from(    body: &serde_json::Value,
             })
         })
         .collect();
-    if parsed.is_empty() { None } else { Some(parsed) }
+    if parsed.is_empty() {
+        None
+    } else {
+        Some(parsed)
+    }
 }
 
 #[async_trait]
@@ -192,20 +209,28 @@ pub trait Model: Send + Sync {
     fn capabilities(&self) -> ModelCapabilities;
     fn pricing(&self) -> ModelPricing;
     fn quota_remaining(&self) -> Option<f64>;
-    
+
     // Method to format a request for this model
-    fn format_request(&self, req: &ChatCompletionRequest, api_key: &str) -> anyhow::Result<TransportRequest>;
-    
+    fn format_request(
+        &self,
+        req: &ChatCompletionRequest,
+        api_key: &str,
+    ) -> anyhow::Result<TransportRequest>;
+
     // Method to normalize a response for this model
-    fn normalize_response(&self, resp: TransportResponse) -> anyhow::Result<ChatCompletionResponse>;
+    fn normalize_response(&self, resp: TransportResponse)
+        -> anyhow::Result<ChatCompletionResponse>;
 }
 
-pub use crate::transport::{Transport, TransportRequest, TransportResponse};
 pub use crate::transport::HttpTransport;
+pub use crate::transport::{Transport, TransportRequest, TransportResponse};
 
 #[async_trait]
 pub trait ChatProvider: Send + Sync {
-    async fn chat_completion(&self, request: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse>;
+    async fn chat_completion(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> anyhow::Result<ChatCompletionResponse>;
     fn name(&self) -> &str;
 
     async fn chat_stream(
@@ -252,9 +277,16 @@ impl ChatProvider for Provider {
     }
 
     #[tracing::instrument(skip(self, request), fields(provider = %self.name(), model = %request.model))]
-    async fn chat_completion(&self, request: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
+    async fn chat_completion(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> anyhow::Result<ChatCompletionResponse> {
         let req = self.model.format_request(request, &self.api_key)?;
-        let resp = self.transport.send(req).await.map_err(|e| anyhow::anyhow!("Transport error: {}", e))?;
+        let resp = self
+            .transport
+            .send(req)
+            .await
+            .map_err(|e| anyhow::anyhow!("Transport error: {}", e))?;
         self.model.normalize_response(resp)
     }
 
@@ -265,7 +297,11 @@ impl ChatProvider for Provider {
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ChatStreamChunk>>> {
         let mut transport_req = self.model.format_request(request, &self.api_key)?;
         transport_req.body["stream"] = serde_json::json!(true);
-        let stream = self.transport.stream(transport_req).await.map_err(|e| anyhow::anyhow!("Transport error: {}", e))?;
+        let stream = self
+            .transport
+            .stream(transport_req)
+            .await
+            .map_err(|e| anyhow::anyhow!("Transport error: {}", e))?;
 
         let framed = stream.scan(String::new(), |buf, event| {
             let chunks = match event {
@@ -474,4 +510,3 @@ mod tests {
         assert!(super::native_tool_calls_from(&empty, "message", -1).is_none());
     }
 }
-

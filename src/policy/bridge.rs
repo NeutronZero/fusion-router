@@ -110,6 +110,10 @@ mod tests {
         let converted: fcp::PolicyIR = src_ir.into();
         let matched = fcp::PolicyPrecedenceEngine::evaluate_matching_rule(&converted, "shell.exec")
             .expect("rule must match");
-        assert_eq!(matched.effect, fcp::PolicyEffect::Deny, "deny must win over higher-priority allow");
+        assert_eq!(
+            matched.effect,
+            fcp::PolicyEffect::Deny,
+            "deny must win over higher-priority allow"
+        );
     }
 }

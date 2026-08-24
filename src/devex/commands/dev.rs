@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -15,7 +15,10 @@ pub fn execute_dev(project_dir: &Path, port: u16) -> Result<(), String> {
     .map_err(|e| format!("Failed to set Ctrl-C handler: {e}"))?;
 
     println!("fusion dev — hot-reload loop started on port {port}");
-    println!("Watching {} for changes...", project_dir.join("src").display());
+    println!(
+        "Watching {} for changes...",
+        project_dir.join("src").display()
+    );
     println!("Press Ctrl-C to stop.");
 
     let src_dir = project_dir.join("src");
@@ -81,7 +84,10 @@ mod tests {
         let res = execute_dev(temp_dir.path(), 8080);
         // Note: setting ctrlc handler in tests may fail or proceed to src dir check
         if let Err(e) = res {
-            assert!(e.contains("src/ directory not found") || e.contains("Failed to set Ctrl-C handler"));
+            assert!(
+                e.contains("src/ directory not found")
+                    || e.contains("Failed to set Ctrl-C handler")
+            );
         }
     }
 }

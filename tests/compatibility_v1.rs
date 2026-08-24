@@ -17,12 +17,18 @@ fn test_workflow_ir_v1_deserialization_compatibility() {
         .unwrap()
         .build();
 
-    assert!(ir_built.is_ok(), "WorkflowBuilder failed to construct valid v1 IR");
+    assert!(
+        ir_built.is_ok(),
+        "WorkflowBuilder failed to construct valid v1 IR"
+    );
     let ir = ir_built.unwrap();
     let json_str = serde_json::to_string(&ir).expect("Serialization failed");
 
     let ir_deserialized: Result<WorkflowIR, _> = serde_json::from_str(&json_str);
-    assert!(ir_deserialized.is_ok(), "Failed to deserialize v1 WorkflowIR artifact");
+    assert!(
+        ir_deserialized.is_ok(),
+        "Failed to deserialize v1 WorkflowIR artifact"
+    );
     let ir_deserialized = ir_deserialized.unwrap();
     assert_eq!(ir_deserialized.nodes().len(), 2);
     assert_eq!(ir_deserialized.version(), 1);

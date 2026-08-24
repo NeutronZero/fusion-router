@@ -13,8 +13,8 @@ const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 /// these, every non-flag argument must canonicalize inside an allowed read
 /// directory (Law 10) unless `allow_unrestricted_args` is set.
 const FILE_READING_COMMANDS: &[&str] = &[
-    "cat", "head", "tail", "grep", "wc", "sort", "uniq", "cut", "sed", "awk",
-    "less", "more", "fold", "nl", "tac", "strings", "diff", "file",
+    "cat", "head", "tail", "grep", "wc", "sort", "uniq", "cut", "sed", "awk", "less", "more",
+    "fold", "nl", "tac", "strings", "diff", "file",
 ];
 
 /// 0-based positions of the positional (non-flag) arguments that are command
@@ -105,9 +105,7 @@ impl ShellCommandTool {
             let within = self
                 .allowed_read_directories
                 .iter()
-                .any(|dir| {
-                    canonicalize_within(std::path::Path::new(dir), &candidate).is_ok()
-                });
+                .any(|dir| canonicalize_within(std::path::Path::new(dir), &candidate).is_ok());
             if !within {
                 return Err(format!(
                     "argument '{}' for command '{}' is outside allowed read directories {:?}",
@@ -130,7 +128,14 @@ impl ShellCommandTool {
             .unwrap_or(&cmd_clean);
 
         const REJECTED_SHELLS: &[&str] = &[
-            "cmd", "cmd.exe", "sh", "bash", "powershell", "powershell.exe", "pwsh", "zsh",
+            "cmd",
+            "cmd.exe",
+            "sh",
+            "bash",
+            "powershell",
+            "powershell.exe",
+            "pwsh",
+            "zsh",
         ];
 
         if REJECTED_SHELLS.contains(&cmd_clean.as_str())
@@ -183,16 +188,20 @@ impl Tool for ShellCommandTool {
     }
 
     async fn execute(&self, args: Value) -> Result<Value, String> {
-        let cmd = args.get("command")
+        let cmd = args
+            .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing 'command' argument".to_string())?;
 
         self.validate_command(cmd)?;
 
-        let cmd_args: Vec<String> = args.get("args")
+        let cmd_args: Vec<String> = args
+            .get("args")
             .and_then(|v| v.as_array())
             .map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
             })
             .unwrap_or_default();
 
@@ -268,7 +277,11 @@ mod tests {
         )
     }
 
-    fn tool_with_dirs(commands: Vec<&str>, dirs: Vec<&str>, unrestricted: bool) -> ShellCommandTool {
+    fn tool_with_dirs(
+        commands: Vec<&str>,
+        dirs: Vec<&str>,
+        unrestricted: bool,
+    ) -> ShellCommandTool {
         ShellCommandTool::new(
             commands.into_iter().map(String::from).collect(),
             5,
@@ -280,9 +293,11 @@ mod tests {
     #[tokio::test]
     async fn test_shell_tool_blocked_command() {
         let tool = tool(vec!["ls", "echo"], 5);
-        let result = tool.execute(serde_json::json!({
-            "command": "rm -rf /"
-        })).await;
+        let result = tool
+            .execute(serde_json::json!({
+                "command": "rm -rf /"
+            }))
+            .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not in allowed list"));
     }
@@ -290,11 +305,28 @@ mod tests {
     #[tokio::test]
     async fn test_shell_tool_rejected_shell_interpreter_binaries() {
         let tool = tool(
-            vec!["cmd", "sh", "bash", "powershell", "powershell.exe", "pwsh", "zsh"],
+            vec![
+                "cmd",
+                "sh",
+                "bash",
+                "powershell",
+                "powershell.exe",
+                "pwsh",
+                "zsh",
+            ],
             5,
         );
 
-        for bin in &["cmd", "cmd.exe", "sh", "bash", "powershell", "powershell.exe", "pwsh", "zsh"] {
+        for bin in &[
+            "cmd",
+            "cmd.exe",
+            "sh",
+            "bash",
+            "powershell",
+            "powershell.exe",
+            "pwsh",
+            "zsh",
+        ] {
             let res = tool.validate_command(bin);
             assert!(res.is_err(), "binary '{}' should be rejected", bin);
             assert!(res.unwrap_err().contains("strictly prohibited"));
@@ -315,10 +347,12 @@ mod tests {
         // On non-windows, command execution completes successfully.
         #[cfg(not(windows))]
         {
-            let result = tool.execute(serde_json::json!({
-                "command": cmd,
-                "args": args
-            })).await;
+            let result = tool
+                .execute(serde_json::json!({
+                    "command": cmd,
+                    "args": args
+                }))
+                .await;
             assert!(result.is_ok());
             let val = result.unwrap();
             assert!(val["stdout"].as_str().unwrap_or("").contains("hello"));
@@ -363,7 +397,9 @@ mod tests {
         let tool = tool_with_dirs(vec!["cat"], vec!["."], false);
         let result = tool.validate_path_args("cat", &["../secret".to_string()]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("outside allowed read directories"));
+        assert!(result
+            .unwrap_err()
+            .contains("outside allowed read directories"));
     }
 
     #[test]
@@ -377,7 +413,10 @@ mod tests {
     fn test_cat_missing_path_rejected() {
         let tool = tool_with_dirs(vec!["cat"], vec!["."], false);
         let result = tool.validate_path_args("cat", &["no_such_file_anywhere".to_string()]);
-        assert!(result.is_err(), "non-canonicalizable paths must be rejected");
+        assert!(
+            result.is_err(),
+            "non-canonicalizable paths must be rejected"
+        );
     }
 
     #[test]
@@ -399,7 +438,10 @@ mod tests {
         let full = tmp.join(&unique);
         std::fs::write(&full, "x").unwrap();
         let result = tool_with_dirs(vec!["cat"], vec![tmp.to_str().unwrap()], false)
-            .validate_path_args("cat", &["-n".to_string(), full.to_str().unwrap().to_string()]);
+            .validate_path_args(
+                "cat",
+                &["-n".to_string(), full.to_str().unwrap().to_string()],
+            );
         let _ = std::fs::remove_file(&full);
         assert!(result.is_ok());
     }
@@ -407,22 +449,30 @@ mod tests {
     #[test]
     fn test_non_file_commands_not_path_checked() {
         let tool = tool_with_dirs(vec!["echo"], vec!["."], false);
-        assert!(tool.validate_path_args("echo", &["../anything".to_string()]).is_ok());
+        assert!(tool
+            .validate_path_args("echo", &["../anything".to_string()])
+            .is_ok());
     }
 
     #[test]
     fn test_unrestricted_args_skips_path_policy() {
         let tool = tool_with_dirs(vec!["cat"], vec!["."], true);
-        assert!(tool.validate_path_args("cat", &["../secret".to_string()]).is_ok());
+        assert!(tool
+            .validate_path_args("cat", &["../secret".to_string()])
+            .is_ok());
     }
 
     #[cfg(unix)]
     #[test]
     fn test_symlink_escape_rejected() {
         use std::os::unix::fs::symlink;
-        let root = std::env::temp_dir().join(format!("_fusion_shell_root_{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("_fusion_shell_root_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        let secret = root.parent().unwrap().join(format!("_fusion_shell_secret_{}", uuid::Uuid::new_v4()));
+        let secret = root
+            .parent()
+            .unwrap()
+            .join(format!("_fusion_shell_secret_{}", uuid::Uuid::new_v4()));
         std::fs::write(&secret, "s").unwrap();
         let link = root.join("link.txt");
         symlink(&secret, &link).unwrap();
@@ -437,16 +487,13 @@ mod tests {
     #[cfg(not(windows))]
     #[tokio::test]
     async fn test_shell_timeout_enforced() {
-        let tool = ShellCommandTool::new(
-            vec!["sleep".to_string()],
-            1,
-            vec![".".into()],
-            false,
-        );
-        let result = tool.execute(serde_json::json!({
-            "command": "sleep",
-            "args": ["5"]
-        })).await;
+        let tool = ShellCommandTool::new(vec!["sleep".to_string()], 1, vec![".".into()], false);
+        let result = tool
+            .execute(serde_json::json!({
+                "command": "sleep",
+                "args": ["5"]
+            }))
+            .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("timed out"));
     }
@@ -457,10 +504,12 @@ mod tests {
         let tool = tool(vec!["echo"], 5);
         let marker = format!("injected_marker_{}", uuid::Uuid::new_v4());
 
-        let result = tool.execute(serde_json::json!({
-            "command": "echo",
-            "args": [format!("a; touch {marker}")]
-        })).await;
+        let result = tool
+            .execute(serde_json::json!({
+                "command": "echo",
+                "args": [format!("a; touch {marker}")]
+            }))
+            .await;
 
         assert!(result.is_ok(), "execution failed: {:?}", result.err());
         let val = result.unwrap();

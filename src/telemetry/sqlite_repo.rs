@@ -14,7 +14,7 @@ pub struct SqliteEvidenceRepository {
 }
 
 impl SqliteEvidenceRepository {
-pub fn new(path: &str) -> anyhow::Result<Self> {
+    pub fn new(path: &str) -> anyhow::Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -72,7 +72,9 @@ pub fn new(path: &str) -> anyhow::Result<Self> {
                 })
                 .await;
                 match res {
-                    Ok(Ok(n)) if n > 0 => tracing::info!(deleted = n, "evidence retention pruned old records"),
+                    Ok(Ok(n)) if n > 0 => {
+                        tracing::info!(deleted = n, "evidence retention pruned old records")
+                    }
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) => tracing::warn!(error = %e, "evidence retention failed"),
                     Err(e) => tracing::warn!(error = %e, "evidence retention task panicked"),
@@ -141,7 +143,10 @@ impl EvidenceRepository for SqliteEvidenceRepository {
         }
         Ok(fresh)
     }
-    async fn get_model_stats(&self, window_hours: u32) -> anyhow::Result<Vec<ModelPerformanceStats>> {
+    async fn get_model_stats(
+        &self,
+        window_hours: u32,
+    ) -> anyhow::Result<Vec<ModelPerformanceStats>> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -171,7 +176,9 @@ impl EvidenceRepository for SqliteEvidenceRepository {
                 let total_requests: i64 = row.get(1)?;
                 let success_count: i64 = row.get(2)?;
                 let avg_latency_ms: f64 = row.get::<_, Option<f64>>(3)?.unwrap_or(0.0);
-                let avg_cost = crate::types::NanoUSD::from_nanos(row.get::<_, Option<i64>>(4)?.unwrap_or(0).max(0) as u64);
+                let avg_cost = crate::types::NanoUSD::from_nanos(
+                    row.get::<_, Option<i64>>(4)?.unwrap_or(0).max(0) as u64,
+                );
 
                 Ok(ModelPerformanceStats {
                     model,
@@ -202,8 +209,8 @@ impl SqliteEvidenceRepository {
             let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
             let tx = conn.unchecked_transaction()?;
 
-            let record_count: u64 = tx
-                .query_row("SELECT COUNT(*) FROM execution_records", [], |row| {
+            let record_count: u64 =
+                tx.query_row("SELECT COUNT(*) FROM execution_records", [], |row| {
                     row.get::<_, i64>(0)
                 })? as u64;
 
@@ -249,7 +256,10 @@ impl SqliteEvidenceRepository {
                 for row in rows {
                     let (model, avg_lat, avg_cost_nanos) = row?;
                     avg_latencies.insert(model.clone(), avg_lat);
-                    avg_costs.insert(model.clone(), crate::types::NanoUSD::from_nanos(avg_cost_nanos.max(0) as u64));
+                    avg_costs.insert(
+                        model.clone(),
+                        crate::types::NanoUSD::from_nanos(avg_cost_nanos.max(0) as u64),
+                    );
                     model_rankings.push(model);
                 }
             }
@@ -266,7 +276,6 @@ impl SqliteEvidenceRepository {
         })
         .await?
     }
-
 }
 
 #[cfg(test)]
@@ -316,24 +325,55 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_aggregation() {
-        let tmp = std::env::temp_dir()
-            .join(format!("fusion_es01_{}.db", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("fusion_es01_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
 
         let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
 
-        repo.record(make_record("gpt-4", "openai", Intent::Code, 100, 50, NanoUSD::from_nanos(10_000_000), true))
-            .await
-            .unwrap();
-        repo.record(make_record("gpt-4", "openai", Intent::Code, 200, 100, NanoUSD::from_nanos(20_000_000), false))
-            .await
-            .unwrap();
-        repo.record(make_record("claude-3", "anthropic", Intent::Debug, 150, 75, NanoUSD::from_nanos(15_000_000), true))
-            .await
-            .unwrap();
-        repo.record(make_record("claude-3", "anthropic", Intent::Debug, 50, 25, NanoUSD::from_nanos(5_000_000), true))
-            .await
-            .unwrap();
+        repo.record(make_record(
+            "gpt-4",
+            "openai",
+            Intent::Code,
+            100,
+            50,
+            NanoUSD::from_nanos(10_000_000),
+            true,
+        ))
+        .await
+        .unwrap();
+        repo.record(make_record(
+            "gpt-4",
+            "openai",
+            Intent::Code,
+            200,
+            100,
+            NanoUSD::from_nanos(20_000_000),
+            false,
+        ))
+        .await
+        .unwrap();
+        repo.record(make_record(
+            "claude-3",
+            "anthropic",
+            Intent::Debug,
+            150,
+            75,
+            NanoUSD::from_nanos(15_000_000),
+            true,
+        ))
+        .await
+        .unwrap();
+        repo.record(make_record(
+            "claude-3",
+            "anthropic",
+            Intent::Debug,
+            50,
+            25,
+            NanoUSD::from_nanos(5_000_000),
+            true,
+        ))
+        .await
+        .unwrap();
 
         let snap = repo.snapshot().await.unwrap();
 
@@ -357,8 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_cold_start() {
-        let tmp = std::env::temp_dir()
-            .join(format!("fusion_es02_{}.db", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("fusion_es02_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
 
         let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
@@ -375,12 +414,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_execution() {
-        let tmp = std::env::temp_dir()
-            .join(format!("fusion_tl01_{}.db", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("fusion_tl01_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
 
         let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
-        let rec = make_record("gpt-4", "openai", Intent::General, 100, 50, NanoUSD::from_nanos(10_000_000), true);
+        let rec = make_record(
+            "gpt-4",
+            "openai",
+            Intent::General,
+            100,
+            50,
+            NanoUSD::from_nanos(10_000_000),
+            true,
+        );
         repo.record(rec).await.unwrap();
 
         let snap = repo.snapshot().await.unwrap();
@@ -393,21 +439,44 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_model_stats() {
-        let tmp = std::env::temp_dir()
-            .join(format!("fusion_tl02_{}.db", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("fusion_tl02_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
 
         let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
 
-        repo.record(make_record("gpt-4", "openai", Intent::Code, 100, 50, NanoUSD::from_nanos(10_000_000), true))
-            .await
-            .unwrap();
-        repo.record(make_record("gpt-4", "openai", Intent::Debug, 200, 100, NanoUSD::from_nanos(20_000_000), false))
-            .await
-            .unwrap();
-        repo.record(make_record("claude-3", "anthropic", Intent::Code, 150, 75, NanoUSD::from_nanos(15_000_000), true))
-            .await
-            .unwrap();
+        repo.record(make_record(
+            "gpt-4",
+            "openai",
+            Intent::Code,
+            100,
+            50,
+            NanoUSD::from_nanos(10_000_000),
+            true,
+        ))
+        .await
+        .unwrap();
+        repo.record(make_record(
+            "gpt-4",
+            "openai",
+            Intent::Debug,
+            200,
+            100,
+            NanoUSD::from_nanos(20_000_000),
+            false,
+        ))
+        .await
+        .unwrap();
+        repo.record(make_record(
+            "claude-3",
+            "anthropic",
+            Intent::Code,
+            150,
+            75,
+            NanoUSD::from_nanos(15_000_000),
+            true,
+        ))
+        .await
+        .unwrap();
 
         let stats = repo.get_model_stats(0).await.unwrap();
 
@@ -424,4 +493,3 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
     }
 }
-

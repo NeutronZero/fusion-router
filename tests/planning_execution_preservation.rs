@@ -19,12 +19,24 @@ fn build_full_ir() -> fusion_ir::WorkflowIR {
     let kinds = [
         ("task_node", WorkflowNodeKind::Task, Some("CodeGeneration")),
         ("tool_node", WorkflowNodeKind::Tool, Some("WebSearch")),
-        ("retrieval_node", WorkflowNodeKind::Retrieval, Some("VectorSearch")),
+        (
+            "retrieval_node",
+            WorkflowNodeKind::Retrieval,
+            Some("VectorSearch"),
+        ),
         ("memory_node", WorkflowNodeKind::Memory, Some("MemoryStore")),
         ("review_node", WorkflowNodeKind::Review, Some("CodeReview")),
         ("judge_node", WorkflowNodeKind::Judge, Some("OutputJudge")),
-        ("security_node", WorkflowNodeKind::Security, Some("SecurityAudit")),
-        ("aggregation_node", WorkflowNodeKind::Aggregation, Some("Merger")),
+        (
+            "security_node",
+            WorkflowNodeKind::Security,
+            Some("SecurityAudit"),
+        ),
+        (
+            "aggregation_node",
+            WorkflowNodeKind::Aggregation,
+            Some("Merger"),
+        ),
         ("output_node", WorkflowNodeKind::Output, None),
     ];
 
@@ -93,11 +105,7 @@ fn invariant_semantic_capabilities_preserved() {
 
     for node in ir.nodes() {
         let expected_uuid = uuid_for(node.id());
-        let converted = types
-            .nodes
-            .iter()
-            .find(|n| n.id == expected_uuid)
-            .unwrap();
+        let converted = types.nodes.iter().find(|n| n.id == expected_uuid).unwrap();
 
         match node.capability() {
             Some(expected_cap) => {
@@ -106,13 +114,11 @@ fn invariant_semantic_capabilities_preserved() {
                     .get("capability")
                     .and_then(|v| v.as_str())
                     .unwrap_or_else(|| {
-                        panic!(
-                            "node {} should have capability in config",
-                            node.id()
-                        )
+                        panic!("node {} should have capability in config", node.id())
                     });
                 assert_eq!(
-                    config_cap, expected_cap,
+                    config_cap,
+                    expected_cap,
                     "capability mismatch on node {}",
                     node.id()
                 );
@@ -143,7 +149,8 @@ fn invariant_policy_versions_preserved() {
         "policy_applied must be preserved across compilation boundary"
     );
     assert_eq!(
-        types.metadata.estimated_cost, fusion_router::types::NanoUSD::from_nanos(123_000_000),
+        types.metadata.estimated_cost,
+        fusion_router::types::NanoUSD::from_nanos(123_000_000),
         "estimated_cost must be preserved"
     );
     assert_eq!(
@@ -169,7 +176,11 @@ fn invariant_semantic_kind_mapping_all_9_kinds() {
             WorkflowNodeKind::Retrieval,
             IRNodeKind::Generate,
         ),
-        ("memory_node", WorkflowNodeKind::Memory, IRNodeKind::Generate),
+        (
+            "memory_node",
+            WorkflowNodeKind::Memory,
+            IRNodeKind::Generate,
+        ),
         ("review_node", WorkflowNodeKind::Review, IRNodeKind::Review),
         ("judge_node", WorkflowNodeKind::Judge, IRNodeKind::Judge),
         (
@@ -251,10 +262,7 @@ fn invariant_config_passthrough_preserves_arbitrary_keys() {
         node.config.get("custom_key"),
         Some(&serde_json::json!({"nested": "value"}))
     );
-    assert_eq!(
-        node.config.get("priority"),
-        Some(&serde_json::json!(42))
-    );
+    assert_eq!(node.config.get("priority"), Some(&serde_json::json!(42)));
 
     // Capability must also be present.
     assert_eq!(

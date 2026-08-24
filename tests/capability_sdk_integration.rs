@@ -20,12 +20,10 @@ impl Plugin for EchoCapability {
 
 impl CapabilityPlugin for EchoCapability {
     fn capabilities(&self) -> Vec<CapabilityContract> {
-        vec![
-            CapabilityBuilder::new("echo.text")
-                .description("Echoes input text")
-                .version("0.1.0")
-                .finish()
-        ]
+        vec![CapabilityBuilder::new("echo.text")
+            .description("Echoes input text")
+            .version("0.1.0")
+            .finish()]
     }
 }
 
@@ -55,11 +53,7 @@ fn manifest_from_contract() {
 // Uses #[capability] macro (re-exported through SDK prelude) to verify
 // that generated code referencing ::fusion_capability_sdk::__reexports resolves.
 
-#[capability(
-    id = "echo.text",
-    description = "Echoes input text",
-    version = "0.1.0"
-)]
+#[capability(id = "echo.text", description = "Echoes input text", version = "0.1.0")]
 struct MacroEchoCapability;
 
 #[test]

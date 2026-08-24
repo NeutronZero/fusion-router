@@ -4,7 +4,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::config::error::ReloadError;
-use crate::config::manager::{ConfigSubscriber, ConfigSnapshot};
+use crate::config::manager::{ConfigSnapshot, ConfigSubscriber};
 use crate::config::ConnectorConfig;
 use crate::scheduler::connector_resolver::{Connector, ConnectorResolver};
 
@@ -28,11 +28,7 @@ impl ConfigSubscriber for ConnectorSubscriber {
         5
     }
 
-    fn prepare(
-        &self,
-        _old: &ConfigSnapshot,
-        new: &ConfigSnapshot,
-    ) -> Result<(), ReloadError> {
+    fn prepare(&self, _old: &ConfigSnapshot, new: &ConfigSnapshot) -> Result<(), ReloadError> {
         let mut candidates = HashMap::new();
 
         for (name, cfg) in &new.config.connectors {
@@ -50,10 +46,14 @@ impl ConfigSubscriber for ConnectorSubscriber {
             let old_names: Vec<String> = self.resolver.connector_names();
             let new_names: Vec<String> = candidates.keys().cloned().collect();
 
-            let added: Vec<&String> =
-                new_names.iter().filter(|n| !old_names.contains(n)).collect();
-            let removed: Vec<&String> =
-                old_names.iter().filter(|n| !new_names.contains(n)).collect();
+            let added: Vec<&String> = new_names
+                .iter()
+                .filter(|n| !old_names.contains(n))
+                .collect();
+            let removed: Vec<&String> = old_names
+                .iter()
+                .filter(|n| !new_names.contains(n))
+                .collect();
             let updated: Vec<&String> =
                 new_names.iter().filter(|n| old_names.contains(n)).collect();
 
@@ -75,15 +75,14 @@ impl ConfigSubscriber for ConnectorSubscriber {
     }
 }
 
-fn create_connector(
-    name: &str,
-    cfg: &ConnectorConfig,
-) -> Result<Arc<dyn Connector>, ReloadError> {
+fn create_connector(name: &str, cfg: &ConnectorConfig) -> Result<Arc<dyn Connector>, ReloadError> {
     match cfg.connector_type.as_str() {
         "http" => Ok(Arc::new(crate::connectors::http::HttpConnector::new())),
         "shell" => Ok(Arc::new(crate::connectors::shell::ShellConnector::new())),
         "github" => Ok(Arc::new(crate::connectors::github::GitHubConnector::new())),
-        "filesystem" => Ok(Arc::new(crate::connectors::filesystem::FilesystemConnector::new())),
+        "filesystem" => Ok(Arc::new(
+            crate::connectors::filesystem::FilesystemConnector::new(),
+        )),
         "browser" => Ok(Arc::new(crate::connectors::browser::BrowserConnector::new())),
         "mcp" => Ok(Arc::new(crate::connectors::mcp::McpConnector::new())),
         _ => Err(ReloadError::ConnectorError(format!(
@@ -98,7 +97,10 @@ mod tests {
     use super::*;
     use crate::config::AppConfig;
 
-    fn make_snapshot(generation: u64, connectors: HashMap<String, ConnectorConfig>) -> ConfigSnapshot {
+    fn make_snapshot(
+        generation: u64,
+        connectors: HashMap<String, ConnectorConfig>,
+    ) -> ConfigSnapshot {
         let config = AppConfig {
             unsafe_dev: false,
             server: crate::config::ServerConfig {
@@ -193,7 +195,9 @@ mod tests {
         let old = make_snapshot(1, HashMap::new());
         let new = make_snapshot(2, connectors);
 
-        subscriber.prepare(&old, &new).expect("prepare should succeed");
+        subscriber
+            .prepare(&old, &new)
+            .expect("prepare should succeed");
         subscriber.commit(2);
 
         let names = resolver.connector_names();
@@ -201,8 +205,3 @@ mod tests {
         assert_eq!(names[0], "http");
     }
 }
-
-
-
-
-

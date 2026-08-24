@@ -8,7 +8,7 @@
 use async_trait::async_trait;
 use fusion_core::NanoUSD;
 use fusion_kernel::resource::ResourceManager;
-use fusion_scheduler::{DefaultScheduler, Executor, ExecutionOutcome};
+use fusion_scheduler::{DefaultScheduler, ExecutionOutcome, Executor};
 use fusion_types::{
     ExecutionGraph, ExecutionNode, ExecutionNodeKind, NodeExecContext, NodeExecutionResult,
     NodeState, StrategyKind, ToolCall, Usage,
@@ -60,7 +60,9 @@ pub struct MockProvider {
 
 impl MockProvider {
     pub fn new(response_prefix: impl Into<String>) -> Self {
-        Self { response_prefix: response_prefix.into() }
+        Self {
+            response_prefix: response_prefix.into(),
+        }
     }
 
     pub fn default_response() -> Self {
@@ -244,10 +246,13 @@ impl ProviderExecutor {
                 },
             };
             if let Some(prompt) = system_prompt {
-                messages.insert(0, ChatMessage {
-                    role: "system".into(),
-                    content: prompt.to_string(),
-                });
+                messages.insert(
+                    0,
+                    ChatMessage {
+                        role: "system".into(),
+                        content: prompt.to_string(),
+                    },
+                );
             }
         }
 
@@ -260,10 +265,7 @@ impl ProviderExecutor {
                     for (parent_id, output) in &ctx.parent_outputs {
                         messages.push(ChatMessage {
                             role: "user".into(),
-                            content: format!(
-                                "Context from parent node {}:\n{}",
-                                parent_id, output
-                            ),
+                            content: format!("Context from parent node {}:\n{}", parent_id, output),
                         });
                     }
                 }
@@ -347,7 +349,9 @@ impl ProviderExecutor {
                         }
                         if let Some(ref usage) = result.usage {
                             total_tokens += usage.total_tokens as u64;
-                            total_cost = total_cost.saturating_add(NanoUSD::from_nanos(usage.total_tokens as u64 * 1_000));
+                            total_cost = total_cost.saturating_add(NanoUSD::from_nanos(
+                                usage.total_tokens as u64 * 1_000,
+                            ));
                         }
                     }
                     NodeState::Failed(msg) => {
@@ -401,7 +405,11 @@ impl ProviderExecutor {
     ///
     /// When a `resource_manager` is attached, every provider call is gated by
     /// `can_afford` and actual usage is recorded on success (Phase 4.6).
-    async fn roundtrip(&self, node: &ExecutionNode, request: ChatRequest) -> Result<ChatResponse, String> {
+    async fn roundtrip(
+        &self,
+        node: &ExecutionNode,
+        request: ChatRequest,
+    ) -> Result<ChatResponse, String> {
         let max_iterations = node
             .config
             .get("max_tool_iterations")
@@ -422,10 +430,17 @@ impl ProviderExecutor {
                     .get("budget_estimated_tokens")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
-                if !rm.can_afford(
-                    fusion_core::NanoUSD::checked_from_decimal_usd(&format!("{:.9}", estimated_cost)).unwrap_or(fusion_core::NanoUSD::ZERO),
-                    estimated_tokens,
-                ).await {
+                if !rm
+                    .can_afford(
+                        fusion_core::NanoUSD::checked_from_decimal_usd(&format!(
+                            "{:.9}",
+                            estimated_cost
+                        ))
+                        .unwrap_or(fusion_core::NanoUSD::ZERO),
+                        estimated_tokens,
+                    )
+                    .await
+                {
                     return Err(format!(
                         "budget exceeded for node {}: cannot afford estimated \
                          cost {estimated_cost} / tokens {estimated_tokens}",
@@ -437,7 +452,8 @@ impl ProviderExecutor {
             let response = self.provider.chat_completion(&request).await?;
             if let Some(rm) = &self.resource_manager {
                 if let Some(usage) = &response.usage {
-                    rm.record_usage(fusion_core::NanoUSD::ZERO, usage.total_tokens as u64).await;
+                    rm.record_usage(fusion_core::NanoUSD::ZERO, usage.total_tokens as u64)
+                        .await;
                 }
             }
             if response.tool_calls.is_empty() {
@@ -521,13 +537,20 @@ impl ProviderExecutor {
             });
         }
 
-        Err(format!("tool loop terminated unexpectedly for node {}", node.id))
+        Err(format!(
+            "tool loop terminated unexpectedly for node {}",
+            node.id
+        ))
     }
 }
 
 #[async_trait]
 impl Executor for ProviderExecutor {
-    async fn execute_node(&self, node: &ExecutionNode, ctx: &NodeExecContext) -> NodeExecutionResult {
+    async fn execute_node(
+        &self,
+        node: &ExecutionNode,
+        ctx: &NodeExecContext,
+    ) -> NodeExecutionResult {
         // Prebuilt subgraph (Phase 4.3): execute inner nodes in dependency
         // order, propagating outputs; the exit node's output is the result.
         if let Some(subgraph) = &node.subgraph {
@@ -589,7 +612,8 @@ impl Executor for ProviderExecutor {
                     if attempts > 0 && node.retry_policy.backoff_ms > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(
                             node.retry_policy.backoff_ms,
-                        )).await;
+                        ))
+                        .await;
                     }
                 }
             }
@@ -684,15 +708,18 @@ impl RuntimeEngine {
             allow_auto_exec: self.allow_auto_exec,
             resource_manager: self.resource_manager.clone(),
         };
-        self.scheduler.run(graph, &executor).await.map_err(|e| format!("{:?}", e))
+        self.scheduler
+            .run(graph, &executor)
+            .await
+            .map_err(|e| format!("{:?}", e))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fusion_types::*;
     use fusion_core::NanoUSD;
+    use fusion_types::*;
     use std::collections::HashMap;
 
     fn make_simple_graph() -> Arc<ExecutionGraph> {
@@ -706,7 +733,10 @@ mod tests {
                     kind: ExecutionNodeKind::LLMGenerate,
                     strategy: StrategyKind::Single,
                     model: "test-model".into(),
-                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config: std::collections::HashMap::new(),
                     subgraph: None,
@@ -716,13 +746,20 @@ mod tests {
                     kind: ExecutionNodeKind::LLMReview,
                     strategy: StrategyKind::Single,
                     model: "review-model".into(),
-                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config: std::collections::HashMap::new(),
                     subgraph: None,
                 },
             ],
-            edges: vec![ExecutionEdge { from: n1, to: n2, condition: None }],
+            edges: vec![ExecutionEdge {
+                from: n1,
+                to: n2,
+                condition: None,
+            }],
             metadata: GraphMetadata {
                 policy_version: 0,
                 estimated_cost: NanoUSD::from_nanos(10_000_000),
@@ -739,12 +776,15 @@ mod tests {
     #[tokio::test]
     async fn test_mock_provider_returns_fixed_response() {
         let provider = MockProvider::new("hello");
-        let response = provider.chat_completion(&ChatRequest {
-            model: "gpt-4".into(),
-            messages: vec![],
-            temperature: None,
-            max_tokens: None,
-        }).await.expect("chat");
+        let response = provider
+            .chat_completion(&ChatRequest {
+                model: "gpt-4".into(),
+                messages: vec![],
+                temperature: None,
+                max_tokens: None,
+            })
+            .await
+            .expect("chat");
         assert!(response.content.contains("hello"));
         assert!(response.usage.is_some());
     }
@@ -776,12 +816,18 @@ mod tests {
             kind: ExecutionNodeKind::LLMGenerate,
             strategy: StrategyKind::Single,
             model: "m".into(),
-            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
             fallback: None,
             config: HashMap::from([
-                ("messages".into(), serde_json::json!([
-                    {"role": "user", "content": "hello from config"}
-                ])),
+                (
+                    "messages".into(),
+                    serde_json::json!([
+                        {"role": "user", "content": "hello from config"}
+                    ]),
+                ),
                 ("temperature".into(), serde_json::json!(0.7)),
                 ("max_tokens".into(), serde_json::json!(512)),
             ]),
@@ -804,7 +850,10 @@ mod tests {
             kind: ExecutionNodeKind::LLMJudge,
             strategy: StrategyKind::Single,
             model: "judge".into(),
-            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
             fallback: None,
             config: HashMap::new(),
             subgraph: None,
@@ -832,18 +881,26 @@ mod tests {
             kind: ExecutionNodeKind::LLMJudge,
             strategy: StrategyKind::Single,
             model: "judge".into(),
-            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
             fallback: None,
-            config: HashMap::from([
-                ("messages".into(), serde_json::json!([
+            config: HashMap::from([(
+                "messages".into(),
+                serde_json::json!([
                     {"role": "system", "content": "custom system"}
-                ])),
-            ]),
+                ]),
+            )]),
             subgraph: None,
         };
         let request = executor.build_request(&node, &NodeExecContext::default());
         assert_eq!(
-            request.messages.iter().filter(|m| m.role == "system").count(),
+            request
+                .messages
+                .iter()
+                .filter(|m| m.role == "system")
+                .count(),
             1,
             "system prompt must be inserted exactly once"
         );
@@ -876,7 +933,9 @@ mod tests {
     #[async_trait]
     impl ChatProvider for FlakyProvider {
         async fn chat_completion(&self, request: &ChatRequest) -> Result<ChatResponse, String> {
-            let attempt = self.attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let attempt = self
+                .attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if attempt < self.fails_before_success {
                 Err(format!("boom attempt {attempt}"))
             } else {
@@ -901,7 +960,9 @@ mod tests {
 
     impl FailingProvider {
         pub fn new() -> Self {
-            Self { fallback_attempts: std::sync::Mutex::new(Vec::new()) }
+            Self {
+                fallback_attempts: std::sync::Mutex::new(Vec::new()),
+            }
         }
 
         pub fn fallback_attempts(&self) -> Vec<String> {
@@ -912,7 +973,10 @@ mod tests {
     #[async_trait]
     impl ChatProvider for FailingProvider {
         async fn chat_completion(&self, request: &ChatRequest) -> Result<ChatResponse, String> {
-            self.fallback_attempts.lock().unwrap().push(request.model.clone());
+            self.fallback_attempts
+                .lock()
+                .unwrap()
+                .push(request.model.clone());
             Err("always fails".into())
         }
     }
@@ -923,8 +987,14 @@ mod tests {
             kind: ExecutionNodeKind::LLMGenerate,
             strategy: StrategyKind::Single,
             model: model.into(),
-            retry_policy: RetryPolicy { max_retries: retries, backoff_ms: 0 },
-            fallback: fallback.map(|m| FallbackConfig { model: m.into(), provider: "fallback".into() }),
+            retry_policy: RetryPolicy {
+                max_retries: retries,
+                backoff_ms: 0,
+            },
+            fallback: fallback.map(|m| FallbackConfig {
+                model: m.into(),
+                provider: "fallback".into(),
+            }),
             config: HashMap::new(),
             subgraph: None,
         }
@@ -935,9 +1005,18 @@ mod tests {
         let provider = Arc::new(FlakyProvider::new(1));
         let executor = ProviderExecutor::new(provider.clone());
         let node = make_llm_node("primary-model", 2, None);
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
-        assert!(matches!(result.state, NodeState::Succeeded), "retry should succeed");
-        assert_eq!(provider.attempt_count(), 2, "2 attempts: 1 fail + 1 success");
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+        assert!(
+            matches!(result.state, NodeState::Succeeded),
+            "retry should succeed"
+        );
+        assert_eq!(
+            provider.attempt_count(),
+            2,
+            "2 attempts: 1 fail + 1 success"
+        );
     }
 
     #[tokio::test]
@@ -945,12 +1024,20 @@ mod tests {
         let provider = Arc::new(FailingProvider::new());
         let executor = ProviderExecutor::new(provider.clone());
         let node = make_llm_node("primary-model", 1, Some("fallback-model"));
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         // FailingProvider always fails, so node itself fails — but we must
         // verify the fallback model was attempted.
         let attempts = provider.fallback_attempts();
-        assert!(attempts.contains(&"primary-model".to_string()), "primary model must be tried");
-        assert!(attempts.contains(&"fallback-model".to_string()), "fallback model must be tried after retries");
+        assert!(
+            attempts.contains(&"primary-model".to_string()),
+            "primary model must be tried"
+        );
+        assert!(
+            attempts.contains(&"fallback-model".to_string()),
+            "fallback model must be tried after retries"
+        );
         assert_eq!(attempts.len(), 3, "1 primary + 1 retry + 1 fallback");
         assert!(matches!(result.state, NodeState::Failed(_)));
     }
@@ -960,9 +1047,15 @@ mod tests {
         let provider = Arc::new(FailingProvider::new());
         let executor = ProviderExecutor::new(provider.clone());
         let node = make_llm_node("primary-model", 1, None);
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         assert!(matches!(result.state, NodeState::Failed(_)));
-        assert_eq!(provider.fallback_attempts().len(), 2, "1 primary + 1 retry, no fallback");
+        assert_eq!(
+            provider.fallback_attempts().len(),
+            2,
+            "1 primary + 1 retry, no fallback"
+        );
     }
 
     #[tokio::test]
@@ -977,7 +1070,11 @@ mod tests {
                 if request.model == "fallback-model" {
                     Ok(ChatResponse {
                         content: "fallback answer".into(),
-                        usage: Some(Usage { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }),
+                        usage: Some(Usage {
+                            prompt_tokens: 1,
+                            completion_tokens: 1,
+                            total_tokens: 2,
+                        }),
                         tool_calls: vec![],
                         tool_results: Vec::new(),
                     })
@@ -987,13 +1084,23 @@ mod tests {
             }
         }
 
-        let provider = Arc::new(FallbackSucceedsProvider { attempts: std::sync::Mutex::new(Vec::new()) });
+        let provider = Arc::new(FallbackSucceedsProvider {
+            attempts: std::sync::Mutex::new(Vec::new()),
+        });
         let executor = ProviderExecutor::new(provider.clone());
         let node = make_llm_node("primary-model", 0, Some("fallback-model"));
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
-        assert!(matches!(result.state, NodeState::Succeeded), "fallback must save the node");
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+        assert!(
+            matches!(result.state, NodeState::Succeeded),
+            "fallback must save the node"
+        );
         let attempts = provider.attempts.lock().unwrap().clone();
-        assert_eq!(attempts, vec!["primary-model".to_string(), "fallback-model".to_string()]);
+        assert_eq!(
+            attempts,
+            vec!["primary-model".to_string(), "fallback-model".to_string()]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1014,7 +1121,10 @@ mod tests {
                     kind: ExecutionNodeKind::LLMGenerate,
                     strategy: StrategyKind::Single,
                     model: "member_a".into(),
-                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config: HashMap::new(),
                     subgraph: None,
@@ -1024,7 +1134,10 @@ mod tests {
                     kind: ExecutionNodeKind::LLMGenerate,
                     strategy: StrategyKind::Single,
                     model: "member_b".into(),
-                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config: HashMap::new(),
                     subgraph: None,
@@ -1034,15 +1147,26 @@ mod tests {
                     kind: ExecutionNodeKind::LLMJudge,
                     strategy: StrategyKind::Single,
                     model: "judge".into(),
-                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config: HashMap::new(),
                     subgraph: None,
                 },
             ],
             edges: vec![
-                ExecutionEdge { from: member_a, to: judge, condition: None },
-                ExecutionEdge { from: member_b, to: judge, condition: None },
+                ExecutionEdge {
+                    from: member_a,
+                    to: judge,
+                    condition: None,
+                },
+                ExecutionEdge {
+                    from: member_b,
+                    to: judge,
+                    condition: None,
+                },
             ],
             entry_node_id: member_a,
             exit_node_id: judge,
@@ -1052,7 +1176,10 @@ mod tests {
             kind: ExecutionNodeKind::LLMGenerate,
             strategy: StrategyKind::Consensus,
             model: "consensus".into(),
-            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
             fallback: None,
             config: HashMap::new(),
             subgraph: Some(subgraph),
@@ -1064,8 +1191,13 @@ mod tests {
     async fn test_subgraph_executes_members_and_judge() {
         let (node, spy) = make_consensus_subgraph();
         let executor = ProviderExecutor::new(spy.clone());
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
-        assert!(matches!(result.state, NodeState::Succeeded), "subgraph must succeed");
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+        assert!(
+            matches!(result.state, NodeState::Succeeded),
+            "subgraph must succeed"
+        );
         let output = result.output.expect("output");
         assert_eq!(output["subgraph"], true);
         assert!(!output["exit_node_id"].as_str().unwrap().is_empty());
@@ -1078,11 +1210,15 @@ mod tests {
         // Judge request must contain member context (parent output messages)
         let messages = &judge_request.messages;
         assert!(
-            messages.iter().any(|m| m.role == "user" && m.content.contains("Context from parent node")),
+            messages
+                .iter()
+                .any(|m| m.role == "user" && m.content.contains("Context from parent node")),
             "judge must see member outputs"
         );
         assert!(
-            messages.iter().any(|m| m.role == "system" && m.content.contains("judge")),
+            messages
+                .iter()
+                .any(|m| m.role == "system" && m.content.contains("judge")),
             "judge must have system prompt"
         );
     }
@@ -1091,10 +1227,18 @@ mod tests {
     async fn test_subgraph_failure_propagates() {
         let spy = Arc::new(FailingProvider::new());
         let (mut node, _) = make_consensus_subgraph();
-        node.subgraph.as_mut().unwrap().nodes[0].retry_policy = RetryPolicy { max_retries: 0, backoff_ms: 0 };
+        node.subgraph.as_mut().unwrap().nodes[0].retry_policy = RetryPolicy {
+            max_retries: 0,
+            backoff_ms: 0,
+        };
         let executor = ProviderExecutor::new(spy);
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
-        assert!(matches!(result.state, NodeState::Failed(_)), "subgraph member failure must propagate");
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+        assert!(
+            matches!(result.state, NodeState::Failed(_)),
+            "subgraph member failure must propagate"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1110,14 +1254,25 @@ mod tests {
             kind: ExecutionNodeKind::Gate,
             strategy: StrategyKind::Single,
             model: "policy.approval_gate".into(),
-            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
             fallback: None,
             config: HashMap::new(),
             subgraph: None,
         };
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
-        assert!(matches!(result.state, NodeState::Succeeded), "gate must succeed");
-        assert!(spy.last_request().is_none(), "gate must NOT call the LLM provider");
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+        assert!(
+            matches!(result.state, NodeState::Succeeded),
+            "gate must succeed"
+        );
+        assert!(
+            spy.last_request().is_none(),
+            "gate must NOT call the LLM provider"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1132,7 +1287,9 @@ mod tests {
 
     impl ToolingProvider {
         fn new() -> Self {
-            Self { calls: std::sync::Mutex::new(0) }
+            Self {
+                calls: std::sync::Mutex::new(0),
+            }
         }
 
         fn call_count(&self) -> usize {
@@ -1162,7 +1319,10 @@ mod tests {
                 });
             }
             Ok(ChatResponse {
-                content: format!("final answer (tool shim messages: {})", request.messages.len()),
+                content: format!(
+                    "final answer (tool shim messages: {})",
+                    request.messages.len()
+                ),
                 usage: Some(Usage {
                     prompt_tokens: 10,
                     completion_tokens: 5,
@@ -1197,7 +1357,10 @@ mod tests {
             kind: ExecutionNodeKind::LLMGenerate,
             strategy: StrategyKind::Single,
             model: "tool-model".into(),
-            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
             fallback: None,
             config,
             subgraph: None,
@@ -1208,7 +1371,9 @@ mod tests {
     async fn test_tool_calls_fail_closed_when_auto_exec_disabled() {
         let executor = ProviderExecutor::new(Arc::new(ToolingProvider::new()));
         let node = tool_node(HashMap::new());
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         assert!(
             matches!(&result.state, NodeState::Failed(msg) if msg.contains("auto-exec")),
             "tool calls with auto-exec disabled must fail closed, got {:?}",
@@ -1224,7 +1389,9 @@ mod tests {
             .with_tools(tools)
             .with_allow_auto_exec(true);
         let node = tool_node(HashMap::new());
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         assert!(
             matches!(&result.state, NodeState::Succeeded),
             "deny must not abort the node, got {:?}",
@@ -1232,7 +1399,11 @@ mod tests {
         );
         let output = result.output.expect("succeeded node must carry output");
         let entry = &output["tool_calls"][0];
-        assert_eq!(entry["executed"], serde_json::json!(false), "tool must not execute");
+        assert_eq!(
+            entry["executed"],
+            serde_json::json!(false),
+            "tool must not execute"
+        );
         assert_eq!(entry["error"], serde_json::json!(true));
         assert!(
             entry["reason"].as_str().unwrap().contains("allowlist"),
@@ -1243,13 +1414,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_not_registered_fails_closed() {
-        let executor = ProviderExecutor::new(Arc::new(ToolingProvider::new()))
-            .with_allow_auto_exec(true);
+        let executor =
+            ProviderExecutor::new(Arc::new(ToolingProvider::new())).with_allow_auto_exec(true);
         let node = tool_node(HashMap::from([(
             "tool_allowlist".to_string(),
             serde_json::json!(["echo"]),
         )]));
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         assert!(
             matches!(&result.state, NodeState::Succeeded),
             "unregistered-tool deny must not abort the node, got {:?}",
@@ -1257,7 +1430,11 @@ mod tests {
         );
         let output = result.output.expect("succeeded node must carry output");
         let entry = &output["tool_calls"][0];
-        assert_eq!(entry["executed"], serde_json::json!(false), "tool must not execute");
+        assert_eq!(
+            entry["executed"],
+            serde_json::json!(false),
+            "tool must not execute"
+        );
         assert_eq!(entry["error"], serde_json::json!(true));
         assert!(
             entry["reason"].as_str().unwrap().contains("not registered"),
@@ -1278,12 +1455,25 @@ mod tests {
             "tool_allowlist".to_string(),
             serde_json::json!(["echo"]),
         )]));
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
-        assert!(matches!(result.state, NodeState::Succeeded), "expected success, got {:?}", result.state);
-        assert_eq!(provider.call_count(), 2, "provider must be called twice (tool + final)");
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+        assert!(
+            matches!(result.state, NodeState::Succeeded),
+            "expected success, got {:?}",
+            result.state
+        );
+        assert_eq!(
+            provider.call_count(),
+            2,
+            "provider must be called twice (tool + final)"
+        );
         let output = result.output.expect("output");
         assert!(
-            output["content"].as_str().unwrap().contains("tool shim messages: 1"),
+            output["content"]
+                .as_str()
+                .unwrap()
+                .contains("tool shim messages: 1"),
             "second round-trip must include one tool-results message, got {:?}",
             output
         );
@@ -1295,7 +1485,10 @@ mod tests {
 
         #[async_trait]
         impl ChatProvider for InfiniteToolProvider {
-            async fn chat_completion(&self, _request: &ChatRequest) -> Result<ChatResponse, String> {
+            async fn chat_completion(
+                &self,
+                _request: &ChatRequest,
+            ) -> Result<ChatResponse, String> {
                 Ok(ChatResponse {
                     content: String::new(),
                     usage: None,
@@ -1318,7 +1511,9 @@ mod tests {
             "tool_allowlist".to_string(),
             serde_json::json!(["echo"]),
         )]));
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         assert!(
             matches!(&result.state, NodeState::Failed(msg) if msg.contains("max_tool_iterations")),
             "infinite tool loop must be capped, got {:?}",
@@ -1330,7 +1525,10 @@ mod tests {
     // Phase 4.6: runtime budget envelope (light)
     // -----------------------------------------------------------------------
 
-    fn make_chain_graph(models: &[&str], config: HashMap<String, serde_json::Value>) -> Arc<ExecutionGraph> {
+    fn make_chain_graph(
+        models: &[&str],
+        config: HashMap<String, serde_json::Value>,
+    ) -> Arc<ExecutionGraph> {
         let node_ids: Vec<uuid::Uuid> = models.iter().map(|_| uuid::Uuid::new_v4()).collect();
         Arc::new(ExecutionGraph {
             graph_id: uuid::Uuid::new_v4(),
@@ -1342,13 +1540,23 @@ mod tests {
                     kind: ExecutionNodeKind::LLMGenerate,
                     strategy: StrategyKind::Single,
                     model: (*model).into(),
-                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config: config.clone(),
                     subgraph: None,
                 })
                 .collect(),
-            edges: node_ids.windows(2).map(|w| ExecutionEdge { from: w[0], to: w[1], condition: None }).collect(),
+            edges: node_ids
+                .windows(2)
+                .map(|w| ExecutionEdge {
+                    from: w[0],
+                    to: w[1],
+                    condition: None,
+                })
+                .collect(),
             metadata: GraphMetadata {
                 policy_version: 0,
                 estimated_cost: NanoUSD::from_nanos(10_000_000),
@@ -1366,7 +1574,11 @@ mod tests {
     async fn test_tight_quota_fails_mid_run() {
         use fusion_kernel::resource::{ResourceManager, StubResourceManager};
 
-        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::ONE_DOLLAR, max_daily_tokens: 100 }));
+        let rm: Arc<dyn ResourceManager> =
+            Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota {
+                max_daily_cost: NanoUSD::ONE_DOLLAR,
+                max_daily_tokens: 100,
+            }));
         let provider: Arc<dyn ChatProvider> = Arc::new(MockProvider::default_response());
         let engine = RuntimeEngine::new(provider).with_resource_manager(rm.clone());
         // Each node estimates 75 tokens; the stub records 75 actual tokens.
@@ -1385,7 +1597,11 @@ mod tests {
     async fn test_generous_quota_allows_run() {
         use fusion_kernel::resource::{ResourceManager, StubResourceManager};
 
-        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::ONE_DOLLAR, max_daily_tokens: 10_000 }));
+        let rm: Arc<dyn ResourceManager> =
+            Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota {
+                max_daily_cost: NanoUSD::ONE_DOLLAR,
+                max_daily_tokens: 10_000,
+            }));
         let provider: Arc<dyn ChatProvider> = Arc::new(MockProvider::default_response());
         let engine = RuntimeEngine::new(provider).with_resource_manager(rm.clone());
         let graph = make_chain_graph(
@@ -1402,7 +1618,11 @@ mod tests {
     async fn test_budget_error_reports_node_and_quota() {
         use fusion_kernel::resource::{ResourceManager, StubResourceManager};
 
-        let rm: Arc<dyn ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::ONE_DOLLAR, max_daily_tokens: 100 }));
+        let rm: Arc<dyn ResourceManager> =
+            Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota {
+                max_daily_cost: NanoUSD::ONE_DOLLAR,
+                max_daily_tokens: 100,
+            }));
         let executor = ProviderExecutor::new(Arc::new(MockProvider::default_response()))
             .with_resource_manager(rm);
         let node = ExecutionNode {
@@ -1410,12 +1630,20 @@ mod tests {
             kind: ExecutionNodeKind::LLMGenerate,
             strategy: StrategyKind::Single,
             model: "n".into(),
-            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
             fallback: None,
-            config: HashMap::from([("budget_estimated_tokens".to_string(), serde_json::json!(101))]),
+            config: HashMap::from([(
+                "budget_estimated_tokens".to_string(),
+                serde_json::json!(101),
+            )]),
             subgraph: None,
         };
-        let result = executor.execute_node(&node, &NodeExecContext::default()).await;
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
         assert!(
             matches!(&result.state, NodeState::Failed(msg) if msg.contains("budget exceeded")),
             "quota miss must fail the node with a clear message, got {:?}",
@@ -1434,7 +1662,9 @@ mod tests {
 
     impl RecordingProvider {
         fn new() -> Self {
-            Self { requests: std::sync::Mutex::new(Vec::new()) }
+            Self {
+                requests: std::sync::Mutex::new(Vec::new()),
+            }
         }
 
         fn requests(&self) -> Vec<ChatRequest> {
@@ -1448,7 +1678,11 @@ mod tests {
             self.requests.lock().unwrap().push(request.clone());
             Ok(ChatResponse {
                 content: format!("mock response for model {}", request.model),
-                usage: Some(Usage { prompt_tokens: 50, completion_tokens: 25, total_tokens: 75 }),
+                usage: Some(Usage {
+                    prompt_tokens: 50,
+                    completion_tokens: 25,
+                    total_tokens: 75,
+                }),
                 tool_calls: vec![],
                 tool_results: Vec::new(),
             })
@@ -1468,15 +1702,25 @@ mod tests {
 
         let requests = provider.requests();
         assert_eq!(requests.len(), 3, "each of 3 nodes calls the provider once");
-        let n2 = requests.iter().find(|r| r.model == "n2").expect("n2 request");
-        let n3 = requests.iter().find(|r| r.model == "n3").expect("n3 request");
+        let n2 = requests
+            .iter()
+            .find(|r| r.model == "n2")
+            .expect("n2 request");
+        let n3 = requests
+            .iter()
+            .find(|r| r.model == "n3")
+            .expect("n3 request");
         assert!(
-            n2.messages.iter().any(|m| m.content.contains("mock response for model n1")),
+            n2.messages
+                .iter()
+                .any(|m| m.content.contains("mock response for model n1")),
             "n2 must see n1's output, got {:?}",
             n2.messages
         );
         assert!(
-            n3.messages.iter().any(|m| m.content.contains("mock response for model n2")),
+            n3.messages
+                .iter()
+                .any(|m| m.content.contains("mock response for model n2")),
             "n3 must see n2's output, got {:?}",
             n3.messages
         );
@@ -1495,7 +1739,10 @@ mod tests {
                 kind: ExecutionNodeKind::LLMGenerate,
                 strategy: StrategyKind::Single,
                 model: "flaky".into(),
-                retry_policy: RetryPolicy { max_retries: 3, backoff_ms: 0 },
+                retry_policy: RetryPolicy {
+                    max_retries: 3,
+                    backoff_ms: 0,
+                },
                 fallback: None,
                 config: HashMap::new(),
                 subgraph: None,
@@ -1533,7 +1780,10 @@ mod tests {
                     kind: ExecutionNodeKind::LLMGenerate,
                     strategy: StrategyKind::Single,
                     model: "gen".into(),
-                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config: HashMap::new(),
                     subgraph: None,
@@ -1543,7 +1793,10 @@ mod tests {
                     kind: ExecutionNodeKind::Gate,
                     strategy: StrategyKind::Single,
                     model: "policy.approval_gate".into(),
-                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config: HashMap::from([(
                         "approval_policy".to_string(),
@@ -1552,7 +1805,11 @@ mod tests {
                     subgraph: None,
                 },
             ],
-            edges: vec![ExecutionEdge { from: n1, to: n2, condition: None }],
+            edges: vec![ExecutionEdge {
+                from: n1,
+                to: n2,
+                condition: None,
+            }],
             metadata: GraphMetadata {
                 policy_version: 0,
                 estimated_cost: NanoUSD::ZERO,
@@ -1566,7 +1823,9 @@ mod tests {
         });
         let outcome = engine.run(graph).await.expect("run");
         assert!(outcome.success, "gate must not fail the run");
-        let last = provider.last_request().expect("generation node must call provider");
+        let last = provider
+            .last_request()
+            .expect("generation node must call provider");
         assert_eq!(last.model, "gen", "gate must NOT call the LLM provider");
     }
 
@@ -1596,8 +1855,14 @@ mod tests {
         assert!(outcome.success);
         let output = outcome.outputs.values().next().expect("one node output");
         assert_eq!(output.get("subgraph").and_then(|v| v.as_bool()), Some(true));
-        let exit_node_id = output.get("exit_node_id").and_then(|v| v.as_str()).unwrap_or("");
-        assert!(!exit_node_id.is_empty(), "judge (exit node) id must be present");
+        let exit_node_id = output
+            .get("exit_node_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            !exit_node_id.is_empty(),
+            "judge (exit node) id must be present"
+        );
     }
 
     /// Golden 4.7.5: tool deny-by-default — a tool call is never executed when
@@ -1611,7 +1876,9 @@ mod tests {
             HashMap::from([("tool_allowlist".to_string(), serde_json::json!(["echo"]))]),
         );
         let outcome = engine.run(graph).await.expect("run");
-        assert!(!outcome.success, "tool call must fail closed when auto-exec off");
+        assert!(
+            !outcome.success,
+            "tool call must fail closed when auto-exec off"
+        );
     }
 }
-

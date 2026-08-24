@@ -1,6 +1,6 @@
-use std::sync::Arc;
-use fusion_router::tools::ToolRegistry;
 use fusion_router::tools::builtin::CalculatorTool;
+use fusion_router::tools::ToolRegistry;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_tool_registry_injects_available_tools() {

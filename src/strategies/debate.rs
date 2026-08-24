@@ -1,14 +1,12 @@
 use std::time::Duration;
 
-use super::{Parallelism, StreamingMode, Strategy, StrategyDescriptor};
+use super::{Parallelism, Strategy, StrategyDescriptor, StreamingMode};
 use crate::compiler::context::CompilationContext;
 use crate::compiler::diagnostics::CompilerDiagnostic;
 use crate::compiler::ir::{
     BarrierFailurePolicy, PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind, ReducerMode, StrategyIR,
 };
-use crate::types::{
-    ArtifactKind, RetryPolicy,
-};
+use crate::types::{ArtifactKind, RetryPolicy};
 
 pub struct DebateStrategy {
     pub debaters: Vec<Box<dyn Strategy>>,
@@ -30,7 +28,11 @@ impl Strategy for DebateStrategy {
         }
     }
 
-    fn lower(&self, ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
+    fn lower(
+        &self,
+        ir: &StrategyIR,
+        ctx: &CompilationContext,
+    ) -> Result<PrimitiveGraph, CompilerDiagnostic> {
         let roles = match ir {
             StrategyIR::Debate { roles } => roles.clone(),
             _ => Vec::new(),
@@ -81,7 +83,11 @@ impl Strategy for DebateStrategy {
         });
 
         // Reducer node
-        let reducer_model = ctx.available_models.first().cloned().unwrap_or_else(|| "claude-opus-4".into());
+        let reducer_model = ctx
+            .available_models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "claude-opus-4".into());
         graph.add_node(PrimitiveNode {
             id: "reducer_debate".into(),
             kind: PrimitiveNodeKind::Reducer {
@@ -95,7 +101,6 @@ impl Strategy for DebateStrategy {
 
         Ok(graph)
     }
-
 }
 
 #[cfg(test)]
@@ -128,6 +133,9 @@ mod tests {
         let graph = strategy.lower(&ir, &ctx).unwrap();
         // 1 FanOut + 2 Debaters + 1 Barrier + 1 Reducer = 5 nodes
         assert_eq!(graph.nodes.len(), 5);
-        assert!(matches!(graph.nodes[0].kind, PrimitiveNodeKind::FanOut { count: 2 }));
+        assert!(matches!(
+            graph.nodes[0].kind,
+            PrimitiveNodeKind::FanOut { count: 2 }
+        ));
     }
 }

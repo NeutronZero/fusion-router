@@ -56,13 +56,18 @@ impl ChatProvider for ProviderWithHeaders {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Choice, ChatMessage};
+    use crate::types::{ChatMessage, Choice};
 
     struct DummyProvider;
     #[async_trait]
     impl ChatProvider for DummyProvider {
-        fn name(&self) -> &str { "dummy" }
-        async fn chat_completion(&self, _req: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        async fn chat_completion(
+            &self,
+            _req: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
             Ok(ChatCompletionResponse {
                 id: "dummy".into(),
                 object: "chat.completion".into(),
@@ -70,7 +75,10 @@ mod tests {
                 model: "dummy".into(),
                 choices: vec![Choice {
                     index: 0,
-                    message: ChatMessage { role: "assistant".into(), content: "ok".into() },
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: "ok".into(),
+                    },
                     finish_reason: "stop".into(),
                 }],
                 native_tool_calls: None,

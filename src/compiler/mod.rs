@@ -1,15 +1,15 @@
 pub mod context;
 pub mod diagnostics;
 pub mod ir;
-pub mod passes;
-pub mod registry;
 pub mod optimization;
+pub mod passes;
 pub mod pipeline;
+pub mod registry;
 
-use async_trait::async_trait;
-use std::sync::Arc;
 use crate::types::{CompilerError, ExecutionGraph, WorkflowIR};
+use async_trait::async_trait;
 pub use passes::CompilerPass;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait Compiler: Send + Sync {
@@ -18,7 +18,10 @@ pub trait Compiler: Send + Sync {
 
 pub struct DefaultCompiler {
     pub passes: Vec<Box<dyn CompilerPass + Send + Sync>>,
-    pub custom_compilers: std::collections::HashMap<String, std::sync::Arc<dyn fusion_compiler::strategy_compiler::StrategyCompiler>>,
+    pub custom_compilers: std::collections::HashMap<
+        String,
+        std::sync::Arc<dyn fusion_compiler::strategy_compiler::StrategyCompiler>,
+    >,
 }
 
 /// Phase 6 adapts a `fusion_compiler` pass onto the host-side `CompilerPass`
@@ -58,21 +61,36 @@ pub fn build_compiler(
         crate::resource::kernel_adapter::KernelResourceManager::new(resource_manager),
     );
     let mut passes: Vec<Box<dyn CompilerPass + Send + Sync>> = vec![
-        Box::new(CratesPass(Box::new(fusion_compiler::ConstraintValidationPass))),
-        Box::new(CratesPass(Box::new(fusion_compiler::ControlFlowValidationPass))),
-        Box::new(CratesPass(Box::new(fusion_compiler::strategy_compiler::StrategyLoweringPass::new()))),
-        Box::new(CratesPass(Box::new(fusion_compiler::DeadNodeEliminationPass))),
-        Box::new(CratesPass(Box::new(fusion_compiler::ModelResolutionPass::new(model_catalog)))),
-        Box::new(CratesPass(Box::new(fusion_compiler::BudgetOptimisationPass {
-            resource_manager: kernel_rm,
-        }))),
+        Box::new(CratesPass(Box::new(
+            fusion_compiler::ConstraintValidationPass,
+        ))),
+        Box::new(CratesPass(Box::new(
+            fusion_compiler::ControlFlowValidationPass,
+        ))),
+        Box::new(CratesPass(Box::new(
+            fusion_compiler::strategy_compiler::StrategyLoweringPass::new(),
+        ))),
+        Box::new(CratesPass(Box::new(
+            fusion_compiler::DeadNodeEliminationPass,
+        ))),
+        Box::new(CratesPass(Box::new(
+            fusion_compiler::ModelResolutionPass::new(model_catalog),
+        ))),
+        Box::new(CratesPass(Box::new(
+            fusion_compiler::BudgetOptimisationPass {
+                resource_manager: kernel_rm,
+            },
+        ))),
     ];
     if let Some(ir) = policy_ir {
-        passes.push(Box::new(CratesPass(Box::new(fusion_compiler::PolicyCompilerPass::new(
-            ir.into(),
-        )))));
+        passes.push(Box::new(CratesPass(Box::new(
+            fusion_compiler::PolicyCompilerPass::new(ir.into()),
+        ))));
     }
-    DefaultCompiler { passes, custom_compilers: std::collections::HashMap::new() }
+    DefaultCompiler {
+        passes,
+        custom_compilers: std::collections::HashMap::new(),
+    }
 }
 
 #[async_trait]
@@ -179,7 +197,9 @@ mod tests {
     fn test_compiler() -> DefaultCompiler {
         build_compiler(
             crate::types::ModelCatalog::default(),
-            Arc::new(crate::resource::DefaultResourceManager::new(permissive_quota())),
+            Arc::new(crate::resource::DefaultResourceManager::new(
+                permissive_quota(),
+            )),
             None,
         )
     }
@@ -187,7 +207,11 @@ mod tests {
     #[test]
     fn law1_build_compiler_contains_mandatory_passes_in_order() {
         let compiler = test_compiler();
-        let names: Vec<String> = compiler.passes.iter().map(|p| p.name().to_string()).collect();
+        let names: Vec<String> = compiler
+            .passes
+            .iter()
+            .map(|p| p.name().to_string())
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -200,7 +224,10 @@ mod tests {
             ],
             "mandatory pass pipeline must match the crates factory (Phase 6 alignment)"
         );
-        assert!(!compiler.passes.is_empty(), "Law 1: no execution path may use an empty pass pipeline");
+        assert!(
+            !compiler.passes.is_empty(),
+            "Law 1: no execution path may use an empty pass pipeline"
+        );
     }
 
     #[tokio::test]
@@ -241,17 +268,21 @@ mod tests {
 
         let compiler = build_compiler(
             crate::types::ModelCatalog::default(),
-            Arc::new(crate::resource::DefaultResourceManager::new(permissive_quota())),
+            Arc::new(crate::resource::DefaultResourceManager::new(
+                permissive_quota(),
+            )),
             Some(policy_ir),
         );
 
         let mut ir = test_ir();
-        ir.nodes[0].config.insert(
-            "capability".into(),
-            serde_json::json!("shell.exec"),
-        );
+        ir.nodes[0]
+            .config
+            .insert("capability".into(), serde_json::json!("shell.exec"));
         let result = compiler.compile(ir).await;
-        assert!(result.is_err(), "a matched Deny rule must block compilation through the factory");
+        assert!(
+            result.is_err(),
+            "a matched Deny rule must block compilation through the factory"
+        );
     }
 
     #[tokio::test]
@@ -270,7 +301,10 @@ mod tests {
             },
         };
         let result = compiler.compile(empty_ir).await;
-        assert!(result.is_err(), "ExecutionGraph construction is impossible after compiler failure");
+        assert!(
+            result.is_err(),
+            "ExecutionGraph construction is impossible after compiler failure"
+        );
     }
 
     #[tokio::test]
@@ -286,7 +320,10 @@ mod tests {
             .as_ref()
             .expect("consensus node must carry a compile-time subgraph (crates expansion)");
         assert_eq!(subgraph.nodes.len(), 4, "3 members + 1 judge");
-        assert_eq!(subgraph.nodes[3].kind, crate::types::ExecutionNodeKind::LLMJudge);
+        assert_eq!(
+            subgraph.nodes[3].kind,
+            crate::types::ExecutionNodeKind::LLMJudge
+        );
         assert_eq!(subgraph.exit_node_id, subgraph.nodes[3].id);
     }
 

@@ -50,7 +50,11 @@ impl PluginRegistry {
         self.providers.insert(name.to_string(), provider);
     }
 
-    pub fn register_strategy(&mut self, kind: crate::types::StrategyKind, strategy: Box<dyn Strategy + Send + Sync>) {
+    pub fn register_strategy(
+        &mut self,
+        kind: crate::types::StrategyKind,
+        strategy: Box<dyn Strategy + Send + Sync>,
+    ) {
         tracing::info!(strategy = ?kind, "registered plugin strategy");
         self.strategies.insert(kind, strategy);
     }

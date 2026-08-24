@@ -143,7 +143,10 @@ mod tests {
     #[test]
     fn test_deny_beats_approval() {
         let ir = PolicyIR {
-            rules: vec![approval_rule("a1", "shell.exec", 100), deny_rule("d1", "shell.exec", 1)],
+            rules: vec![
+                approval_rule("a1", "shell.exec", 100),
+                deny_rule("d1", "shell.exec", 1),
+            ],
         };
         let rule = PolicyPrecedenceEngine::evaluate_matching_rule(&ir, "shell.exec").unwrap();
         assert_eq!(rule.effect, PolicyEffect::Deny);

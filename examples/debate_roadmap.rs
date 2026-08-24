@@ -8,11 +8,18 @@ use fusion_router::providers::ChatProvider;
 use fusion_router::strategies::debate::DebateStrategy;
 use fusion_router::strategies::single::SingleStrategy;
 use fusion_router::strategies::Strategy;
-use fusion_router::types::{ChatCompletionRequest, ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind};
+use fusion_router::types::{
+    ChatCompletionRequest, ExecutionNode, ExecutionNodeKind, RetryPolicy, StrategyKind,
+};
 
 fn roadmap_context() -> String {
-    std::fs::read_to_string(format!("{}/docs/repair-phase0-scope.md", env!("CARGO_MANIFEST_DIR")))
-        .unwrap_or_else(|_| "FusionRouter v0.9 roadmap: full roadmap document is unavailable.".to_string())
+    std::fs::read_to_string(format!(
+        "{}/docs/repair-phase0-scope.md",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap_or_else(|_| {
+        "FusionRouter v0.9 roadmap: full roadmap document is unavailable.".to_string()
+    })
 }
 
 struct Role {
@@ -27,9 +34,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("OPENROUTER_API_KEY must be set")
         .trim()
         .to_string();
-    let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(
-        OpenRouterProvider::new(api_key),
-    );
+    let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(OpenRouterProvider::new(api_key));
 
     let roles = vec![
         Role {
@@ -93,11 +98,14 @@ async fn main() -> anyhow::Result<()> {
 
     let ctx = CompilationContext::new();
     let ir = StrategyIR::Debate {
-        roles: roles.iter().map(|r| DebateRole {
-            name: r.name.to_string(),
-            model: r.model.to_string(),
-            stance: r.system_prompt.to_string(),
-        }).collect(),
+        roles: roles
+            .iter()
+            .map(|r| DebateRole {
+                name: r.name.to_string(),
+                model: r.model.to_string(),
+                stance: r.system_prompt.to_string(),
+            })
+            .collect(),
     };
 
     let graph = debate_strategy.lower(&ir, &ctx).expect("lowering failed");
@@ -108,7 +116,10 @@ async fn main() -> anyhow::Result<()> {
         kind: ExecutionNodeKind::LLMGenerate,
         strategy: StrategyKind::Debate,
         model: "default".into(),
-        retry_policy: RetryPolicy { max_retries: 2, backoff_ms: 1000 },
+        retry_policy: RetryPolicy {
+            max_retries: 2,
+            backoff_ms: 1000,
+        },
         fallback: None,
         config: std::collections::HashMap::new(),
         subgraph: None,
@@ -126,8 +137,18 @@ async fn main() -> anyhow::Result<()> {
     println!("Node Count:        {}", graph.nodes.len());
     println!("Edge Count:        {}", graph.edges.len());
     println!("ExecutionGraph Node Count: {}", execution_graph.nodes.len());
-    println!("ExecutionGraph Primitive Hash: 0x{:x}", execution_graph.primitive_graph_hash);
-    println!("OptimizationPass:  {} (no passes registered)", OptimizationPipeline::new().run(graph.clone()).ok().map(|_| "idempotent").unwrap_or("none"));
+    println!(
+        "ExecutionGraph Primitive Hash: 0x{:x}",
+        execution_graph.primitive_graph_hash
+    );
+    println!(
+        "OptimizationPass:  {} (no passes registered)",
+        OptimizationPipeline::new()
+            .run(graph.clone())
+            .ok()
+            .map(|_| "idempotent")
+            .unwrap_or("none")
+    );
     println!();
 
     println!("--- PrimitiveGraph (Mermaid) ---");
@@ -167,15 +188,20 @@ async fn main() -> anyhow::Result<()> {
         };
 
         let resp = provider.chat_completion(&request).await?;
-        let content = resp.choices.first()
+        let content = resp
+            .choices
+            .first()
             .map(|c| c.message.content.clone())
             .unwrap_or_default();
 
-        println!("{}\n", if content.len() > 500 {
-            format!("{}...\n[{} chars total]", &content[..500], content.len())
-        } else {
-            content.clone()
-        });
+        println!(
+            "{}\n",
+            if content.len() > 500 {
+                format!("{}...\n[{} chars total]", &content[..500], content.len())
+            } else {
+                content.clone()
+            }
+        );
 
         responses.push((role.name.to_string(), content));
     }
@@ -189,7 +215,8 @@ async fn main() -> anyhow::Result<()> {
         Below are four perspectives. Synthesize them into a coherent assessment: \
         identify where the perspectives converge, where they conflict, and what the \
         recommended actions should be. Provide a ranked list of priorities.\n\n{}",
-        responses.iter()
+        responses
+            .iter()
             .map(|(name, content)| format!("<<<{}>>>\n{}", name, content))
             .collect::<Vec<_>>()
             .join("\n\n---\n\n")
@@ -197,12 +224,10 @@ async fn main() -> anyhow::Result<()> {
 
     let judge_request = ChatCompletionRequest {
         model: "deepseek/deepseek-chat".to_string(),
-        messages: vec![
-            fusion_router::types::ChatMessage {
-                role: "user".to_string(),
-                content: synthesis_prompt,
-            },
-        ],
+        messages: vec![fusion_router::types::ChatMessage {
+            role: "user".to_string(),
+            content: synthesis_prompt,
+        }],
         stream: false,
         temperature: Some(0.5),
         max_tokens: Some(4096),
@@ -214,7 +239,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let synthesis = provider.chat_completion(&judge_request).await?;
-    let synthesis_content = synthesis.choices.first()
+    let synthesis_content = synthesis
+        .choices
+        .first()
         .map(|c| c.message.content.clone())
         .unwrap_or_default();
 
@@ -232,7 +259,10 @@ async fn main() -> anyhow::Result<()> {
     println!("\n--- Provenance ---");
     println!("Graph Hash:        0x{:x}", hash);
     println!("PrimitiveGraph v{}", PRIMITIVE_GRAPH_VERSION);
-    println!("ExecutionGraph Primitive Hash: 0x{:x}", execution_graph.primitive_graph_hash);
+    println!(
+        "ExecutionGraph Primitive Hash: 0x{:x}",
+        execution_graph.primitive_graph_hash
+    );
     println!("OptimizationPass:  None (idempotent)");
     println!("Artifact:          Debate");
 

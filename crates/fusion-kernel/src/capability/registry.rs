@@ -106,9 +106,8 @@ impl CapabilityRegistry for InMemoryCapabilityRegistry {
             return Err(RegistryError::DuplicateId(contract.id.clone()));
         }
         for perm in &contract.permissions {
-            perm.validate().map_err(|e| {
-                RegistryError::InvalidContract(format!("invalid permission: {e}"))
-            })?;
+            perm.validate()
+                .map_err(|e| RegistryError::InvalidContract(format!("invalid permission: {e}")))?;
         }
         self.contracts.insert(contract.id.clone(), contract);
         Ok(())

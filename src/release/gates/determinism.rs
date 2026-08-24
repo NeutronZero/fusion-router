@@ -1,7 +1,7 @@
+use crate::release::gate::*;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use std::time::Instant;
-use crate::release::gate::*;
 
 pub struct DeterminismGateConfig {
     pub fixture_root: PathBuf,
@@ -20,7 +20,9 @@ pub trait DeterminismBackend: Send + Sync {
 pub struct RealDeterminismBackend;
 
 impl DeterminismBackend for RealDeterminismBackend {
-    fn name(&self) -> &'static str { "real" }
+    fn name(&self) -> &'static str {
+        "real"
+    }
 
     fn compile_fixture(&self, ctx: &DeterminismContext) -> Result<u64, GateError> {
         use std::hash::{Hash, Hasher};
@@ -37,14 +39,20 @@ impl DeterminismBackend for RealDeterminismBackend {
             model_catalog: Default::default(),
             telemetry: Default::default(),
         };
-        let ir = planner.plan(&request).map_err(|e| GateError::ExecutionFailed(format!("planning failed: {e:?}")))?;
-        let types_ir = crate::ir::adapter::workflow_to_types(&ir)
-            .map_err(GateError::ExecutionFailed)?;
+        let ir = planner
+            .plan(&request)
+            .map_err(|e| GateError::ExecutionFailed(format!("planning failed: {e:?}")))?;
+        let types_ir =
+            crate::ir::adapter::workflow_to_types(&ir).map_err(GateError::ExecutionFailed)?;
         let graph = fusion_compiler::lower_to_graph(types_ir)
             .map_err(|e| GateError::ExecutionFailed(format!("compilation failed: {e:?}")))?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        ir.to_canonical_json().map_err(|e| GateError::ExecutionFailed(e.to_string()))?.hash(&mut hasher);
-        serde_json::to_string(&graph).map_err(|e| GateError::ExecutionFailed(e.to_string()))?.hash(&mut hasher);
+        ir.to_canonical_json()
+            .map_err(|e| GateError::ExecutionFailed(e.to_string()))?
+            .hash(&mut hasher);
+        serde_json::to_string(&graph)
+            .map_err(|e| GateError::ExecutionFailed(e.to_string()))?
+            .hash(&mut hasher);
         Ok(hasher.finish())
     }
 }
@@ -72,8 +80,12 @@ impl DeterminismGate {
 
 #[async_trait]
 impl ReleaseGate for DeterminismGate {
-    fn id(&self) -> GateId { GateId::Determinism1 }
-    fn name(&self) -> &'static str { "Planner Determinism" }
+    fn id(&self) -> GateId {
+        GateId::Determinism1
+    }
+    fn name(&self) -> &'static str {
+        "Planner Determinism"
+    }
     fn description(&self) -> &'static str {
         "Verify same planner input produces identical execution graphs"
     }
@@ -99,7 +111,10 @@ impl ReleaseGate for DeterminismGate {
         let summary = if passed {
             format!("Deterministic: hash = {:016x}", hash1)
         } else {
-            format!("Non-deterministic: hash1 = {:016x}, hash2 = {:016x}", hash1, hash2)
+            format!(
+                "Non-deterministic: hash1 = {:016x}, hash2 = {:016x}",
+                hash1, hash2
+            )
         };
         GateExecution::Success(GateResult {
             gate_id: GateId::Determinism1,
@@ -142,13 +157,21 @@ impl MockDeterminismBackend {
 
 #[cfg(test)]
 impl DeterminismBackend for MockDeterminismBackend {
-    fn name(&self) -> &'static str { "mock" }
+    fn name(&self) -> &'static str {
+        "mock"
+    }
     fn compile_fixture(&self, _ctx: &DeterminismContext) -> Result<u64, GateError> {
         if self.should_error {
             return Err(GateError::ExecutionFailed("mock error".into()));
         }
-        let count = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if count == 0 { Ok(self.hash1) } else { Ok(self.hash2) }
+        let count = self
+            .call_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if count == 0 {
+            Ok(self.hash1)
+        } else {
+            Ok(self.hash2)
+        }
     }
 }
 
@@ -160,7 +183,9 @@ mod tests {
     fn test_determinism_gate_metadata() {
         let gate = DeterminismGate::new(
             Box::new(MockDeterminismBackend::new(1, 1)),
-            DeterminismGateConfig { fixture_root: PathBuf::from(".") },
+            DeterminismGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let meta = gate.metadata();
         assert_eq!(meta.id, GateId::Determinism1);
@@ -172,7 +197,9 @@ mod tests {
     async fn test_determinism_gate_identical_hashes() {
         let gate = DeterminismGate::new(
             Box::new(MockDeterminismBackend::new(42, 42)),
-            DeterminismGateConfig { fixture_root: PathBuf::from(".") },
+            DeterminismGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -192,7 +219,9 @@ mod tests {
     async fn test_determinism_gate_different_hashes() {
         let gate = DeterminismGate::new(
             Box::new(MockDeterminismBackend::new(42, 99)),
-            DeterminismGateConfig { fixture_root: PathBuf::from(".") },
+            DeterminismGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -211,7 +240,9 @@ mod tests {
                 should_error: true,
                 call_count: std::sync::atomic::AtomicU32::new(0),
             }),
-            DeterminismGateConfig { fixture_root: PathBuf::from(".") },
+            DeterminismGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),

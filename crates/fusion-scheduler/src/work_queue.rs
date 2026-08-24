@@ -1,7 +1,7 @@
 //! WorkQueue — maintains DAG execution state for topological scheduling.
 
-use std::collections::{HashMap, HashSet};
 use fusion_types::*;
+use std::collections::{HashMap, HashSet};
 
 pub struct WorkQueue {
     graph: std::sync::Arc<ExecutionGraph>,
@@ -24,10 +24,13 @@ impl WorkQueue {
     pub fn new(graph: impl Into<std::sync::Arc<ExecutionGraph>>) -> Self {
         let graph = graph.into();
         let n_nodes = graph.nodes.len();
-        let mut outgoing: HashMap<uuid::Uuid, Vec<(uuid::Uuid, Option<String>)>> = HashMap::with_capacity(n_nodes);
+        let mut outgoing: HashMap<uuid::Uuid, Vec<(uuid::Uuid, Option<String>)>> =
+            HashMap::with_capacity(n_nodes);
         let mut incoming: HashMap<uuid::Uuid, Vec<uuid::Uuid>> = HashMap::with_capacity(n_nodes);
-        let mut outgoing_edges_map: HashMap<uuid::Uuid, Vec<ExecutionEdge>> = HashMap::with_capacity(n_nodes);
-        let mut incoming_edges_map: HashMap<uuid::Uuid, Vec<ExecutionEdge>> = HashMap::with_capacity(n_nodes);
+        let mut outgoing_edges_map: HashMap<uuid::Uuid, Vec<ExecutionEdge>> =
+            HashMap::with_capacity(n_nodes);
+        let mut incoming_edges_map: HashMap<uuid::Uuid, Vec<ExecutionEdge>> =
+            HashMap::with_capacity(n_nodes);
         let mut total_incoming: HashMap<uuid::Uuid, usize> = HashMap::with_capacity(n_nodes);
 
         let mut loop_node_ids: HashSet<uuid::Uuid> = HashSet::new();
@@ -43,10 +46,19 @@ impl WorkQueue {
         }
 
         for edge in &graph.edges {
-            outgoing.entry(edge.from).or_default().push((edge.to, edge.condition.clone()));
+            outgoing
+                .entry(edge.from)
+                .or_default()
+                .push((edge.to, edge.condition.clone()));
             incoming.entry(edge.to).or_default().push(edge.from);
-            outgoing_edges_map.entry(edge.from).or_default().push(edge.clone());
-            incoming_edges_map.entry(edge.to).or_default().push(edge.clone());
+            outgoing_edges_map
+                .entry(edge.from)
+                .or_default()
+                .push(edge.clone());
+            incoming_edges_map
+                .entry(edge.to)
+                .or_default()
+                .push(edge.clone());
             if !loop_node_ids.contains(&edge.to) {
                 *total_incoming.entry(edge.to).or_insert(0) += 1;
             }
@@ -83,14 +95,17 @@ impl WorkQueue {
     }
 
     fn try_activate_downstream(&mut self, from: uuid::Uuid) {
-        let Some(edges) = self.outgoing.get(&from).cloned() else { return };
+        let Some(edges) = self.outgoing.get(&from).cloned() else {
+            return;
+        };
         for (to, _condition) in &edges {
             if !self.activated_edges.contains(&(from, *to)) {
                 self.activated_edges.insert((from, *to));
                 let satisfied = self.satisfied_incoming.entry(*to).or_insert(0);
                 *satisfied += 1;
                 let total = self.total_incoming.get(to).copied().unwrap_or(0);
-                if *satisfied == total && !self.completed.contains(to) && !self.failed.contains(to) {
+                if *satisfied == total && !self.completed.contains(to) && !self.failed.contains(to)
+                {
                     self.ready.insert(*to);
                 }
             }
@@ -115,7 +130,9 @@ impl WorkQueue {
             }
         }
 
-        let available = self.max_concurrent_nodes.saturating_sub(self.in_progress.len());
+        let available = self
+            .max_concurrent_nodes
+            .saturating_sub(self.in_progress.len());
         if result.len() > available {
             result.truncate(available);
         }
@@ -167,11 +184,19 @@ impl WorkQueue {
             self.failed.remove(id);
             self.ready.remove(id);
             let total = self.total_incoming.get(id).copied().unwrap_or(0);
-            let satisfied: usize = self.incoming.get(id).map(|sources| {
-                sources.iter()
-                    .filter(|from| self.completed.contains(from) && self.activated_edges.contains(&(**from, *id)))
-                    .count()
-            }).unwrap_or(0);
+            let satisfied: usize = self
+                .incoming
+                .get(id)
+                .map(|sources| {
+                    sources
+                        .iter()
+                        .filter(|from| {
+                            self.completed.contains(from)
+                                && self.activated_edges.contains(&(**from, *id))
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
             self.satisfied_incoming.insert(*id, satisfied);
             if satisfied == total && satisfied > 0 {
                 self.ready.insert(*id);
@@ -200,29 +225,39 @@ impl WorkQueue {
     }
 
     pub fn outgoing_edges(&self, node_id: uuid::Uuid) -> &[ExecutionEdge] {
-        self.outgoing_edges_map.get(&node_id).map(|v| v.as_slice()).unwrap_or(&[])
+        self.outgoing_edges_map
+            .get(&node_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     pub fn incoming_edges(&self, node_id: uuid::Uuid) -> &[ExecutionEdge] {
-        self.incoming_edges_map.get(&node_id).map(|v| v.as_slice()).unwrap_or(&[])
+        self.incoming_edges_map
+            .get(&node_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     pub fn has_loop_back_edge(&self, node_id: uuid::Uuid) -> bool {
-        self.outgoing.get(&node_id)
-            .map(|edges| edges.iter().any(|(_, cond)| cond.as_deref() == Some("loop")))
+        self.outgoing
+            .get(&node_id)
+            .map(|edges| {
+                edges
+                    .iter()
+                    .any(|(_, cond)| cond.as_deref() == Some("loop"))
+            })
             .unwrap_or(false)
     }
 
     /// Returns the loop node reached from `node_id` via a `"loop"`-conditioned
     /// edge, if any (used to re-arm a loop body after an iteration).
     pub fn loop_back_target(&self, node_id: uuid::Uuid) -> Option<uuid::Uuid> {
-        self.outgoing.get(&node_id)
-            .and_then(|edges| {
-                edges
-                    .iter()
-                    .find(|(_, cond)| cond.as_deref() == Some("loop"))
-                    .map(|(to, _)| *to)
-            })
+        self.outgoing.get(&node_id).and_then(|edges| {
+            edges
+                .iter()
+                .find(|(_, cond)| cond.as_deref() == Some("loop"))
+                .map(|(to, _)| *to)
+        })
     }
 
     /// Re-arms a node for execution (used to re-run a loop node).
@@ -245,7 +280,10 @@ mod tests {
             kind,
             strategy: StrategyKind::Single,
             model: "test".into(),
-            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
             fallback: None,
             config: HashMap::new(),
             subgraph: None,
@@ -275,7 +313,10 @@ mod tests {
         let n1 = uuid::Uuid::new_v4();
         let n2 = uuid::Uuid::new_v4();
         let graph = make_graph(
-            vec![make_node(n1, ExecutionNodeKind::LLMGenerate), make_node(n2, ExecutionNodeKind::LLMGenerate)],
+            vec![
+                make_node(n1, ExecutionNodeKind::LLMGenerate),
+                make_node(n2, ExecutionNodeKind::LLMGenerate),
+            ],
             vec![],
         );
         let queue = WorkQueue::new(graph);
@@ -288,8 +329,15 @@ mod tests {
         let n1 = uuid::Uuid::new_v4();
         let n2 = uuid::Uuid::new_v4();
         let graph = make_graph(
-            vec![make_node(n1, ExecutionNodeKind::LLMGenerate), make_node(n2, ExecutionNodeKind::LLMGenerate)],
-            vec![ExecutionEdge { from: n1, to: n2, condition: None }],
+            vec![
+                make_node(n1, ExecutionNodeKind::LLMGenerate),
+                make_node(n2, ExecutionNodeKind::LLMGenerate),
+            ],
+            vec![ExecutionEdge {
+                from: n1,
+                to: n2,
+                condition: None,
+            }],
         );
         let mut queue = WorkQueue::new(graph);
         let states = HashMap::new();
@@ -318,8 +366,16 @@ mod tests {
                 make_node(n3, ExecutionNodeKind::LLMGenerate),
             ],
             vec![
-                ExecutionEdge { from: n1, to: n3, condition: None },
-                ExecutionEdge { from: n2, to: n3, condition: None },
+                ExecutionEdge {
+                    from: n1,
+                    to: n3,
+                    condition: None,
+                },
+                ExecutionEdge {
+                    from: n2,
+                    to: n3,
+                    condition: None,
+                },
             ],
         );
         let mut queue = WorkQueue::new(graph);
@@ -345,7 +401,11 @@ mod tests {
                 make_node(n1, ExecutionNodeKind::Conditional),
                 make_node(n2, ExecutionNodeKind::LLMGenerate),
             ],
-            vec![ExecutionEdge { from: n1, to: n2, condition: Some("if_valid".into()) }],
+            vec![ExecutionEdge {
+                from: n1,
+                to: n2,
+                condition: Some("if_valid".into()),
+            }],
         );
         let mut queue = WorkQueue::new(graph);
         let states = HashMap::new();
@@ -366,7 +426,10 @@ mod tests {
         let n1 = uuid::Uuid::new_v4();
         let n2 = uuid::Uuid::new_v4();
         let graph = make_graph(
-            vec![make_node(n1, ExecutionNodeKind::LLMGenerate), make_node(n2, ExecutionNodeKind::LLMGenerate)],
+            vec![
+                make_node(n1, ExecutionNodeKind::LLMGenerate),
+                make_node(n2, ExecutionNodeKind::LLMGenerate),
+            ],
             vec![],
         );
         let queue = WorkQueue::new(graph);
@@ -384,12 +447,18 @@ mod tests {
         let n1 = uuid::Uuid::new_v4();
         let n2 = uuid::Uuid::new_v4();
         let graph = make_graph(
-            vec![make_node(n1, ExecutionNodeKind::LLMGenerate), make_node(n2, ExecutionNodeKind::LLMGenerate)],
-            vec![ExecutionEdge { from: n2, to: n1, condition: Some("loop".into()) }],
+            vec![
+                make_node(n1, ExecutionNodeKind::LLMGenerate),
+                make_node(n2, ExecutionNodeKind::LLMGenerate),
+            ],
+            vec![ExecutionEdge {
+                from: n2,
+                to: n1,
+                condition: Some("loop".into()),
+            }],
         );
         let queue = WorkQueue::new(graph);
         assert!(queue.has_loop_back_edge(n2));
         assert!(!queue.has_loop_back_edge(n1));
     }
 }
-

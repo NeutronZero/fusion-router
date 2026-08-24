@@ -1,3 +1,4 @@
+use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
@@ -6,7 +7,6 @@ use fusion_plugin_api::{
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 
 /// Creates GitHub issues for real via the REST API (`POST /repos/{repo}/issues`).
 ///
@@ -85,7 +85,8 @@ impl CapabilityExecutor for GitHubPlugin {
         let token = std::env::var("GITHUB_TOKEN").map_err(|_| ExecutionError {
             connector: "github".into(),
             capability: instance.contract.id.clone(),
-            reason: "GITHUB_TOKEN environment variable not set; refusing to fabricate an issue URL".into(),
+            reason: "GITHUB_TOKEN environment variable not set; refusing to fabricate an issue URL"
+                .into(),
             retryable: false,
         })?;
 
@@ -138,7 +139,10 @@ impl CapabilityExecutor for GitHubPlugin {
             })?;
 
         let mut metrics = HashMap::new();
-        metrics.insert("latency_ms".to_string(), started.elapsed().as_secs_f64() * 1000.0);
+        metrics.insert(
+            "latency_ms".to_string(),
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
 
         Ok(ExecutionResult {
             outputs: json!({ "issue_url": issue_url }),

@@ -1,11 +1,11 @@
-use async_trait::async_trait;
 use crate::types::{ExecutionGraph, ExecutionInstance, ExecutionResult, ReservationId};
+use async_trait::async_trait;
 
-pub mod default;
-pub mod crates_adapter;
 pub mod connector_health;
 pub mod connector_resolver;
 pub mod connector_subscriber;
+pub mod crates_adapter;
+pub mod default;
 
 #[async_trait]
 pub trait Scheduler: Send + Sync {
@@ -26,4 +26,3 @@ pub trait Scheduler: Send + Sync {
         self.run(instance, executor).await
     }
 }
-

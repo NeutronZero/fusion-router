@@ -2,10 +2,10 @@
 //!
 //! Standardized runtime container, lifecycle state machine, append-only event stream, and provenance trace.
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use fusion_plugin_api::{CapabilityId, CapabilityInstance};
@@ -26,12 +26,26 @@ pub enum ExecutionState {
 /// Individual immutable event recorded during capability execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExecutionEvent {
-    ConnectorBound { connector: String, capability: CapabilityId },
-    ExecutionStarted { timestamp_ms: u64 },
-    PluginInvoked { plugin: String },
-    PluginCompleted { status: String },
-    RetryScheduled { attempt: u32 },
-    ExecutionFinished { final_state: ExecutionState, timestamp_ms: u64 },
+    ConnectorBound {
+        connector: String,
+        capability: CapabilityId,
+    },
+    ExecutionStarted {
+        timestamp_ms: u64,
+    },
+    PluginInvoked {
+        plugin: String,
+    },
+    PluginCompleted {
+        status: String,
+    },
+    RetryScheduled {
+        attempt: u32,
+    },
+    ExecutionFinished {
+        final_state: ExecutionState,
+        timestamp_ms: u64,
+    },
 }
 
 /// Append-only provenance execution trace recording runtime events.
@@ -179,7 +193,8 @@ mod tests {
         ctx.set_state(ExecutionState::Running);
         assert_eq!(ctx.state(), ExecutionState::Running);
 
-        ctx.trace.record(ExecutionEvent::ExecutionStarted { timestamp_ms: 100 });
+        ctx.trace
+            .record(ExecutionEvent::ExecutionStarted { timestamp_ms: 100 });
         assert_eq!(ctx.trace.events().len(), 2); // ConnectorBound + ExecutionStarted
     }
 
@@ -220,7 +235,9 @@ mod tests {
         let trace = ExecutionTrace::new(Uuid::new_v4());
         assert!(trace.events().is_empty());
 
-        trace.record(ExecutionEvent::ExecutionStarted { timestamp_ms: 12345 });
+        trace.record(ExecutionEvent::ExecutionStarted {
+            timestamp_ms: 12345,
+        });
         assert_eq!(trace.events().len(), 1);
 
         trace.record(ExecutionEvent::ExecutionFinished {

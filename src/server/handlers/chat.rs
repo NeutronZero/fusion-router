@@ -73,7 +73,11 @@ pub async fn chat_completions(
             tracing::error!(request_id = %request_id, stage = ?e.stage(), error = %e, "pipeline failed");
             (
                 status,
-                Json(error_response(request_id, &request.model, &e.user_message())),
+                Json(error_response(
+                    request_id,
+                    &request.model,
+                    &e.user_message(),
+                )),
             )
                 .into_response()
         }
@@ -116,42 +120,43 @@ pub(crate) async fn stream_completed_response(
 
     let total_chunks = chunks.len();
 
-    let event_stream: BoxStream<'static, Result<Event, std::convert::Infallible>> =
-        Box::pin(stream::iter(0..=total_chunks).enumerate().map(move |(i, _)| {
-            let id = id.clone();
-            let model = model_name.clone();
-            let payload = if i < total_chunks {
-                serde_json::json!({
-                    "id": id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {
-                            "content": chunks[i].clone(),
-                        },
-                        "finish_reason": null,
-                    }],
-                })
-            } else {
-                // Final chunk with finish_reason
-                serde_json::json!({
-                    "id": id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {},
-                        "finish_reason": finish_reason,
-                    }],
-                })
-            };
-            Ok(Event::default().data(
-                serde_json::to_string(&payload).unwrap_or_default(),
-            ))
-        }));
+    let event_stream: BoxStream<'static, Result<Event, std::convert::Infallible>> = Box::pin(
+        stream::iter(0..=total_chunks)
+            .enumerate()
+            .map(move |(i, _)| {
+                let id = id.clone();
+                let model = model_name.clone();
+                let payload = if i < total_chunks {
+                    serde_json::json!({
+                        "id": id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "content": chunks[i].clone(),
+                            },
+                            "finish_reason": null,
+                        }],
+                    })
+                } else {
+                    // Final chunk with finish_reason
+                    serde_json::json!({
+                        "id": id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": finish_reason,
+                        }],
+                    })
+                };
+                Ok(Event::default().data(serde_json::to_string(&payload).unwrap_or_default()))
+            }),
+    );
 
     let sse = event_stream.chain(stream::once(async {
         Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"))
@@ -221,30 +226,32 @@ pub(crate) async fn process_request(
     let policies: Vec<crate::types::Policy> = policy_snapshot
         .policies
         .iter()
-        .filter_map(|p| match serde_json::from_str::<crate::policy::PolicyDeclaration>(&p.rule) {
-            Ok(d) => Some(crate::types::Policy {
-                name: d.name,
-                priority: d.priority,
-                conditions: d
-                    .conditions
-                    .into_iter()
-                    .map(|(field, value)| crate::types::PolicyCondition {
-                        field,
-                        operator: "eq".into(),
-                        value,
-                    })
-                    .collect(),
-                actions: vec![crate::types::PolicyAction {
-                    action_type: d.effect,
-                    params: d.annotations,
-                }],
-            }),
-            Err(e) => {
-                tracing::warn!(request_id = %request_id, policy = %p.name, error = %e,
+        .filter_map(
+            |p| match serde_json::from_str::<crate::policy::PolicyDeclaration>(&p.rule) {
+                Ok(d) => Some(crate::types::Policy {
+                    name: d.name,
+                    priority: d.priority,
+                    conditions: d
+                        .conditions
+                        .into_iter()
+                        .map(|(field, value)| crate::types::PolicyCondition {
+                            field,
+                            operator: "eq".into(),
+                            value,
+                        })
+                        .collect(),
+                    actions: vec![crate::types::PolicyAction {
+                        action_type: d.effect,
+                        params: d.annotations,
+                    }],
+                }),
+                Err(e) => {
+                    tracing::warn!(request_id = %request_id, policy = %p.name, error = %e,
                     "unparseable stored policy declaration");
-                None
-            }
-        })
+                    None
+                }
+            },
+        )
         .collect();
     let step_plan = PlanningStep {
         planner: state.planner.clone(),
@@ -258,13 +265,14 @@ pub(crate) async fn process_request(
 
     // 5. Compilation — fail closed if the snapshot contains malformed rules;
     // attach the policy pass (deny ⇒ compile error) whenever policies exist.
-    let policy_ir = state.policy_registry.policy_ir().map_err(|e| {
-        RouterError::StageFailure {
+    let policy_ir = state
+        .policy_registry
+        .policy_ir()
+        .map_err(|e| RouterError::StageFailure {
             stage: PipelineStage::Planning,
             request_id,
             message: format!("policy configuration rejected: {e}"),
-        }
-    })?;
+        })?;
     let step_compile = CompilationStep {
         compiler: state.compiler_with_policies(policy_ir),
     };
@@ -297,8 +305,10 @@ pub(crate) async fn process_request(
     if allow_native_stream && request.stream {
         if let Some(registry) = state.provider_registry.clone() {
             if native_stream_eligible(&graph) {
-                let response =
-                    native_stream_sse(state, request, request_id, &graph, registry, guard, &mut pctx).await;
+                let response = native_stream_sse(
+                    state, request, request_id, &graph, registry, guard, &mut pctx,
+                )
+                .await;
                 return Ok(ChatOutcome::Stream(response));
             }
         }
@@ -425,7 +435,11 @@ async fn native_stream_sse(
             drop(guard);
             let mut resp = (
                 axum::http::StatusCode::BAD_GATEWAY,
-                Json(error_response(request_id, &request.model, "upstream provider unavailable")),
+                Json(error_response(
+                    request_id,
+                    &request.model,
+                    "upstream provider unavailable",
+                )),
             )
                 .into_response();
             resp.headers_mut().insert(
@@ -441,7 +455,11 @@ async fn native_stream_sse(
     let envelope = pctx.budget_envelope.clone();
     let rm = state.resource_manager.clone() as Arc<dyn crate::resource::ResourceManager>;
     let evidence = state.evidence_repository.clone();
-    let plan_id = pctx.ir.as_ref().map(|ir| ir.plan_id).unwrap_or_else(Uuid::nil);
+    let plan_id = pctx
+        .ir
+        .as_ref()
+        .map(|ir| ir.plan_id)
+        .unwrap_or_else(Uuid::nil);
     let intent = pctx
         .requirements
         .as_ref()
@@ -453,31 +471,30 @@ async fn native_stream_sse(
     // Accounting model: the RAII guard's estimate booking is refunded when the
     // metered stream ends (release-before-hook), then actuals are recorded
     // here — net spend equals measured reality, even for disconnects/breaches.
-    let on_finish: crate::resource::cancelling_stream::StreamFinishHook =
-        Box::new(move |report| {
-            tokio::spawn(async move {
-                rm.record_usage(report.cost, report.total_tokens).await;
-                crate::telemetry::stream_metrics::StreamMetrics::instance()
-                    .record_report(&report);
-                let record = ExecutionRecord {
-                    record_id: Uuid::new_v4(),
-                    plan_id,
-                    node_id: Uuid::nil(),
-                    model: req_model,
-                    provider: "provider-registry".into(),
-                    intent,
-                    latency_ms: report.total_duration_ms.unwrap_or(started_ms),
-                    tokens: report.total_tokens as u32,
-                    cost: report.cost,
-                    success: true,
-                    timestamp: chrono::Utc::now().timestamp(),
-                };
-                let _ = evidence.record(record).await;
-            });
+    let on_finish: crate::resource::cancelling_stream::StreamFinishHook = Box::new(move |report| {
+        tokio::spawn(async move {
+            rm.record_usage(report.cost, report.total_tokens).await;
+            crate::telemetry::stream_metrics::StreamMetrics::instance().record_report(&report);
+            let record = ExecutionRecord {
+                record_id: Uuid::new_v4(),
+                plan_id,
+                node_id: Uuid::nil(),
+                model: req_model,
+                provider: "provider-registry".into(),
+                intent,
+                latency_ms: report.total_duration_ms.unwrap_or(started_ms),
+                tokens: report.total_tokens as u32,
+                cost: report.cost,
+                success: true,
+                timestamp: chrono::Utc::now().timestamp(),
+            };
+            let _ = evidence.record(record).await;
         });
+    });
 
-    let (metered, _meter) =
-        crate::resource::cancelling_stream::metered_stream_with_finish(inner, guard, cancel, pricing, on_finish);
+    let (metered, _meter) = crate::resource::cancelling_stream::metered_stream_with_finish(
+        inner, guard, cancel, pricing, on_finish,
+    );
     let mut metered = metered;
     if let Some(env) = envelope {
         metered = metered.with_budget_envelope(env);
@@ -529,11 +546,7 @@ async fn native_stream_sse(
     resp
 }
 
-pub(crate) fn error_response(
-    request_id: Uuid,
-    model: &str,
-    error: &str,
-) -> ChatCompletionResponse {
+pub(crate) fn error_response(request_id: Uuid, model: &str, error: &str) -> ChatCompletionResponse {
     ChatCompletionResponse {
         id: request_id.to_string(),
         object: "chat.completion".to_string(),
@@ -551,4 +564,3 @@ pub(crate) fn error_response(
         usage: None,
     }
 }
-

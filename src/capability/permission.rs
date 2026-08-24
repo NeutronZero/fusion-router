@@ -31,7 +31,9 @@ mod tests {
     fn validate_allows_valid() {
         assert!(Permission::Network.validate().is_ok());
         assert!(Permission::Filesystem("/tmp".into()).validate().is_ok());
-        assert!(Permission::Http("https://example.com".into()).validate().is_ok());
+        assert!(Permission::Http("https://example.com".into())
+            .validate()
+            .is_ok());
         assert!(Permission::Secrets("API_KEY".into()).validate().is_ok());
         assert!(Permission::Environment("HOME".into()).validate().is_ok());
     }

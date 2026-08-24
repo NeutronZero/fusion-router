@@ -74,7 +74,10 @@ impl StubResourceManager {
 
 impl Default for StubResourceManager {
     fn default() -> Self {
-        Self::new(Quota { max_daily_cost: NanoUSD::ZERO, max_daily_tokens: 0 })
+        Self::new(Quota {
+            max_daily_cost: NanoUSD::ZERO,
+            max_daily_tokens: 0,
+        })
     }
 }
 
@@ -101,8 +104,10 @@ impl ResourceManager for StubResourceManager {
             return false;
         }
 
-        self.cost.store(current_cost + cost_nanos, Ordering::Release);
-        self.tokens.store(current_tokens + estimated_tokens, Ordering::Release);
+        self.cost
+            .store(current_cost + cost_nanos, Ordering::Release);
+        self.tokens
+            .store(current_tokens + estimated_tokens, Ordering::Release);
         true
     }
 
@@ -126,7 +131,8 @@ impl ResourceManager for StubResourceManager {
     }
 
     async fn record_usage(&self, cost_nanos: NanoUSD, tokens: u64) {
-        self.cost.fetch_add(cost_nanos.as_nanos(), Ordering::Relaxed);
+        self.cost
+            .fetch_add(cost_nanos.as_nanos(), Ordering::Relaxed);
         self.tokens.fetch_add(tokens, Ordering::Relaxed);
     }
 }
@@ -137,7 +143,10 @@ mod tests {
 
     #[test]
     fn stub_tracks_spend() {
-        let stub = StubResourceManager::new(Quota { max_daily_cost: NanoUSD::from_nanos(100_000_000_000), max_daily_tokens: 1_000_000 });
+        let stub = StubResourceManager::new(Quota {
+            max_daily_cost: NanoUSD::from_nanos(100_000_000_000),
+            max_daily_tokens: 1_000_000,
+        });
         assert_eq!(stub.spent_cost(), NanoUSD::ZERO);
         assert_eq!(stub.spent_tokens(), 0);
 
@@ -148,9 +157,20 @@ mod tests {
 
     #[tokio::test]
     async fn stub_can_afford_checks_quota() {
-        let stub = StubResourceManager::new(Quota { max_daily_cost: NanoUSD::ONE_DOLLAR, max_daily_tokens: 1000 }); // $1, 1000 tokens
+        let stub = StubResourceManager::new(Quota {
+            max_daily_cost: NanoUSD::ONE_DOLLAR,
+            max_daily_tokens: 1000,
+        }); // $1, 1000 tokens
         assert!(stub.can_afford(NanoUSD::from_nanos(500_000_000), 500).await); // Under quota
-        assert!(!stub.can_afford(NanoUSD::from_nanos(1_100_000_000), 500).await); // Over cost quota
-        assert!(!stub.can_afford(NanoUSD::from_nanos(500_000_000), 1100).await); // Over token quota
+        assert!(
+            !stub
+                .can_afford(NanoUSD::from_nanos(1_100_000_000), 500)
+                .await
+        ); // Over cost quota
+        assert!(
+            !stub
+                .can_afford(NanoUSD::from_nanos(500_000_000), 1100)
+                .await
+        ); // Over token quota
     }
 }

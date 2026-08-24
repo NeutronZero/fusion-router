@@ -8,7 +8,11 @@ pub struct Backoff {
 
 impl Backoff {
     pub fn new(base_ms: u64, max_ms: u64) -> Self {
-        Self { base_ms, max_ms, attempt: 0 }
+        Self {
+            base_ms,
+            max_ms,
+            attempt: 0,
+        }
     }
 
     pub fn reset(&mut self) {
@@ -20,7 +24,11 @@ impl Backoff {
         let clamped = self.attempt.min(30);
         let exp = self.base_ms.saturating_mul(1 << clamped);
         let cap = exp.min(self.max_ms);
-        let jittered = if cap > 0 { rand::random::<u64>() % cap } else { 0 };
+        let jittered = if cap > 0 {
+            rand::random::<u64>() % cap
+        } else {
+            0
+        };
         self.attempt += 1;
         Duration::from_millis(jittered)
     }
@@ -41,10 +49,7 @@ mod tests {
         let mut backoff = Backoff::new(10_000, 100);
         for _ in 0..10 {
             let delay = backoff.next();
-            assert!(
-                delay.as_millis() < 100,
-                "delay must stay below max_ms cap"
-            );
+            assert!(delay.as_millis() < 100, "delay must stay below max_ms cap");
         }
     }
 

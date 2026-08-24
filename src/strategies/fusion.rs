@@ -1,14 +1,12 @@
 use std::time::Duration;
 
-use super::{Parallelism, StreamingMode, Strategy, StrategyDescriptor};
+use super::{Parallelism, Strategy, StrategyDescriptor, StreamingMode};
 use crate::compiler::context::CompilationContext;
 use crate::compiler::diagnostics::CompilerDiagnostic;
 use crate::compiler::ir::{
     BarrierFailurePolicy, PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind, ReducerMode, StrategyIR,
 };
-use crate::types::{
-    ArtifactKind, RetryPolicy,
-};
+use crate::types::{ArtifactKind, RetryPolicy};
 
 #[derive(Debug, Clone)]
 pub enum ModelCapability {
@@ -26,7 +24,14 @@ pub struct ModelAvailability {
 
 impl ModelAvailability {
     pub fn from_models(models: &[String]) -> Self {
-        let high_keywords = ["gpt-4", "claude-opus", "gemini-ultra", "claude-3.5", "o1", "o3"];
+        let high_keywords = [
+            "gpt-4",
+            "claude-opus",
+            "gemini-ultra",
+            "claude-3.5",
+            "o1",
+            "o3",
+        ];
         let medium_keywords = ["gpt-4o-mini", "claude-sonnet", "gemini-pro", "claude-haiku"];
         let matches_keyword = |model: &str, keyword: &str| {
             if model == keyword {
@@ -51,8 +56,12 @@ impl ModelAvailability {
             }
             false
         };
-        let has_high = models.iter().any(|m| high_keywords.iter().any(|k| matches_keyword(m, k)));
-        let has_medium = models.iter().any(|m| medium_keywords.iter().any(|k| matches_keyword(m, k)));
+        let has_high = models
+            .iter()
+            .any(|m| high_keywords.iter().any(|k| matches_keyword(m, k)));
+        let has_medium = models
+            .iter()
+            .any(|m| medium_keywords.iter().any(|k| matches_keyword(m, k)));
         Self {
             has_high_capability: has_high,
             has_medium_capability: has_medium || has_high,
@@ -94,9 +103,7 @@ impl FusionStrategy {
             Some(h) if !h.has_high_capability && !h.has_medium_capability => {
                 self.sub_strategies.len().min(1)
             }
-            Some(h) if !h.has_high_capability => {
-                self.sub_strategies.len().min(2)
-            }
+            Some(h) if !h.has_high_capability => self.sub_strategies.len().min(2),
             _ => self.sub_strategies.len(),
         }
     }
@@ -107,7 +114,10 @@ impl FusionStrategy {
                 return best.clone();
             }
         }
-        ctx.available_models.first().cloned().unwrap_or_else(|| "default".into())
+        ctx.available_models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "default".into())
     }
 }
 
@@ -130,7 +140,11 @@ impl Strategy for FusionStrategy {
         }
     }
 
-    fn lower(&self, _ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
+    fn lower(
+        &self,
+        _ir: &StrategyIR,
+        ctx: &CompilationContext,
+    ) -> Result<PrimitiveGraph, CompilerDiagnostic> {
         let count = self.active_count() as u32;
         if count < 1 {
             return Err(CompilerDiagnostic::error(
@@ -221,7 +235,10 @@ mod tests {
 
         assert!(!availability.has_high_capability);
         assert!(availability.has_medium_capability);
-        assert_eq!(availability.eligible_models, vec!["gpt-4o-mini".to_string()]);
+        assert_eq!(
+            availability.eligible_models,
+            vec!["gpt-4o-mini".to_string()]
+        );
     }
 
     #[test]
@@ -286,11 +303,11 @@ mod tests {
     fn test_matches_keyword_variants() {
         // True positives: exact match, prefix match with - or ., infix match bounded by - and -/.
         let pos_availability = ModelAvailability::from_models(&[
-            "gpt-4".into(),             // Exact match
-            "gpt-4-turbo".into(),       // Prefix with '-'
-            "gpt-4.5".into(),           // Prefix with '.'
-            "my-gpt-4-custom".into(),    // Infix bounded by '-' and '-'
-            "my-gpt-4.custom".into(),    // Infix bounded by '-' and '.'
+            "gpt-4".into(),           // Exact match
+            "gpt-4-turbo".into(),     // Prefix with '-'
+            "gpt-4.5".into(),         // Prefix with '.'
+            "my-gpt-4-custom".into(), // Infix bounded by '-' and '-'
+            "my-gpt-4.custom".into(), // Infix bounded by '-' and '.'
         ]);
         assert!(pos_availability.has_high_capability);
 

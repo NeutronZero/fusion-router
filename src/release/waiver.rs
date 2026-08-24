@@ -1,7 +1,7 @@
+use crate::release::gate::{GateError, GateId};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use chrono::{DateTime, Utc};
-use crate::release::gate::{GateError, GateId};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Waiver {
@@ -44,7 +44,9 @@ impl WaiverSet {
         artifact_name: Option<&str>,
         now: DateTime<Utc>,
     ) -> Option<&Waiver> {
-        self.waivers.iter().find(|w| w.is_active(now) && w.matches(gate_id, artifact_name))
+        self.waivers
+            .iter()
+            .find(|w| w.is_active(now) && w.matches(gate_id, artifact_name))
     }
 }
 
@@ -60,10 +62,12 @@ pub fn load_waivers_from_yaml(path: &Path) -> Result<WaiverSet, GateError> {
     if !path.exists() {
         return Ok(WaiverSet::default());
     }
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| GateError::ExecutionFailed(format!("read waivers file {}: {e}", path.display())))?;
-    serde_yaml::from_str(&content)
-        .map_err(|e| GateError::ExecutionFailed(format!("parse waivers file {}: {e}", path.display())))
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        GateError::ExecutionFailed(format!("read waivers file {}: {e}", path.display()))
+    })?;
+    serde_yaml::from_str(&content).map_err(|e| {
+        GateError::ExecutionFailed(format!("parse waivers file {}: {e}", path.display()))
+    })
 }
 
 #[cfg(test)]

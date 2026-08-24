@@ -1,5 +1,6 @@
 //! Phase 7B — `ShellConnector` (`src/connectors/shell.rs`)
 
+use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
@@ -7,7 +8,6 @@ use fusion_plugin_api::{
 };
 use serde_json::json;
 use std::sync::Arc;
-use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 
 pub struct ShellPlugin;
 

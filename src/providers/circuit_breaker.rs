@@ -1,6 +1,6 @@
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use parking_lot::RwLock;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CircuitState {
@@ -90,7 +90,8 @@ impl CircuitBreaker {
     }
 
     pub fn update_thresholds(&self, failure_threshold: u32, cooldown_secs: u64) {
-        self.failure_threshold.store(failure_threshold, Ordering::Relaxed);
+        self.failure_threshold
+            .store(failure_threshold, Ordering::Relaxed);
         self.cooldown_secs.store(cooldown_secs, Ordering::Relaxed);
     }
 

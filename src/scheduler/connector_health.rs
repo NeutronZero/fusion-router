@@ -65,10 +65,12 @@ impl ConnectorHealthChecker {
                 guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
             };
 
-            let futures = connector_pairs.into_iter().map(|(name, connector)| async move {
-                let health = self.check_connector_health(&name, connector.as_ref()).await;
-                (name, health)
-            });
+            let futures = connector_pairs
+                .into_iter()
+                .map(|(name, connector)| async move {
+                    let health = self.check_connector_health(&name, connector.as_ref()).await;
+                    (name, health)
+                });
 
             let results = futures::future::join_all(futures).await;
             let mut map = self.health_map.write().await;
@@ -112,7 +114,9 @@ mod tests {
     async fn test_check_connector_health_returns_healthy() {
         let checker = ConnectorHealthChecker::new(60);
         let connector = MockConnector;
-        let health = checker.check_connector_health("mock_connector", &connector).await;
+        let health = checker
+            .check_connector_health("mock_connector", &connector)
+            .await;
         assert_eq!(health.status, HealthStatus::Healthy);
     }
 

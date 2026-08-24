@@ -109,7 +109,10 @@ async fn test_terminal_node_response_selection() {
         kind: ExecutionNodeKind::LLMGenerate,
         strategy: StrategyKind::Single,
         model: "m".into(),
-        retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+        retry_policy: RetryPolicy {
+            max_retries: 0,
+            backoff_ms: 0,
+        },
         fallback: None,
         config: HashMap::new(),
         subgraph: None,
@@ -119,7 +122,10 @@ async fn test_terminal_node_response_selection() {
         kind: ExecutionNodeKind::LLMReview,
         strategy: StrategyKind::Single,
         model: "m".into(),
-        retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+        retry_policy: RetryPolicy {
+            max_retries: 0,
+            backoff_ms: 0,
+        },
         fallback: None,
         config: HashMap::new(),
         subgraph: None,
@@ -129,15 +135,26 @@ async fn test_terminal_node_response_selection() {
         kind: ExecutionNodeKind::LLMJudge,
         strategy: StrategyKind::Single,
         model: "m".into(),
-        retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+        retry_policy: RetryPolicy {
+            max_retries: 0,
+            backoff_ms: 0,
+        },
         fallback: None,
         config: HashMap::new(),
         subgraph: None,
     };
 
     let edges = vec![
-        ExecutionEdge { from: gen_id, to: reflect_id, condition: None },
-        ExecutionEdge { from: reflect_id, to: judge_id, condition: None },
+        ExecutionEdge {
+            from: gen_id,
+            to: reflect_id,
+            condition: None,
+        },
+        ExecutionEdge {
+            from: reflect_id,
+            to: judge_id,
+            condition: None,
+        },
     ];
 
     let graph = ExecutionGraph {
@@ -167,7 +184,12 @@ async fn test_terminal_node_response_selection() {
 
     assert!(res.success);
     assert_eq!(res.terminal_node_id, Some(judge_id));
-    assert_eq!(res.final_output, Some(serde_json::Value::String("Final Judged Masterpiece".to_string())));
+    assert_eq!(
+        res.final_output,
+        Some(serde_json::Value::String(
+            "Final Judged Masterpiece".to_string()
+        ))
+    );
 
     // Test ResponseBuilderStep output content
     let mut ctx = PipelineContext::new(
@@ -188,7 +210,10 @@ async fn test_terminal_node_response_selection() {
     );
 
     let response = ResponseBuilderStep.execute(res, &mut ctx).await.unwrap();
-    assert_eq!(response.choices[0].message.content, "Final Judged Masterpiece");
+    assert_eq!(
+        response.choices[0].message.content,
+        "Final Judged Masterpiece"
+    );
 }
 
 #[tokio::test]
@@ -198,7 +223,10 @@ async fn test_compiler_model_resolution_preservation() {
         kind: ExecutionNodeKind::LLMGenerate,
         strategy: StrategyKind::Single,
         model: "claude-3-5-sonnet".to_string(), // Explicitly set by ModelResolutionPass
-        retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+        retry_policy: RetryPolicy {
+            max_retries: 0,
+            backoff_ms: 0,
+        },
         fallback: None,
         config: HashMap::new(),
         subgraph: None,

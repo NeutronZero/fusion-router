@@ -7,7 +7,4 @@
 pub mod permission;
 
 // Re-exports from the canonical crate location
-pub use fusion_kernel::capability::{
-    CapabilityRegistry,
-    InMemoryCapabilityRegistry,
-};
+pub use fusion_kernel::capability::{CapabilityRegistry, InMemoryCapabilityRegistry};

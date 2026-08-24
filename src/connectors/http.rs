@@ -1,3 +1,4 @@
+use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
@@ -6,7 +7,6 @@ use fusion_plugin_api::{
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
 
 /// Maximum response body size kept in `outputs.body` (bytes).
 const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -72,19 +72,21 @@ impl CapabilityExecutor for HttpPlugin {
                 retryable: false,
             })?;
 
-        let _method = input.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
+        let _method = input
+            .get("method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("GET");
         let method = _method.to_uppercase();
         let body = input.get("body").and_then(|v| v.as_str()).unwrap_or("");
 
         let started = std::time::Instant::now();
         let mut request = self.client.request(
-            reqwest::Method::from_bytes(method.as_bytes())
-                .map_err(|_| ExecutionError {
-                    connector: "http".into(),
-                    capability: instance.contract.id.clone(),
-                    reason: format!("unsupported HTTP method: {method}"),
-                    retryable: false,
-                })?,
+            reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| ExecutionError {
+                connector: "http".into(),
+                capability: instance.contract.id.clone(),
+                reason: format!("unsupported HTTP method: {method}"),
+                retryable: false,
+            })?,
             url,
         );
         if !body.is_empty() {
@@ -107,7 +109,10 @@ impl CapabilityExecutor for HttpPlugin {
         })?;
 
         let mut metrics = HashMap::new();
-        metrics.insert("latency_ms".to_string(), started.elapsed().as_secs_f64() * 1000.0);
+        metrics.insert(
+            "latency_ms".to_string(),
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
 
         let mut truncated = text;
         if truncated.len() > MAX_BODY_BYTES {
@@ -228,7 +233,10 @@ mod tests {
         drop(listener);
         let plugin = HttpPlugin::default();
         let err = plugin
-            .execute(&make_instance(), json!({ "url": format!("http://{addr}/down") }))
+            .execute(
+                &make_instance(),
+                json!({ "url": format!("http://{addr}/down") }),
+            )
             .await
             .unwrap_err();
         assert!(err.retryable, "network failures should be retryable");

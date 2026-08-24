@@ -101,7 +101,10 @@ impl Default for StaticCapabilityScorer {
 
 impl StaticCapabilityScorer {
     pub fn new(table: HashMap<String, f64>) -> Self {
-        Self { table, intent_boosts: Vec::new() }
+        Self {
+            table,
+            intent_boosts: Vec::new(),
+        }
     }
 }
 
@@ -112,7 +115,9 @@ impl CapabilityScorer for StaticCapabilityScorer {
         let boost: f64 = self
             .intent_boosts
             .iter()
-            .filter(|(keyword, target, _)| target == provider && intent.to_lowercase().contains(keyword))
+            .filter(|(keyword, target, _)| {
+                target == provider && intent.to_lowercase().contains(keyword)
+            })
             .map(|(_, _, boost)| *boost)
             .sum();
         Some((base + boost).min(1.0))
@@ -125,7 +130,6 @@ impl CapabilityScorer for StaticCapabilityScorer {
 pub struct StaticHealthScorer {
     table: HashMap<String, f64>,
 }
-
 
 impl StaticHealthScorer {
     pub fn new(table: HashMap<String, f64>) -> Self {
@@ -181,10 +185,11 @@ pub struct StaticPolicyScorer {
     deny: HashSet<String>,
 }
 
-
 impl StaticPolicyScorer {
     pub fn deny(providers: &[&str]) -> Self {
-        Self { deny: providers.iter().map(|p| p.to_string()).collect() }
+        Self {
+            deny: providers.iter().map(|p| p.to_string()).collect(),
+        }
     }
 }
 
@@ -210,14 +215,20 @@ mod tests {
         let openrouter = scorer.score("openrouter", "Build a web app").await.unwrap();
         let zen = scorer.score("zen", "Build a web app").await.unwrap();
         let ollama = scorer.score("ollama", "Build a web app").await.unwrap();
-        assert!(openrouter > zen && zen > ollama, "{openrouter} > {zen} > {ollama}");
+        assert!(
+            openrouter > zen && zen > ollama,
+            "{openrouter} > {zen} > {ollama}"
+        );
         assert!(openrouter <= 1.0 && ollama > 0.0);
     }
 
     #[tokio::test]
     async fn intent_keyword_boosts_capability() {
         let scorer = StaticCapabilityScorer::default();
-        let base = scorer.score("openrouter", "general question").await.unwrap();
+        let base = scorer
+            .score("openrouter", "general question")
+            .await
+            .unwrap();
         let boosted = scorer.score("openrouter", "Write code").await.unwrap();
         assert!(boosted > base);
         assert!(boosted <= 1.0);
@@ -235,7 +246,10 @@ mod tests {
         let zen = scorer.score("zen").await.unwrap();
         let openrouter = scorer.score("openrouter").await.unwrap();
         let ollama = scorer.score("ollama").await.unwrap();
-        assert!(zen > openrouter && openrouter > ollama, "{zen} > {openrouter} > {ollama}");
+        assert!(
+            zen > openrouter && openrouter > ollama,
+            "{zen} > {openrouter} > {ollama}"
+        );
         assert_eq!(zen, 1.0, "fastest provider gets 1.0");
     }
 
@@ -255,7 +269,7 @@ mod tests {
             metadata: fusion_types::IRMetadata {
                 policy_version: 0,
                 policy_applied: vec![],
-				estimated_cost: NanoUSD::ZERO,
+                estimated_cost: NanoUSD::ZERO,
                 estimated_tokens: 0,
             },
         };

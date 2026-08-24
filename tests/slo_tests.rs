@@ -1,11 +1,11 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
 use async_trait::async_trait;
 use fusion_router::providers::circuit_breaker::{CircuitBreaker, CircuitState};
 use fusion_router::providers::router::{ProviderRouter, ProviderTarget};
 use fusion_router::providers::ChatProvider;
 use fusion_router::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 fn assert_slo(condition: bool, message: &str) {
     assert!(condition, "SLO VIOLATION: {message}");
@@ -142,11 +142,8 @@ async fn run_outage_simulation(
 
     let breaker = CircuitBreaker::new(failure_threshold, 1, cooldown_secs);
 
-    let primary_target = ProviderTarget::new(
-        "primary".into(),
-        breaker,
-        Box::new(move || primary.clone()),
-    );
+    let primary_target =
+        ProviderTarget::new("primary".into(), breaker, Box::new(move || primary.clone()));
     let fallback_target = ProviderTarget::new(
         "fallback".into(),
         CircuitBreaker::new(failure_threshold, 1, cooldown_secs),
@@ -194,14 +191,17 @@ async fn run_outage_simulation(
 
     // Count successful responses by model
     let primary_ok = responses.iter().filter(|m| m.as_str() == "primary").count();
-    let fallback_ok = responses.iter().filter(|m| m.as_str() == "fallback").count();
+    let fallback_ok = responses
+        .iter()
+        .filter(|m| m.as_str() == "fallback")
+        .count();
 
     OutageSimResult {
         total_requests,
         primary_ok,
         fallback_ok,
         primary_call_count,
-all_requests_succeeded: all_succeeded,
+        all_requests_succeeded: all_succeeded,
         circuit_opens_at,
         failure_threshold,
     }
@@ -351,19 +351,16 @@ async fn test_error_propagation_preserves_diagnostics() {
 
     // Run through the router with only a failing primary (no fallback)
     let breaker = CircuitBreaker::new(3, 1, 60);
-    let primary_target = ProviderTarget::new(
-        "primary".into(),
-        breaker,
-        Box::new(move || failing.clone()),
-    );
+    let primary_target =
+        ProviderTarget::new("primary".into(), breaker, Box::new(move || failing.clone()));
     let default_target = ProviderTarget::new(
         "default".into(),
         CircuitBreaker::new(3, 1, 60),
         Box::new(|| Arc::new(AlwaysOkProvider::new("default"))),
     );
 
-    let router = ProviderRouter::new(default_target)
-        .with_provider(vec!["test/".into()], primary_target);
+    let router =
+        ProviderRouter::new(default_target).with_provider(vec!["test/".into()], primary_target);
 
     let req = test_request("test/model");
 
@@ -423,7 +420,11 @@ fn test_dynamic_threshold_update_takes_effect() {
     for _ in 0..3 {
         cb.record_failure();
     }
-    assert_eq!(cb.state(), CircuitState::Open, "breaker should open at threshold=3");
+    assert_eq!(
+        cb.state(),
+        CircuitState::Open,
+        "breaker should open at threshold=3"
+    );
 
     // Update threshold to 5 while Open
     cb.update_thresholds(5, 30);

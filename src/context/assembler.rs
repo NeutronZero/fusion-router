@@ -49,10 +49,12 @@ impl ContextAssembler for DefaultContextAssembler {
 }
 
 impl DefaultContextAssembler {
-    pub fn trim_messages(&self, messages: &[crate::types::ChatMessage], max_tokens: u32) -> Vec<crate::types::ChatMessage> {
-        let total_tokens: u32 = messages.iter()
-            .map(|m| estimate_tokens(&m.content))
-            .sum();
+    pub fn trim_messages(
+        &self,
+        messages: &[crate::types::ChatMessage],
+        max_tokens: u32,
+    ) -> Vec<crate::types::ChatMessage> {
+        let total_tokens: u32 = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
 
         if total_tokens <= max_tokens {
             return messages.to_vec();
@@ -69,7 +71,8 @@ impl DefaultContextAssembler {
             }
         }
 
-        let system_tokens: u32 = system_msgs.iter()
+        let system_tokens: u32 = system_msgs
+            .iter()
             .map(|m| estimate_tokens(&m.content))
             .sum();
 
@@ -83,7 +86,9 @@ impl DefaultContextAssembler {
                 remaining -= tokens;
             } else if remaining > 10 {
                 let byte_limit = (remaining * 4) as usize;
-                let safe_end = msg.content.char_indices()
+                let safe_end = msg
+                    .content
+                    .char_indices()
                     .map(|(i, c)| i + c.len_utf8())
                     .take_while(|&i| i <= byte_limit)
                     .last()
@@ -125,7 +130,10 @@ mod tests {
         }];
         // max_tokens = 20 → forces aggressive trimming
         let result = assembler.trim_messages(&messages, 20);
-        let total: u32 = result.iter().map(|m| crate::context::assembler::estimate_tokens(&m.content)).sum();
+        let total: u32 = result
+            .iter()
+            .map(|m| crate::context::assembler::estimate_tokens(&m.content))
+            .sum();
         assert!(
             total <= 20,
             "trimmed multi-byte content exceeds budget of 20 tokens, computed {}",
@@ -147,8 +155,14 @@ mod tests {
     fn test_full_budget_no_trimming() {
         let assembler = DefaultContextAssembler::new();
         let messages = vec![
-            ChatMessage { role: "system".into(), content: "sys".into() },
-            ChatMessage { role: "user".into(), content: "hello".into() },
+            ChatMessage {
+                role: "system".into(),
+                content: "sys".into(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "hello".into(),
+            },
         ];
         let result = assembler.trim_messages(&messages, 10);
         assert_eq!(result.len(), 2);
@@ -160,9 +174,18 @@ mod tests {
     fn test_trim_reverse_chronological() {
         let assembler = DefaultContextAssembler::new();
         let messages = vec![
-            ChatMessage { role: "system".into(), content: "sys".into() },
-            ChatMessage { role: "user".into(), content: "A".repeat(100) },
-            ChatMessage { role: "user".into(), content: "B".repeat(10) },
+            ChatMessage {
+                role: "system".into(),
+                content: "sys".into(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "A".repeat(100),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "B".repeat(10),
+            },
         ];
         let result = assembler.trim_messages(&messages, 15);
         assert_eq!(result.len(), 2);
@@ -174,9 +197,18 @@ mod tests {
     fn test_empty_messages_handling() {
         let assembler = DefaultContextAssembler::new();
         let messages = vec![
-            ChatMessage { role: "system".into(), content: "".into() },
-            ChatMessage { role: "user".into(), content: "".into() },
-            ChatMessage { role: "assistant".into(), content: "   ".into() },
+            ChatMessage {
+                role: "system".into(),
+                content: "".into(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "".into(),
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "   ".into(),
+            },
         ];
         let result = assembler.trim_messages(&messages, 10);
         assert_eq!(result.len(), 3);

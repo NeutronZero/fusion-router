@@ -9,7 +9,11 @@ pub fn list_features(registry: &FeatureRegistry) -> String {
     output.push_str("Registered features:\n");
     for state in states {
         let status = if state.enabled { "ENABLED" } else { "DISABLED" };
-        let override_marker = if state.overridden { " (overridden)" } else { "" };
+        let override_marker = if state.overridden {
+            " (overridden)"
+        } else {
+            ""
+        };
         output.push_str(&format!(
             "  [{}] {}{} - v{} - {}\n",
             status,

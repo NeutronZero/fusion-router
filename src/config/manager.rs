@@ -1,7 +1,7 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
 
@@ -15,13 +15,11 @@ pub struct ConfigSnapshot {
 }
 
 pub trait ConfigSubscriber: Send + Sync {
-    fn priority(&self) -> u8 { 0 }
+    fn priority(&self) -> u8 {
+        0
+    }
 
-    fn prepare(
-        &self,
-        old: &ConfigSnapshot,
-        new: &ConfigSnapshot,
-    ) -> Result<(), ReloadError>;
+    fn prepare(&self, old: &ConfigSnapshot, new: &ConfigSnapshot) -> Result<(), ReloadError>;
 
     fn commit(&self, generation: u64);
 }
@@ -61,7 +59,8 @@ impl ConfigManager {
     }
 
     pub fn register_subscriber(&self, subscriber: Box<dyn ConfigSubscriber + Send + Sync>) {
-        self.subscribers.write()
+        self.subscribers
+            .write()
             .unwrap_or_else(|e| e.into_inner())
             .push(subscriber);
     }
@@ -71,8 +70,8 @@ impl ConfigManager {
             .await
             .map_err(|e| ReloadError::Parse(e.to_string()))?;
 
-        let new_config: AppConfig = serde_yaml::from_str(&content)
-            .map_err(|e| ReloadError::Parse(e.to_string()))?;
+        let new_config: AppConfig =
+            serde_yaml::from_str(&content).map_err(|e| ReloadError::Parse(e.to_string()))?;
 
         new_config.validate().map_err(ReloadError::Validation)?;
 
@@ -83,8 +82,7 @@ impl ConfigManager {
             config: Arc::new(new_config),
         };
 
-        let subscribers_guard = self.subscribers.read()
-            .unwrap_or_else(|e| e.into_inner());
+        let subscribers_guard = self.subscribers.read().unwrap_or_else(|e| e.into_inner());
         let mut ordered: Vec<_> = subscribers_guard.iter().collect();
         ordered.sort_by_key(|s| s.priority());
 
@@ -109,11 +107,11 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    use crate::config::{
-        error::ReloadError, AppConfig, AuthConfig, CorsConfig, LoggingConfig,
-        RateLimitingConfig, ResourceConfig, ServerConfig, StrategyConfig, ToolsConfig,
-    };
     use crate::config::manager::{ConfigManager, ConfigSnapshot, ConfigSubscriber};
+    use crate::config::{
+        error::ReloadError, AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig,
+        ResourceConfig, ServerConfig, StrategyConfig, ToolsConfig,
+    };
     use crate::types::ModelCatalog;
 
     struct MockSubscriber {
@@ -128,11 +126,7 @@ mod tests {
             self.priority_val
         }
 
-        fn prepare(
-            &self,
-            _old: &ConfigSnapshot,
-            _new: &ConfigSnapshot,
-        ) -> Result<(), ReloadError> {
+        fn prepare(&self, _old: &ConfigSnapshot, _new: &ConfigSnapshot) -> Result<(), ReloadError> {
             self.calls.lock().unwrap().push("prepare");
             if self.fail_prepare {
                 Err(ReloadError::Subscriber {
@@ -279,11 +273,8 @@ resources:
             fail_prepare: true,
         };
 
-        let manager = ConfigManager::new(
-            path.clone(),
-            minimal_config(),
-            vec![Box::new(subscriber)],
-        );
+        let manager =
+            ConfigManager::new(path.clone(), minimal_config(), vec![Box::new(subscriber)]);
 
         let old_snapshot = manager.snapshot();
         let err = manager.reload().await.unwrap_err();
@@ -312,11 +303,8 @@ resources:
             fail_prepare: false,
         };
 
-        let manager = ConfigManager::new(
-            path.clone(),
-            minimal_config(),
-            vec![Box::new(subscriber)],
-        );
+        let manager =
+            ConfigManager::new(path.clone(), minimal_config(), vec![Box::new(subscriber)]);
 
         let gen = manager.reload().await.unwrap();
 
@@ -406,16 +394,12 @@ resources:
         assert_eq!(before.generation, 1);
 
         let mgr_clone = manager.clone();
-        let reload_task = tokio::spawn(async move {
-            mgr_clone.reload().await.unwrap()
-        });
+        let reload_task = tokio::spawn(async move { mgr_clone.reload().await.unwrap() });
 
         let mut snapshot_tasks = Vec::new();
         for _ in 0..10 {
             let mgr = manager.clone();
-            snapshot_tasks.push(tokio::spawn(async move {
-                mgr.snapshot()
-            }));
+            snapshot_tasks.push(tokio::spawn(async move { mgr.snapshot() }));
         }
 
         let reload_gen = reload_task.await.unwrap();
@@ -435,8 +419,3 @@ resources:
         let _ = std::fs::remove_file(&path);
     }
 }
-
-
-
-
-

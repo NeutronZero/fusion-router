@@ -1,9 +1,9 @@
+use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityInstance};
 use fusion_router::session::checkpoint::CheckpointEngine;
 use fusion_router::session::replay::ReplayEngine;
 use fusion_router::session::store::{InMemorySessionStore, SessionStore};
 use fusion_router::session::types::{ExecutionSession, SessionId, SessionSnapshot};
 use fusion_router::types::execution_context::{ExecutionContext, ExecutionEvent, ExecutionState};
-use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityInstance};
 use serde_json::json;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -30,9 +30,14 @@ async fn test_replay_validation_from_checkpoint() {
 
     let ctx = ExecutionContext::new(instance, "replay-test".into(), json!({"msg": "hello"}));
     ctx.set_state(ExecutionState::Succeeded);
-    ctx.trace.record(ExecutionEvent::ExecutionStarted { timestamp_ms: 100 });
-    ctx.trace.record(ExecutionEvent::PluginInvoked { plugin: "test-plugin".into() });
-    ctx.trace.record(ExecutionEvent::PluginCompleted { status: "ok".into() });
+    ctx.trace
+        .record(ExecutionEvent::ExecutionStarted { timestamp_ms: 100 });
+    ctx.trace.record(ExecutionEvent::PluginInvoked {
+        plugin: "test-plugin".into(),
+    });
+    ctx.trace.record(ExecutionEvent::PluginCompleted {
+        status: "ok".into(),
+    });
     ctx.trace.record(ExecutionEvent::ExecutionFinished {
         final_state: ExecutionState::Succeeded,
         timestamp_ms: 200,
@@ -77,7 +82,10 @@ fn test_snapshot_round_trip_serialization() {
     assert_eq!(deserialized.snapshot_id, snapshot.snapshot_id);
     assert_eq!(deserialized.current_node_id, snapshot.current_node_id);
     assert_eq!(deserialized.state, ExecutionState::Running);
-    assert_eq!(deserialized.execution_context_id, snapshot.execution_context_id);
+    assert_eq!(
+        deserialized.execution_context_id,
+        snapshot.execution_context_id
+    );
     assert_eq!(deserialized.trace_id, snapshot.trace_id);
     assert_eq!(deserialized.checkpoint_timestamp_ms, 500);
 }

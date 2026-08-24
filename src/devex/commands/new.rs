@@ -7,7 +7,10 @@ pub fn execute_new(name: &str, path: &Path) -> Result<(), String> {
     scaffolder
         .scaffold_capability(path, name)
         .map_err(|e| format!("Failed to scaffold capability: {e}"))?;
-    println!("Created capability project '{name}' at {}", path.join(name).display());
+    println!(
+        "Created capability project '{name}' at {}",
+        path.join(name).display()
+    );
     Ok(())
 }
 

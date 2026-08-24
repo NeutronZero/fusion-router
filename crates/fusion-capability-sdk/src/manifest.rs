@@ -30,7 +30,9 @@ impl CapabilityManifestBuilder {
 
     pub fn build(self) -> CapabilityManifest {
         CapabilityManifest {
-            abi_version: self.abi_version.unwrap_or_else(|| fusion_plugin_api::CAPABILITY_ABI_VERSION.to_string()),
+            abi_version: self
+                .abi_version
+                .unwrap_or_else(|| fusion_plugin_api::CAPABILITY_ABI_VERSION.to_string()),
             capability_id: self.contract.id.to_string(),
             capability_version: self.contract.version.to_string(),
             description: self.contract.description,
@@ -62,6 +64,9 @@ mod tests {
             .version("0.1.0")
             .finish();
         let manifest = CapabilityManifestBuilder::new(contract).build();
-        assert_eq!(manifest.abi_version, fusion_plugin_api::CAPABILITY_ABI_VERSION);
+        assert_eq!(
+            manifest.abi_version,
+            fusion_plugin_api::CAPABILITY_ABI_VERSION
+        );
     }
 }

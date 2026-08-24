@@ -1,5 +1,5 @@
-use crate::workflow::WorkflowIR;
 use crate::error::WorkflowIrError;
+use crate::workflow::WorkflowIR;
 
 fn edge_sort_key(e: &crate::edge::WorkflowEdge) -> (String, String, String, String) {
     (

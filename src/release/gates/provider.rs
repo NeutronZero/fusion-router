@@ -1,10 +1,10 @@
-use async_trait::async_trait;
-use std::path::PathBuf;
-use std::time::Instant;
 use crate::release::certification::{CertificationArtifact, CertificationContext};
 use crate::release::fixture::FixtureKind;
 use crate::release::fixture_loader::{discover_fixtures, load_fixture_manifest, FixtureLoader};
 use crate::release::gate::*;
+use async_trait::async_trait;
+use std::path::PathBuf;
+use std::time::Instant;
 
 #[allow(dead_code)]
 pub struct ProviderGateConfig {
@@ -58,19 +58,23 @@ impl CertificationArtifact for ProviderArtifact {
             GateCheck {
                 name: "auth-descriptor-schema".into(),
                 passed: self.valid_auth_schema,
-                message: format!("provider {} auth descriptor schema valid: {}", self.name, self.valid_auth_schema),
+                message: format!(
+                    "provider {} auth descriptor schema valid: {}",
+                    self.name, self.valid_auth_schema
+                ),
             },
         ])
     }
 
     fn contract_checks(&self, _ctx: &CertificationContext) -> Result<Vec<GateCheck>, GateError> {
-        Ok(vec![
-            GateCheck {
-                name: "pricing-metadata-schema".into(),
-                passed: self.valid_pricing_metadata,
-                message: format!("provider {} pricing metadata schema valid: {}", self.name, self.valid_pricing_metadata),
-            },
-        ])
+        Ok(vec![GateCheck {
+            name: "pricing-metadata-schema".into(),
+            passed: self.valid_pricing_metadata,
+            message: format!(
+                "provider {} pricing metadata schema valid: {}",
+                self.name, self.valid_pricing_metadata
+            ),
+        }])
     }
 }
 
@@ -87,19 +91,25 @@ pub struct FilesystemProviderBackend {
 
 impl FilesystemProviderBackend {
     pub fn new(fixture_root: PathBuf) -> Self {
-        Self { loader: FixtureLoader::new(fixture_root) }
+        Self {
+            loader: FixtureLoader::new(fixture_root),
+        }
     }
 }
 
 impl ProviderBackend for FilesystemProviderBackend {
-    fn name(&self) -> &'static str { "filesystem" }
+    fn name(&self) -> &'static str {
+        "filesystem"
+    }
 
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<ProviderArtifact>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
         let entries = discover_fixtures(&manifest, FixtureKind::Providers);
         let mut results = Vec::new();
         for entry in &entries {
-            let full_path = self.loader.resolve(&PathBuf::from("tests/fixtures").join(&entry.path));
+            let full_path = self
+                .loader
+                .resolve(&PathBuf::from("tests/fixtures").join(&entry.path));
             results.push(self.load(&full_path)?);
         }
         Ok(results)
@@ -107,7 +117,10 @@ impl ProviderBackend for FilesystemProviderBackend {
 
     fn load(&self, path: &std::path::Path) -> Result<ProviderArtifact, GateError> {
         if !path.exists() {
-            return Err(GateError::ExecutionFailed(format!("provider path not found: {}", path.display())));
+            return Err(GateError::ExecutionFailed(format!(
+                "provider path not found: {}",
+                path.display()
+            )));
         }
         Ok(ProviderArtifact::new(
             "openai",
@@ -142,8 +155,12 @@ impl ProviderGate {
 
 #[async_trait]
 impl ReleaseGate for ProviderGate {
-    fn id(&self) -> GateId { GateId::Provider1 }
-    fn name(&self) -> &'static str { "Provider Conformance" }
+    fn id(&self) -> GateId {
+        GateId::Provider1
+    }
+    fn name(&self) -> &'static str {
+        "Provider Conformance"
+    }
     fn description(&self) -> &'static str {
         "Verify provider catalog declarations, pricing metadata schema, model identifiers, and retry contracts"
     }
@@ -186,7 +203,10 @@ impl ReleaseGate for ProviderGate {
             format!("{} providers certified", artifacts.len())
         } else {
             let failed = all_checks.iter().filter(|c| !c.passed).count();
-            format!("{failed} checks failed across {} providers", artifacts.len())
+            format!(
+                "{failed} checks failed across {} providers",
+                artifacts.len()
+            )
         };
 
         GateExecution::Success(GateResult {
@@ -208,10 +228,14 @@ pub struct MockProviderBackend {
 
 #[cfg(test)]
 impl ProviderBackend for MockProviderBackend {
-    fn name(&self) -> &'static str { "mock" }
+    fn name(&self) -> &'static str {
+        "mock"
+    }
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<ProviderArtifact>, GateError> {
         if self.should_error {
-            return Err(GateError::ExecutionFailed("mock provider backend error".into()));
+            return Err(GateError::ExecutionFailed(
+                "mock provider backend error".into(),
+            ));
         }
         Ok(self.artifacts.clone())
     }
@@ -227,8 +251,13 @@ mod tests {
     #[test]
     fn test_provider_gate_metadata() {
         let gate = ProviderGate::new(
-            Box::new(MockProviderBackend { artifacts: vec![], should_error: false }),
-            ProviderGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockProviderBackend {
+                artifacts: vec![],
+                should_error: false,
+            }),
+            ProviderGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let meta = gate.metadata();
         assert_eq!(meta.id, GateId::Provider1);
@@ -246,8 +275,13 @@ mod tests {
             true,
         );
         let gate = ProviderGate::new(
-            Box::new(MockProviderBackend { artifacts: vec![artifact], should_error: false }),
-            ProviderGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockProviderBackend {
+                artifacts: vec![artifact],
+                should_error: false,
+            }),
+            ProviderGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -267,8 +301,13 @@ mod tests {
             true,
         );
         let gate = ProviderGate::new(
-            Box::new(MockProviderBackend { artifacts: vec![artifact], should_error: false }),
-            ProviderGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockProviderBackend {
+                artifacts: vec![artifact],
+                should_error: false,
+            }),
+            ProviderGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),

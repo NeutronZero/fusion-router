@@ -35,8 +35,17 @@ pub fn build_provider_registry(
     config: &AppConfig,
     unsafe_dev: bool,
 ) -> anyhow::Result<Arc<ProviderRegistry>> {
-    let default_provider_name = config.providers.keys().next().cloned().unwrap_or_else(|| "default".to_string());
-    let default_cfg = config.providers.get(&default_provider_name).cloned().unwrap_or_default();
+    let default_provider_name = config
+        .providers
+        .keys()
+        .next()
+        .cloned()
+        .unwrap_or_else(|| "default".to_string());
+    let default_cfg = config
+        .providers
+        .get(&default_provider_name)
+        .cloned()
+        .unwrap_or_default();
     let default_key = factory::resolve_api_key(&default_cfg, &default_provider_name, unsafe_dev)?;
     let default_target = factory::create_provider_target("default", &default_cfg, default_key);
     let registry = Arc::new(ProviderRegistry::new(default_target));
@@ -85,7 +94,8 @@ pub struct ReviewArgs {
 impl Default for ReviewArgs {
     fn default() -> Self {
         Self {
-            config_path: std::env::var("FUSION_CONFIG").unwrap_or_else(|_| "config/self-analysis.yaml".into()),
+            config_path: std::env::var("FUSION_CONFIG")
+                .unwrap_or_else(|_| "config/self-analysis.yaml".into()),
             members: vec![],
             max_tool_rounds: 6,
             files: vec![
@@ -217,7 +227,10 @@ pub async fn run(args: ReviewArgs) -> anyhow::Result<()> {
     let mut node_config: HashMap<String, serde_json::Value> = HashMap::new();
     node_config.insert("count".into(), serde_json::json!(member_models.len()));
     node_config.insert("members".into(), serde_json::json!(member_models));
-    node_config.insert("max_tool_rounds".into(), serde_json::json!(args.max_tool_rounds));
+    node_config.insert(
+        "max_tool_rounds".into(),
+        serde_json::json!(args.max_tool_rounds),
+    );
     node_config.insert(
         "messages".into(),
         serde_json::json!([
@@ -235,9 +248,15 @@ pub async fn run(args: ReviewArgs) -> anyhow::Result<()> {
             }
         ]),
     );
-    node_config.insert("tool_allowlist".into(), serde_json::json!(["file_read", "calculator"]));
+    node_config.insert(
+        "tool_allowlist".into(),
+        serde_json::json!(["file_read", "calculator"]),
+    );
 
-    let judge_model = member_models.last().cloned().unwrap_or_else(|| "zen/deepseek-v4-flash-free".into());
+    let judge_model = member_models
+        .last()
+        .cloned()
+        .unwrap_or_else(|| "zen/deepseek-v4-flash-free".into());
 
     // Build a minimal WorkflowIR and compile through the standard pipeline
     // (Phase 6) — strategy expansion is handled by lower_to_graph, not by
@@ -264,7 +283,13 @@ pub async fn run(args: ReviewArgs) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("consensus expansion failed: {}", e))?;
     // Attach the review-specific metadata that lower_to_graph doesn't set.
     graph.graph_id = Uuid::new_v4();
-    graph.metadata = GraphMetadata { estimated_cost: crate::types::NanoUSD::ZERO, estimated_tokens: 0, policy_version: 0, max_depth: 0, node_count: 1 };
+    graph.metadata = GraphMetadata {
+        estimated_cost: crate::types::NanoUSD::ZERO,
+        estimated_tokens: 0,
+        policy_version: 0,
+        max_depth: 0,
+        node_count: 1,
+    };
 
     tracing::info!(
         members = ?member_models,

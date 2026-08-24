@@ -4,8 +4,8 @@ pub mod ast;
 pub mod bridge;
 pub mod diagnostics;
 pub mod ir;
-pub mod precedence;
 pub mod policy_registry;
+pub mod precedence;
 pub mod trace;
 
 pub use policy_registry::PolicyRegistry;

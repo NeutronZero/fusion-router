@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use fusion_plugin_api::CapabilityId;
 use parking_lot::RwLock;
 use semver::Version;
+use std::collections::HashMap;
 use wasmtime::{Engine, Module};
-use fusion_plugin_api::CapabilityId;
 
 #[derive(Default)]
 pub struct RuntimeModuleCache {

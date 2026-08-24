@@ -1,14 +1,14 @@
-use std::sync::Arc;
-use async_trait::async_trait;
-use reqwest::Request;
-use tracing::Level;
-use uuid::Uuid;
 use crate::capability::CapabilityRegistry;
-use crate::events::{bus::EventBus, ExecutionEventEnvelope, payload::ExecutionEvent};
+use crate::events::{bus::EventBus, payload::ExecutionEvent, ExecutionEventEnvelope};
 use crate::release::gate::GateError;
 use crate::runtime::host_services::CapabilityHostServices;
 use crate::runtime::policy::{check_http_access, check_secret_access};
 use crate::telemetry::metrics::FusionMetrics;
+use async_trait::async_trait;
+use reqwest::Request;
+use std::sync::Arc;
+use tracing::Level;
+use uuid::Uuid;
 
 pub struct WasmtimeCapabilityHost {
     registry: Arc<dyn CapabilityRegistry>,
@@ -67,34 +67,54 @@ impl CapabilityHostServices for WasmtimeCapabilityHost {
     }
 
     async fn fetch_secret(&self, secret_name: &str) -> Result<String, GateError> {
-        let contract = self.registry
+        let contract = self
+            .registry
             .list()
             .into_iter()
             .find(|c| {
-                c.permissions.iter().any(|p| matches!(p, fusion_plugin_api::Permission::Secrets(_)))
+                c.permissions
+                    .iter()
+                    .any(|p| matches!(p, fusion_plugin_api::Permission::Secrets(_)))
             })
-            .ok_or_else(|| GateError::PermissionDenied("no capability with secret permissions".into()))?;
+            .ok_or_else(|| {
+                GateError::PermissionDenied("no capability with secret permissions".into())
+            })?;
         check_secret_access(&contract.permissions, secret_name)?;
-        std::env::var(secret_name)
-            .map_err(|_| GateError::PermissionDenied(format!("secret '{}' not found in environment", secret_name)))
+        std::env::var(secret_name).map_err(|_| {
+            GateError::PermissionDenied(format!(
+                "secret '{}' not found in environment",
+                secret_name
+            ))
+        })
     }
 
     async fn http_request(&self, req: Request) -> Result<reqwest::Response, GateError> {
         let url_str = req.url().to_string();
-        let contract = self.registry
+        let contract = self
+            .registry
             .list()
             .into_iter()
             .find(|c| {
-                c.permissions.iter().any(|p| matches!(p, fusion_plugin_api::Permission::Http(_)))
+                c.permissions
+                    .iter()
+                    .any(|p| matches!(p, fusion_plugin_api::Permission::Http(_)))
             })
-            .ok_or_else(|| GateError::PermissionDenied("no capability with HTTP permissions".into()))?;
+            .ok_or_else(|| {
+                GateError::PermissionDenied("no capability with HTTP permissions".into())
+            })?;
         check_http_access(&contract.permissions, &url_str)?;
-        self.http_client.execute(req).await
+        self.http_client
+            .execute(req)
+            .await
             .map_err(|e| GateError::ExecutionFailed(format!("HTTP request failed: {e}")))
     }
 
     fn record_metric(&self, name: &str, value: f64) {
-        tracing::info!(metric_name = name, metric_value = value, "capability metric");
+        tracing::info!(
+            metric_name = name,
+            metric_value = value,
+            "capability metric"
+        );
         self.metrics.requests_total.inc_by(value as u64);
     }
 }
@@ -104,8 +124,8 @@ mod tests {
     use super::*;
     use crate::capability::InMemoryCapabilityRegistry;
     use crate::events::bus::BroadcastEventBus;
-    use std::sync::Arc;
     use fusion_plugin_api::{CapabilityContract, CapabilityId, Permission};
+    use std::sync::Arc;
 
     fn make_registry(permissions: Vec<Permission>) -> Arc<InMemoryCapabilityRegistry> {
         let mut reg = InMemoryCapabilityRegistry::new();
@@ -143,11 +163,10 @@ mod tests {
         host.emit_event(ExecutionEvent::WorkflowStarted {
             intent: "test".into(),
             input_tokens: 10,
-        }).await.unwrap();
-        let received = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            rx.recv(),
-        ).await;
+        })
+        .await
+        .unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv()).await;
         assert!(received.is_ok(), "expected event on bus");
     }
 
@@ -177,7 +196,8 @@ mod tests {
             Uuid::new_v4(),
             None,
         );
-        let req = reqwest::Request::new(reqwest::Method::GET, "https://example.com".parse().unwrap());
+        let req =
+            reqwest::Request::new(reqwest::Method::GET, "https://example.com".parse().unwrap());
         let result = host.http_request(req).await;
         assert!(matches!(result, Err(GateError::PermissionDenied(_))));
     }
@@ -193,7 +213,8 @@ mod tests {
             Uuid::new_v4(),
             None,
         );
-        host.log(tracing::Level::INFO, "hello from capability").await;
+        host.log(tracing::Level::INFO, "hello from capability")
+            .await;
     }
 
     #[test]

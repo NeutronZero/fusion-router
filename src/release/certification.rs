@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use crate::release::gate::{GateCheck, GateError};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct CertificationContext {

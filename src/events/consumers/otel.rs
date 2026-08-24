@@ -1,7 +1,7 @@
-use async_trait::async_trait;
 use crate::events::projection::EventProjection;
 use crate::events::ExecutionEventEnvelope;
 use crate::release::gate::GateError;
+use async_trait::async_trait;
 
 #[allow(dead_code)]
 pub struct OpenTelemetryProjection;

@@ -11,10 +11,8 @@ use std::sync::Arc;
 fn test_policy_registry_identity_through_app_state() {
     let registry = Arc::new(fusion_router::policy::PolicyRegistry::new());
     let audit_log = Arc::new(fusion_router::telemetry::audit::AuditLog::new(100));
-    let admin = fusion_router::operations::policy_admin::PolicyAdmin::new(
-        registry.clone(),
-        audit_log,
-    );
+    let admin =
+        fusion_router::operations::policy_admin::PolicyAdmin::new(registry.clone(), audit_log);
     assert!(
         admin.registry_is(&registry),
         "PolicyAdmin must hold the same PolicyRegistry Arc as AppState"

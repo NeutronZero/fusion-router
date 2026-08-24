@@ -17,7 +17,12 @@ async fn test_api_key_bruteforce() {
     let app = Router::new()
         .route("/", get(|| async { "ok" }))
         .layer(axum::middleware::from_fn(auth_middleware))
-        .layer(axum::Extension(fusion_router::middleware::auth::AuthHandle::from_config(&AuthConfig { enabled: true, api_keys: vec!["valid-key".into()], })));
+        .layer(axum::Extension(
+            fusion_router::middleware::auth::AuthHandle::from_config(&AuthConfig {
+                enabled: true,
+                api_keys: vec!["valid-key".into()],
+            }),
+        ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -67,7 +72,10 @@ async fn test_v1_executions_auth_enforcement() {
     }
 
     let event_bus = Arc::new(BroadcastEventBus::new(64));
-    let executor = Arc::new(DefaultExecutor::new(Arc::new(DummyProvider), HashMap::new()));
+    let executor = Arc::new(DefaultExecutor::new(
+        Arc::new(DummyProvider),
+        HashMap::new(),
+    ));
     let exec_plane = build_execution_plane(
         event_bus,
         executor,
@@ -87,7 +95,12 @@ async fn test_v1_executions_auth_enforcement() {
     let app = Router::new()
         .merge(execution_routes)
         .layer(axum::middleware::from_fn(auth_middleware))
-        .layer(axum::Extension(fusion_router::middleware::auth::AuthHandle::from_config(&AuthConfig { enabled: true, api_keys: vec!["valid-key".into()], })));
+        .layer(axum::Extension(
+            fusion_router::middleware::auth::AuthHandle::from_config(&AuthConfig {
+                enabled: true,
+                api_keys: vec!["valid-key".into()],
+            }),
+        ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -160,18 +173,41 @@ async fn test_v1_operations_auth_enforcement() {
     };
 
     let operations_routes = Router::new()
-        .route("/v1/operations/registry", get(fusion_router::operations::handlers::registry_handler))
-        .route("/v1/operations/runtime", get(fusion_router::operations::handlers::runtime_handler))
-        .route("/v1/operations/metrics", get(fusion_router::operations::handlers::metrics_handler))
-        .route("/v1/operations/policies", get(fusion_router::operations::handlers::policies_list_handler))
-        .route("/v1/operations/policies", post(fusion_router::operations::handlers::policies_create_handler))
-        .route("/v1/operations/attestations", get(fusion_router::operations::handlers::attestations_handler))
+        .route(
+            "/v1/operations/registry",
+            get(fusion_router::operations::handlers::registry_handler),
+        )
+        .route(
+            "/v1/operations/runtime",
+            get(fusion_router::operations::handlers::runtime_handler),
+        )
+        .route(
+            "/v1/operations/metrics",
+            get(fusion_router::operations::handlers::metrics_handler),
+        )
+        .route(
+            "/v1/operations/policies",
+            get(fusion_router::operations::handlers::policies_list_handler),
+        )
+        .route(
+            "/v1/operations/policies",
+            post(fusion_router::operations::handlers::policies_create_handler),
+        )
+        .route(
+            "/v1/operations/attestations",
+            get(fusion_router::operations::handlers::attestations_handler),
+        )
         .with_state(ops_state);
 
     let app = Router::new()
         .merge(operations_routes)
         .layer(axum::middleware::from_fn(auth_middleware))
-        .layer(axum::Extension(fusion_router::middleware::auth::AuthHandle::from_config(&AuthConfig { enabled: true, api_keys: vec!["operator-key:operator".into(), "chat-only-key".into()] })));
+        .layer(axum::Extension(
+            fusion_router::middleware::auth::AuthHandle::from_config(&AuthConfig {
+                enabled: true,
+                api_keys: vec!["operator-key:operator".into(), "chat-only-key".into()],
+            }),
+        ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -227,7 +263,9 @@ async fn test_v1_operations_auth_enforcement() {
 async fn test_path_traversal() {
     let tmp = std::env::temp_dir();
     let tool = FileReadTool::new(tmp.to_string_lossy().to_string());
-    let result = tool.execute(serde_json::json!({"path": "../../etc/passwd"})).await;
+    let result = tool
+        .execute(serde_json::json!({"path": "../../etc/passwd"}))
+        .await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -260,14 +298,27 @@ async fn test_shell_injection() {
     assert!(err.contains("not in allowed list") || err.contains("strictly prohibited"));
 
     // Shell binaries must be rejected even if configured in allowed list
-    for shell_bin in &["cmd", "cmd.exe", "sh", "bash", "powershell", "powershell.exe", "pwsh", "zsh"] {
+    for shell_bin in &[
+        "cmd",
+        "cmd.exe",
+        "sh",
+        "bash",
+        "powershell",
+        "powershell.exe",
+        "pwsh",
+        "zsh",
+    ] {
         let res = tool
             .execute(serde_json::json!({
                 "command": shell_bin,
                 "args": ["-c", "echo hello"]
             }))
             .await;
-        assert!(res.is_err(), "Shell binary '{}' should be rejected", shell_bin);
+        assert!(
+            res.is_err(),
+            "Shell binary '{}' should be rejected",
+            shell_bin
+        );
         let err_msg = res.unwrap_err();
         assert!(
             err_msg.contains("strictly prohibited"),
@@ -328,4 +379,3 @@ async fn test_oversized_payload() {
         .unwrap();
     assert_eq!(res.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
 }
-

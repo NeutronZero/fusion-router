@@ -11,8 +11,7 @@ pub async fn execute_publish(
         return Err(format!("Package not found: {}", pkg_path.display()));
     }
 
-    let pkg_bytes = std::fs::read(pkg_path)
-        .map_err(|e| format!("Failed to read package: {e}"))?;
+    let pkg_bytes = std::fs::read(pkg_path).map_err(|e| format!("Failed to read package: {e}"))?;
 
     let filename = pkg_path
         .file_stem()
@@ -75,6 +74,9 @@ mod tests {
         ));
         assert!(result.is_err());
         let err = result.unwrap_err().to_lowercase();
-        assert!(!err.contains("not found"), "should pass file check, got: {err}");
+        assert!(
+            !err.contains("not found"),
+            "should pass file check, got: {err}"
+        );
     }
 }

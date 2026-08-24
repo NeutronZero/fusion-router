@@ -2,10 +2,10 @@
 //!
 //! Normalized, immutable compiler Intermediate Representation of policies.
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::policy::ast::PolicyAST;
 use crate::policy::diagnostics::PolicyDiagnostic;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PolicyEffect {
@@ -101,9 +101,7 @@ impl PolicyIR {
     /// Each registry entry stores the full serialized `PolicyDeclaration`.
     /// Fail-closed: an unparseable entry or unknown effect is a hard error,
     /// never silently downgraded (ADR-034 charter WP 1.1).
-    pub fn from_policy_snapshot(
-        snap: &fusion_planner::PolicySnapshot,
-    ) -> Result<Self, String> {
+    pub fn from_policy_snapshot(snap: &fusion_planner::PolicySnapshot) -> Result<Self, String> {
         if snap.policies.is_empty() {
             return Ok(Self { rules: Vec::new() });
         }
@@ -141,7 +139,10 @@ impl PolicyIR {
                 conditions: decl
                     .conditions
                     .iter()
-                    .map(|(k, v)| PolicyCondition { field: k.clone(), expected: v.clone() })
+                    .map(|(k, v)| PolicyCondition {
+                        field: k.clone(),
+                        expected: v.clone(),
+                    })
                     .collect(),
                 actions: Vec::new(),
             });
@@ -163,7 +164,9 @@ mod tests {
     use super::*;
     use crate::policy::ast::PolicyParser;
 
-    fn snapshot_with(decls: &[crate::policy::ast::PolicyDeclaration]) -> fusion_planner::PolicySnapshot {
+    fn snapshot_with(
+        decls: &[crate::policy::ast::PolicyDeclaration],
+    ) -> fusion_planner::PolicySnapshot {
         use fusion_planner::PolicyDeclarationSnapshot;
         fusion_planner::PolicySnapshot {
             version: 2,
@@ -179,7 +182,12 @@ mod tests {
         }
     }
 
-    fn declaration(name: &str, target: &str, effect: &str, priority: u32) -> crate::policy::ast::PolicyDeclaration {
+    fn declaration(
+        name: &str,
+        target: &str,
+        effect: &str,
+        priority: u32,
+    ) -> crate::policy::ast::PolicyDeclaration {
         crate::policy::ast::PolicyDeclaration {
             name: name.into(),
             priority,
@@ -198,7 +206,11 @@ mod tests {
         ]);
         let ir = PolicyIR::from_policy_snapshot(&snap).unwrap();
         assert_eq!(ir.rules.len(), 2);
-        assert_eq!(ir.rules[0].effect, PolicyEffect::Deny, "deny must sort first");
+        assert_eq!(
+            ir.rules[0].effect,
+            PolicyEffect::Deny,
+            "deny must sort first"
+        );
         // The bridged IR used by the compiler must also resolve deny as winner.
         let bridged: fusion_compiler::policy::PolicyIR = ir.into();
         let rule = fusion_compiler::policy::PolicyPrecedenceEngine::evaluate_matching_rule(
@@ -279,10 +291,16 @@ mod tests {
         }"#;
 
         let (ast, diagnostics) = PolicyParser::parse_json(json_raw).unwrap();
-        assert!(!diagnostics.is_empty(), "parser should flag the invalid effect");
+        assert!(
+            !diagnostics.is_empty(),
+            "parser should flag the invalid effect"
+        );
 
         let result = PolicyIR::from_ast(&ast);
-        assert!(result.is_err(), "unknown effect must fail closed, not default to Allow");
+        assert!(
+            result.is_err(),
+            "unknown effect must fail closed, not default to Allow"
+        );
     }
 
     #[test]
@@ -302,6 +320,9 @@ mod tests {
         }"#;
 
         let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
-        assert!(PolicyIR::from_ast(&ast).is_err(), "case-mismatched effects must fail closed");
+        assert!(
+            PolicyIR::from_ast(&ast).is_err(),
+            "case-mismatched effects must fail closed"
+        );
     }
 }

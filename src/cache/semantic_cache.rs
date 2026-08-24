@@ -41,8 +41,11 @@ impl SemanticCache {
             expansion_search: 64,
             multi: false,
         };
-        let index = Index::new(&options).map_err(|e| format!("Failed to create HNSW index: {}", e))?;
-        index.reserve(max_entries).map_err(|e| format!("Failed to reserve index capacity: {}", e))?;
+        let index =
+            Index::new(&options).map_err(|e| format!("Failed to create HNSW index: {}", e))?;
+        index
+            .reserve(max_entries)
+            .map_err(|e| format!("Failed to reserve index capacity: {}", e))?;
         Ok(Self {
             embedder,
             entries: RwLock::new(HashMap::new()),
@@ -60,7 +63,13 @@ impl SemanticCache {
         max_entries: usize,
         dimensions: usize,
     ) -> Self {
-        Self::try_new(embedder.clone(), similarity_threshold, max_entries, dimensions).unwrap_or_else(|e| {
+        Self::try_new(
+            embedder.clone(),
+            similarity_threshold,
+            max_entries,
+            dimensions,
+        )
+        .unwrap_or_else(|e| {
             tracing::error!(error = %e, "Failed to initialize HNSW index for SemanticCache");
             let options = IndexOptions {
                 dimensions,
@@ -94,7 +103,8 @@ impl SemanticCache {
                             expansion_add: 2,
                             expansion_search: 2,
                             multi: false,
-                        }).unwrap_or_else(|e3| {
+                        })
+                        .unwrap_or_else(|e3| {
                             tracing::error!(error = %e3, "Failed to allocate minimal HNSW index");
                             std::process::exit(1);
                         })
@@ -129,7 +139,8 @@ impl SemanticCache {
             idx.search(&emb, 1)
         })
         .await
-        .ok()?.ok()?;
+        .ok()?
+        .ok()?;
 
         let label = *results.keys.first()?;
         let entries = self.entries.read();
@@ -209,8 +220,11 @@ impl SemanticCache {
             expansion_search: 64,
             multi: false,
         };
-        let new_index = Index::new(&options).map_err(|e| format!("Failed to create new HNSW index: {}", e))?;
-        new_index.reserve(self.max_entries).map_err(|e| format!("Failed to reserve index capacity: {}", e))?;
+        let new_index =
+            Index::new(&options).map_err(|e| format!("Failed to create new HNSW index: {}", e))?;
+        new_index
+            .reserve(self.max_entries)
+            .map_err(|e| format!("Failed to reserve index capacity: {}", e))?;
         self.entries.write().clear();
         *self.index.lock().unwrap_or_else(|e| e.into_inner()) = new_index;
         self.next_label.store(0, Ordering::Relaxed);
@@ -241,7 +255,9 @@ mod tests {
     #[tokio::test]
     async fn test_cache_hit_after_put() {
         let cache = SemanticCache::new(Arc::new(MockEmbedder), 0.0, 100, 384);
-        cache.put("test query", serde_json::json!("cached response")).await;
+        cache
+            .put("test query", serde_json::json!("cached response"))
+            .await;
         let result = cache.get("test query").await;
         assert!(result.is_some(), "Should find cached response");
         assert_eq!(result.unwrap(), serde_json::json!("cached response"));

@@ -1,16 +1,16 @@
+#[cfg(test)]
+use crate::edge::WorkflowEdge;
 use crate::edge::WorkflowEdgeKind;
+#[cfg(test)]
+use crate::node::WorkflowNode;
 use crate::node::WorkflowNodeKind;
 use crate::version::WORKFLOW_IR_VERSION;
 use crate::workflow::WorkflowIR;
-use thiserror::Error;
-#[cfg(test)]
-use crate::edge::WorkflowEdge;
-#[cfg(test)]
-use crate::node::WorkflowNode;
 #[cfg(test)]
 use crate::workflow::WorkflowMetadata;
 #[cfg(test)]
 use std::collections::BTreeMap;
+use thiserror::Error;
 #[cfg(test)]
 use uuid::Uuid;
 
@@ -120,7 +120,8 @@ fn structural_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
     }
 
     let mut incoming: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    let mut adjacency: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+    let mut adjacency: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
     for e in &ir.edges {
         if e.kind == WorkflowEdgeKind::Loop {
             continue;
@@ -128,11 +129,23 @@ fn structural_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
         if seen.contains(e.to.as_str()) {
             *incoming.entry(e.to.as_str()).or_insert(0) += 1;
         }
-        adjacency.entry(e.from.as_str()).or_default().push(e.to.as_str());
+        adjacency
+            .entry(e.from.as_str())
+            .or_default()
+            .push(e.to.as_str());
     }
-    let roots: Vec<&str> = ir.nodes.iter().map(|n| n.id.as_str()).filter(|id| incoming.get(id).copied().unwrap_or(0) == 0).collect();
+    let roots: Vec<&str> = ir
+        .nodes
+        .iter()
+        .map(|n| n.id.as_str())
+        .filter(|id| incoming.get(id).copied().unwrap_or(0) == 0)
+        .collect();
     if roots.is_empty() {
-        report.push(ValidationIssue { node: None, edge: None, error: ValidationError::MissingRoot });
+        report.push(ValidationIssue {
+            node: None,
+            edge: None,
+            error: ValidationError::MissingRoot,
+        });
     }
 
     let mut reachable: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -165,7 +178,10 @@ fn node_kind_of(ir: &WorkflowIR, id: &str) -> Option<WorkflowNodeKind> {
 }
 
 fn control_flow_marker<'a>(ir: &'a WorkflowIR, id: &str) -> Option<&'a str> {
-    ir.nodes.iter().find(|n| n.id == id).and_then(|n| n.config.get("control_flow").and_then(|v| v.as_str()))
+    ir.nodes
+        .iter()
+        .find(|n| n.id == id)
+        .and_then(|n| n.config.get("control_flow").and_then(|v| v.as_str()))
 }
 
 fn semantic_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
@@ -184,12 +200,22 @@ fn semantic_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
                     report.push(ValidationIssue {
                         node: None,
                         edge: edge_ref,
-                        error: ValidationError::MissingCondition { from: e.from.clone(), to: e.to.clone() },
+                        error: ValidationError::MissingCondition {
+                            from: e.from.clone(),
+                            to: e.to.clone(),
+                        },
                     });
                 }
             }
             WorkflowEdgeKind::Retry => {
-                if !matches!(node_kind_of(ir, &e.from), Some(WorkflowNodeKind::Task | WorkflowNodeKind::Tool | WorkflowNodeKind::Retrieval)) {
+                if !matches!(
+                    node_kind_of(ir, &e.from),
+                    Some(
+                        WorkflowNodeKind::Task
+                            | WorkflowNodeKind::Tool
+                            | WorkflowNodeKind::Retrieval
+                    )
+                ) {
                     report.push(ValidationIssue {
                         node: None,
                         edge: edge_ref,
@@ -209,7 +235,9 @@ fn semantic_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
     }
 
     for n in &ir.nodes {
-        if n.kind == WorkflowNodeKind::Output && outgoing.get(n.id.as_str()).copied().unwrap_or(0) > 0 {
+        if n.kind == WorkflowNodeKind::Output
+            && outgoing.get(n.id.as_str()).copied().unwrap_or(0) > 0
+        {
             report.push(ValidationIssue {
                 node: Some(n.id.clone()),
                 edge: None,
@@ -230,7 +258,9 @@ fn semantic_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
         if e.kind == WorkflowEdgeKind::Loop {
             if let Some(marker) = control_flow_marker(ir, &e.from) {
                 if marker == "loop" {
-                    let has_max = ir.nodes.iter()
+                    let has_max = ir
+                        .nodes
+                        .iter()
                         .find(|n| n.id == e.from)
                         .map(|n| n.config.contains_key("max_iterations"))
                         .unwrap_or(false);
@@ -273,10 +303,14 @@ fn semantic_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
 }
 
 fn non_loop_cycle_back_edges(ir: &WorkflowIR) -> Vec<(String, String)> {
-    let mut adjacency: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+    let mut adjacency: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
     for e in &ir.edges {
         if e.kind != WorkflowEdgeKind::Loop {
-            adjacency.entry(e.from.as_str()).or_default().push(e.to.as_str());
+            adjacency
+                .entry(e.from.as_str())
+                .or_default()
+                .push(e.to.as_str());
         }
     }
     let mut back_edges = Vec::new();
@@ -385,26 +419,50 @@ mod tests {
 
     #[test]
     fn reports_duplicate_node_ids() {
-        let ir = ir_with(vec![node("n1", WorkflowNodeKind::Task), node("n1", WorkflowNodeKind::Output)], vec![]);
+        let ir = ir_with(
+            vec![
+                node("n1", WorkflowNodeKind::Task),
+                node("n1", WorkflowNodeKind::Output),
+            ],
+            vec![],
+        );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::DuplicateNodeId("n1".into())));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::DuplicateNodeId("n1".into())));
     }
 
     #[test]
     fn reports_dangling_edge_reference() {
-        let ir = ir_with(vec![node("n1", WorkflowNodeKind::Task)], vec![edge("n1", "ghost", WorkflowEdgeKind::Sequential)]);
+        let ir = ir_with(
+            vec![node("n1", WorkflowNodeKind::Task)],
+            vec![edge("n1", "ghost", WorkflowEdgeKind::Sequential)],
+        );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::UnknownNodeRef("ghost".into())));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::UnknownNodeRef("ghost".into())));
     }
 
     #[test]
     fn reports_missing_root_and_unreachable_nodes() {
         let cycle = ir_with(
-            vec![node("a", WorkflowNodeKind::Task), node("b", WorkflowNodeKind::Task)],
-            vec![edge("a", "b", WorkflowEdgeKind::Sequential), edge("b", "a", WorkflowEdgeKind::Sequential)],
+            vec![
+                node("a", WorkflowNodeKind::Task),
+                node("b", WorkflowNodeKind::Task),
+            ],
+            vec![
+                edge("a", "b", WorkflowEdgeKind::Sequential),
+                edge("b", "a", WorkflowEdgeKind::Sequential),
+            ],
         );
         let report = cycle.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::MissingRoot));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::MissingRoot));
         assert!(!report.is_empty());
         assert!(report.first_error().is_some());
     }
@@ -412,7 +470,10 @@ mod tests {
     #[test]
     fn valid_graph_passes_structural_checks() {
         let ir = ir_with(
-            vec![node("a", WorkflowNodeKind::Task), node("b", WorkflowNodeKind::Output)],
+            vec![
+                node("a", WorkflowNodeKind::Task),
+                node("b", WorkflowNodeKind::Output),
+            ],
             vec![edge("a", "b", WorkflowEdgeKind::Sequential)],
         );
         assert!(ir.validate().is_empty());
@@ -421,7 +482,10 @@ mod tests {
     #[test]
     fn report_order_is_deterministic() {
         let ir = ir_with(
-            vec![node("n1", WorkflowNodeKind::Task), node("n1", WorkflowNodeKind::Task)],
+            vec![
+                node("n1", WorkflowNodeKind::Task),
+                node("n1", WorkflowNodeKind::Task),
+            ],
             vec![edge("n1", "ghost", WorkflowEdgeKind::Sequential)],
         );
         let first = ir.validate();
@@ -432,64 +496,117 @@ mod tests {
     #[test]
     fn only_loop_edges_may_cycle() {
         let ir = ir_with(
-            vec![node("a", WorkflowNodeKind::Task), node("b", WorkflowNodeKind::Task), node("c", WorkflowNodeKind::Output)],
-            vec![edge("a", "b", WorkflowEdgeKind::Sequential), edge("b", "a", WorkflowEdgeKind::Sequential), edge("a", "c", WorkflowEdgeKind::Sequential)],
+            vec![
+                node("a", WorkflowNodeKind::Task),
+                node("b", WorkflowNodeKind::Task),
+                node("c", WorkflowNodeKind::Output),
+            ],
+            vec![
+                edge("a", "b", WorkflowEdgeKind::Sequential),
+                edge("b", "a", WorkflowEdgeKind::Sequential),
+                edge("a", "c", WorkflowEdgeKind::Sequential),
+            ],
         );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::IllegalCycle { from: "b".into(), to: "a".into() }));
+        assert!(report.issues().iter().any(|i| i.error
+            == ValidationError::IllegalCycle {
+                from: "b".into(),
+                to: "a".into()
+            }));
     }
 
     #[test]
     fn loop_edge_cycle_is_legal() {
         let ir = ir_with(
-            vec![node("a", WorkflowNodeKind::Task), node("b", WorkflowNodeKind::Output)],
-            vec![edge("a", "b", WorkflowEdgeKind::Sequential), edge("b", "a", WorkflowEdgeKind::Loop)],
+            vec![
+                node("a", WorkflowNodeKind::Task),
+                node("b", WorkflowNodeKind::Output),
+            ],
+            vec![
+                edge("a", "b", WorkflowEdgeKind::Sequential),
+                edge("b", "a", WorkflowEdgeKind::Loop),
+            ],
         );
         let report = ir.validate();
-        assert!(!report.issues().iter().any(|i| matches!(i.error, ValidationError::IllegalCycle { .. })));
+        assert!(!report
+            .issues()
+            .iter()
+            .any(|i| matches!(i.error, ValidationError::IllegalCycle { .. })));
     }
 
     #[test]
     fn conditional_edge_requires_condition() {
         let ir = ir_with(
-            vec![node("a", WorkflowNodeKind::Task), node("b", WorkflowNodeKind::Output)],
-            vec![WorkflowEdge { from: "a".into(), to: "b".into(), kind: WorkflowEdgeKind::Conditional, condition: None }],
+            vec![
+                node("a", WorkflowNodeKind::Task),
+                node("b", WorkflowNodeKind::Output),
+            ],
+            vec![WorkflowEdge {
+                from: "a".into(),
+                to: "b".into(),
+                kind: WorkflowEdgeKind::Conditional,
+                condition: None,
+            }],
         );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::MissingCondition { from: "a".into(), to: "b".into() }));
+        assert!(report.issues().iter().any(|i| i.error
+            == ValidationError::MissingCondition {
+                from: "a".into(),
+                to: "b".into()
+            }));
     }
 
     #[test]
     fn retry_edge_requires_retryable_source() {
         let ir = ir_with(
-            vec![node("a", WorkflowNodeKind::Output), node("b", WorkflowNodeKind::Task)],
+            vec![
+                node("a", WorkflowNodeKind::Output),
+                node("b", WorkflowNodeKind::Task),
+            ],
             vec![edge("a", "b", WorkflowEdgeKind::Retry)],
         );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::NotRetryable("a".into())));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::NotRetryable("a".into())));
     }
 
     #[test]
     fn merge_requires_two_incoming_edges() {
         let ir = ir_with(
-            vec![node("a", WorkflowNodeKind::Task), node("b", WorkflowNodeKind::Task), node("m", WorkflowNodeKind::Aggregation), node("o", WorkflowNodeKind::Output)],
+            vec![
+                node("a", WorkflowNodeKind::Task),
+                node("b", WorkflowNodeKind::Task),
+                node("m", WorkflowNodeKind::Aggregation),
+                node("o", WorkflowNodeKind::Output),
+            ],
             vec![
                 edge("a", "m", WorkflowEdgeKind::Merge),
                 edge("m", "o", WorkflowEdgeKind::Sequential),
             ],
         );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::MergeArity("m".into())));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::MergeArity("m".into())));
     }
 
     #[test]
     fn output_node_may_not_have_outgoing_edges() {
         let ir = ir_with(
-            vec![node("a", WorkflowNodeKind::Output), node("b", WorkflowNodeKind::Task)],
+            vec![
+                node("a", WorkflowNodeKind::Output),
+                node("b", WorkflowNodeKind::Task),
+            ],
             vec![edge("a", "b", WorkflowEdgeKind::Sequential)],
         );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::OutputOutgoing("a".into())));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::OutputOutgoing("a".into())));
     }
 
     #[test]
@@ -500,114 +617,202 @@ mod tests {
                 kind: WorkflowNodeKind::Task,
                 capability: None,
                 selected_model: None,
-                config: BTreeMap::from([("model".into(), serde_json::Value::String("gpt-4".into()))]),
+                config: BTreeMap::from([(
+                    "model".into(),
+                    serde_json::Value::String("gpt-4".into()),
+                )]),
             }],
             vec![edge("a", "a", WorkflowEdgeKind::Loop)],
         );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::ProviderField("model".into())));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::ProviderField("model".into())));
     }
 
     #[test]
     fn version_mismatch_is_rejected() {
-        let mut ir = ir_with(vec![node("a", WorkflowNodeKind::Task)], vec![edge("a", "a", WorkflowEdgeKind::Loop)]);
+        let mut ir = ir_with(
+            vec![node("a", WorkflowNodeKind::Task)],
+            vec![edge("a", "a", WorkflowEdgeKind::Loop)],
+        );
         ir.version = 99;
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::VersionMismatch(99, WORKFLOW_IR_VERSION)));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::VersionMismatch(99, WORKFLOW_IR_VERSION)));
     }
 
     #[test]
     fn split_requires_two_parallel_outgoing_edges() {
         let mut n1 = node("n1", WorkflowNodeKind::Task);
-        n1.config.insert("control_flow".into(), serde_json::Value::String("split".into()));
+        n1.config.insert(
+            "control_flow".into(),
+            serde_json::Value::String("split".into()),
+        );
         let ir = ir_with(
             vec![n1, node("n2", WorkflowNodeKind::Task)],
             vec![edge("n1", "n2", WorkflowEdgeKind::Sequential)],
         );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::SplitArity("n1".into())));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::SplitArity("n1".into())));
     }
 
     #[test]
     fn split_with_two_parallel_edges_passes() {
         let mut n1 = node("n1", WorkflowNodeKind::Task);
-        n1.config.insert("control_flow".into(), serde_json::Value::String("split".into()));
+        n1.config.insert(
+            "control_flow".into(),
+            serde_json::Value::String("split".into()),
+        );
         let ir = ir_with(
-            vec![n1, node("n2", WorkflowNodeKind::Task), node("n3", WorkflowNodeKind::Task)],
-            vec![edge("n1", "n2", WorkflowEdgeKind::Parallel), edge("n1", "n3", WorkflowEdgeKind::Parallel)],
+            vec![
+                n1,
+                node("n2", WorkflowNodeKind::Task),
+                node("n3", WorkflowNodeKind::Task),
+            ],
+            vec![
+                edge("n1", "n2", WorkflowEdgeKind::Parallel),
+                edge("n1", "n3", WorkflowEdgeKind::Parallel),
+            ],
         );
         let report = ir.validate();
-        assert!(!report.issues().iter().any(|i| i.error == ValidationError::SplitArity("n1".into())));
+        assert!(!report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::SplitArity("n1".into())));
     }
 
     #[test]
     fn marked_split_accepts_two_non_parallel_outgoing_edges() {
         let mut n1 = node("n1", WorkflowNodeKind::Task);
-        n1.config.insert("control_flow".into(), serde_json::Value::String("split".into()));
+        n1.config.insert(
+            "control_flow".into(),
+            serde_json::Value::String("split".into()),
+        );
         let ir = ir_with(
-            vec![n1, node("n2", WorkflowNodeKind::Task), node("n3", WorkflowNodeKind::Task)],
-            vec![edge("n1", "n2", WorkflowEdgeKind::Sequential), edge("n1", "n3", WorkflowEdgeKind::Conditional)],
+            vec![
+                n1,
+                node("n2", WorkflowNodeKind::Task),
+                node("n3", WorkflowNodeKind::Task),
+            ],
+            vec![
+                edge("n1", "n2", WorkflowEdgeKind::Sequential),
+                edge("n1", "n3", WorkflowEdgeKind::Conditional),
+            ],
         );
         let report = ir.validate();
-        assert!(!report.issues().iter().any(|i| i.error == ValidationError::SplitArity("n1".into())));
+        assert!(!report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::SplitArity("n1".into())));
     }
 
     #[test]
     fn loop_edge_requires_max_iterations_in_config() {
         let mut n1 = node("n1", WorkflowNodeKind::Task);
-        n1.config.insert("control_flow".into(), serde_json::Value::String("loop".into()));
+        n1.config.insert(
+            "control_flow".into(),
+            serde_json::Value::String("loop".into()),
+        );
         let ir = ir_with(
             vec![n1, node("n2", WorkflowNodeKind::Task)],
             vec![edge("n1", "n2", WorkflowEdgeKind::Loop)],
         );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::LoopConfig("n1".into())));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::LoopConfig("n1".into())));
     }
 
     #[test]
     fn loop_edge_with_max_iterations_passes() {
         let mut n1 = node("n1", WorkflowNodeKind::Task);
-        n1.config.insert("control_flow".into(), serde_json::Value::String("loop".into()));
-        n1.config.insert("max_iterations".into(), serde_json::Value::Number(10.into()));
+        n1.config.insert(
+            "control_flow".into(),
+            serde_json::Value::String("loop".into()),
+        );
+        n1.config.insert(
+            "max_iterations".into(),
+            serde_json::Value::Number(10.into()),
+        );
         let ir = ir_with(
             vec![n1, node("n2", WorkflowNodeKind::Task)],
             vec![edge("n1", "n2", WorkflowEdgeKind::Loop)],
         );
         let report = ir.validate();
-        assert!(!report.issues().iter().any(|i| i.error == ValidationError::LoopConfig("n1".into())));
+        assert!(!report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::LoopConfig("n1".into())));
     }
 
     #[test]
     fn barrier_requires_incoming_and_outgoing_edges() {
         let mut n1 = node("n1", WorkflowNodeKind::Task);
-        n1.config.insert("control_flow".into(), serde_json::Value::String("barrier".into()));
+        n1.config.insert(
+            "control_flow".into(),
+            serde_json::Value::String("barrier".into()),
+        );
         let ir = ir_with(
             vec![n1, node("n2", WorkflowNodeKind::Task)],
             vec![edge("n2", "n1", WorkflowEdgeKind::Sequential)],
         );
         let report = ir.validate();
-        assert!(report.issues().iter().any(|i| i.error == ValidationError::BarrierArity("n1".into())));
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::BarrierArity("n1".into())));
     }
 
     #[test]
     fn barrier_with_both_incoming_and_outgoing_passes() {
         let mut n1 = node("n1", WorkflowNodeKind::Task);
-        n1.config.insert("control_flow".into(), serde_json::Value::String("barrier".into()));
+        n1.config.insert(
+            "control_flow".into(),
+            serde_json::Value::String("barrier".into()),
+        );
         let ir = ir_with(
-            vec![n1, node("n2", WorkflowNodeKind::Task), node("n3", WorkflowNodeKind::Task)],
-            vec![edge("n2", "n1", WorkflowEdgeKind::Sequential), edge("n1", "n3", WorkflowEdgeKind::Sequential)],
+            vec![
+                n1,
+                node("n2", WorkflowNodeKind::Task),
+                node("n3", WorkflowNodeKind::Task),
+            ],
+            vec![
+                edge("n2", "n1", WorkflowEdgeKind::Sequential),
+                edge("n1", "n3", WorkflowEdgeKind::Sequential),
+            ],
         );
         let report = ir.validate();
-        assert!(!report.issues().iter().any(|i| i.error == ValidationError::BarrierArity("n1".into())));
+        assert!(!report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::BarrierArity("n1".into())));
     }
 
     #[test]
     fn join_target_does_not_require_barrier_outgoing_edge() {
         let ir = ir_with(
-            vec![node("a", WorkflowNodeKind::Task), node("b", WorkflowNodeKind::Task), node("m", WorkflowNodeKind::Aggregation)],
-            vec![edge("a", "m", WorkflowEdgeKind::Merge), edge("b", "m", WorkflowEdgeKind::Merge)],
+            vec![
+                node("a", WorkflowNodeKind::Task),
+                node("b", WorkflowNodeKind::Task),
+                node("m", WorkflowNodeKind::Aggregation),
+            ],
+            vec![
+                edge("a", "m", WorkflowEdgeKind::Merge),
+                edge("b", "m", WorkflowEdgeKind::Merge),
+            ],
         );
         let report = ir.validate();
-        assert!(!report.issues().iter().any(|i| matches!(i.error, ValidationError::BarrierArity(_))));
+        assert!(!report
+            .issues()
+            .iter()
+            .any(|i| matches!(i.error, ValidationError::BarrierArity(_))));
     }
 }

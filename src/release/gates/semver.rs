@@ -43,10 +43,7 @@ impl SemVerBackend for CargoSemVerChecksBackend {
             .output()
             .await
             .map_err(|e| {
-                GateError::ToolNotAvailable(format!(
-                    "cargo semver-checks not found: {}",
-                    e
-                ))
+                GateError::ToolNotAvailable(format!("cargo semver-checks not found: {}", e))
             })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -192,30 +189,30 @@ pub struct MockBackend {
 #[cfg(test)]
 #[async_trait]
 impl SemVerBackend for MockBackend {
-        fn name(&self) -> &str {
-            "mock"
-        }
+    fn name(&self) -> &str {
+        "mock"
+    }
 
-        async fn check_release(
-            &self,
-            _crate_path: &Path,
-            _baseline_ref: &str,
-        ) -> Result<Vec<GateCheck>, GateError> {
-            if self.should_pass {
-                Ok(vec![GateCheck {
-                    name: "compatibility".into(),
-                    passed: true,
-                    message: "All compatible".into(),
-                }])
-            } else {
-                Ok(vec![GateCheck {
-                    name: "compatibility".into(),
-                    passed: false,
-                    message: "Breaking change detected".into(),
-                }])
-            }
+    async fn check_release(
+        &self,
+        _crate_path: &Path,
+        _baseline_ref: &str,
+    ) -> Result<Vec<GateCheck>, GateError> {
+        if self.should_pass {
+            Ok(vec![GateCheck {
+                name: "compatibility".into(),
+                passed: true,
+                message: "All compatible".into(),
+            }])
+        } else {
+            Ok(vec![GateCheck {
+                name: "compatibility".into(),
+                passed: false,
+                message: "Breaking change detected".into(),
+            }])
         }
     }
+}
 
 #[cfg(test)]
 mod tests {

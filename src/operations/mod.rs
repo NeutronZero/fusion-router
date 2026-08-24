@@ -1,12 +1,12 @@
-pub mod dashboard;
-pub mod runtime_inspector;
-pub mod policy_admin;
 pub mod attestation_viewer;
+pub mod dashboard;
 pub mod handlers;
+pub mod policy_admin;
+pub mod runtime_inspector;
 
-use std::collections::HashMap;
 use fusion_plugin_api::CapabilityId;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -73,7 +73,9 @@ pub struct RuntimeModuleCache {
 
 impl RuntimeModuleCache {
     pub fn new() -> Self {
-        Self { modules: RwLock::new(HashMap::new()) }
+        Self {
+            modules: RwLock::new(HashMap::new()),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -114,7 +116,11 @@ pub struct PackageVerification {
 
 pub trait PackageVerifier: Send + Sync {
     fn verified_packages(&self) -> Vec<(String, String)>;
-    fn verify_package(&self, package_id: &str, version: &str) -> Result<PackageVerification, OperationError>;
+    fn verify_package(
+        &self,
+        package_id: &str,
+        version: &str,
+    ) -> Result<PackageVerification, OperationError>;
 }
 
 /// Archive-backed verifier: loads the attestation envelope for a package and
@@ -143,7 +149,11 @@ impl PackageVerifier for ArchivePackageVerifier {
             .unwrap_or_default()
     }
 
-    fn verify_package(&self, package_id: &str, _version: &str) -> Result<PackageVerification, OperationError> {
+    fn verify_package(
+        &self,
+        package_id: &str,
+        _version: &str,
+    ) -> Result<PackageVerification, OperationError> {
         use crate::release::archive::ArchiveBackend;
         let Some(signer) = &self.signer else {
             return Err(OperationError::Registry(
@@ -154,14 +164,18 @@ impl PackageVerifier for ArchivePackageVerifier {
             .archive
             .load(package_id)
             .map_err(|e| OperationError::Registry(e.to_string()))?;
-        let report = crate::release::verifier::AttestationVerifier::verify(&envelope, signer.as_ref())
-            .map_err(|e| OperationError::Registry(e.to_string()))?;
+        let report =
+            crate::release::verifier::AttestationVerifier::verify(&envelope, signer.as_ref())
+                .map_err(|e| OperationError::Registry(e.to_string()))?;
         let verification = PackageVerification {
             schema_valid: report.schema_valid,
             signature_valid: report.signature_valid,
             semantic_valid: report.semantic_valid,
         };
-        if !(verification.schema_valid && verification.signature_valid && verification.semantic_valid) {
+        if !(verification.schema_valid
+            && verification.signature_valid
+            && verification.semantic_valid)
+        {
             return Err(OperationError::Registry(format!(
                 "attestation {package_id} failed verification: {}",
                 report.summary
@@ -177,16 +191,24 @@ impl PackageVerifier for MockPackageVerifier {
     fn verified_packages(&self) -> Vec<(String, String)> {
         vec![]
     }
-    fn verify_package(&self, _package_id: &str, _version: &str) -> Result<PackageVerification, OperationError> {
-        Ok(PackageVerification { schema_valid: true, signature_valid: true, semantic_valid: true })
+    fn verify_package(
+        &self,
+        _package_id: &str,
+        _version: &str,
+    ) -> Result<PackageVerification, OperationError> {
+        Ok(PackageVerification {
+            schema_valid: true,
+            signature_valid: true,
+            semantic_valid: true,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use crate::release::signing::HmacSha256Signer;
+    use std::sync::Arc;
 
     #[test]
     fn test_archive_package_verifier_refuses_without_key() {
@@ -196,7 +218,10 @@ mod tests {
         let verifier = ArchivePackageVerifier::new(archive, None);
         let result = verifier.verify_package("some-pkg", "1.0.0");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("FUSION_SIGNING_KEY"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("FUSION_SIGNING_KEY"));
     }
 
     #[test]
@@ -261,7 +286,10 @@ mod tests {
 
     #[test]
     fn test_time_window_serde() {
-        let w = TimeWindow { start_secs: 0, end_secs: 3600 };
+        let w = TimeWindow {
+            start_secs: 0,
+            end_secs: 3600,
+        };
         let json = serde_json::to_string(&w).unwrap();
         assert!(json.contains("3600"));
     }

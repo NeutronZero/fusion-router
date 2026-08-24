@@ -1,6 +1,9 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{parse::{Parse, ParseStream}, Token, LitStr, Path};
+use syn::{
+    parse::{Parse, ParseStream},
+    LitStr, Path, Token,
+};
 
 /// Represents a single `#[permission(...)]` attribute value.
 /// Maps to the typed `Permission` enum in `fusion_plugin_api`.
@@ -37,7 +40,8 @@ impl PermissionAttr {
 impl Parse for PermissionAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let path: Path = input.parse()?;
-        let ident = path.get_ident()
+        let ident = path
+            .get_ident()
             .ok_or_else(|| input.error("expected identifier"))?;
         let name = ident.to_string();
 
@@ -73,7 +77,10 @@ impl Parse for PermissionAttr {
                 let name: LitStr = content.parse()?;
                 Ok(PermissionAttr::Environment(name.value()))
             }
-            _ => Err(syn::Error::new_spanned(&path, format!("unknown permission variant: {name}")))
+            _ => Err(syn::Error::new_spanned(
+                &path,
+                format!("unknown permission variant: {name}"),
+            )),
         }
     }
 }

@@ -1,5 +1,5 @@
-use fusion_plugin_api::Permission;
 use crate::release::gate::GateError;
+use fusion_plugin_api::Permission;
 
 pub fn check_secret_access(permissions: &[Permission], secret_name: &str) -> Result<(), GateError> {
     for perm in permissions {
@@ -13,7 +13,8 @@ pub fn check_secret_access(permissions: &[Permission], secret_name: &str) -> Res
         }
     }
     Err(GateError::PermissionDenied(format!(
-        "secret '{}' is not in the declared permission set", secret_name
+        "secret '{}' is not in the declared permission set",
+        secret_name
     )))
 }
 
@@ -29,7 +30,8 @@ pub fn check_http_access(permissions: &[Permission], url: &str) -> Result<(), Ga
         }
     }
     Err(GateError::PermissionDenied(format!(
-        "URL '{}' is not in the declared permission set", url
+        "URL '{}' is not in the declared permission set",
+        url
     )))
 }
 

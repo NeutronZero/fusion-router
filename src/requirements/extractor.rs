@@ -7,7 +7,11 @@ pub trait RequirementsExtractor: Send + Sync {
 pub struct DefaultRequirementsExtractor;
 
 impl DefaultRequirementsExtractor {
-    fn build_model_requirements(&self, ctx: &ContextSnapshot, intent: &Intent) -> crate::providers::ModelRequirements {
+    fn build_model_requirements(
+        &self,
+        ctx: &ContextSnapshot,
+        intent: &Intent,
+    ) -> crate::providers::ModelRequirements {
         let mut mr = crate::providers::ModelRequirements::default();
 
         match intent {
@@ -76,11 +80,33 @@ fn classify_intent(ctx: &ContextSnapshot) -> Intent {
         .join(" ");
 
     let keywords = [
-        (Intent::Code, vec!["code", "function", "implement", "write a program", "class", "api"]),
-        (Intent::Debug, vec!["bug", "error", "fix", "issue", "crash", "incorrect"]),
-        (Intent::Architecture, vec!["design", "architecture", "system", "component", "module"]),
-        (Intent::Analysis, vec!["analyze", "explain", "compare", "evaluate", "review"]),
-        (Intent::Creative, vec!["story", "poem", "creative", "imagine", "generate"]),
+        (
+            Intent::Code,
+            vec![
+                "code",
+                "function",
+                "implement",
+                "write a program",
+                "class",
+                "api",
+            ],
+        ),
+        (
+            Intent::Debug,
+            vec!["bug", "error", "fix", "issue", "crash", "incorrect"],
+        ),
+        (
+            Intent::Architecture,
+            vec!["design", "architecture", "system", "component", "module"],
+        ),
+        (
+            Intent::Analysis,
+            vec!["analyze", "explain", "compare", "evaluate", "review"],
+        ),
+        (
+            Intent::Creative,
+            vec!["story", "poem", "creative", "imagine", "generate"],
+        ),
     ];
 
     let mut max_score = 0usize;
@@ -111,8 +137,8 @@ fn compute_complexity(ctx: &ContextSnapshot) -> ComplexityLevel {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::ChatMessage;
     use super::RequirementsExtractor;
+    use crate::types::ChatMessage;
 
     fn code_context() -> crate::types::ContextSnapshot {
         crate::types::ContextSnapshot {
@@ -162,7 +188,9 @@ mod tests {
     fn test_code_intent_sets_coding_score() {
         let extractor = super::DefaultRequirementsExtractor;
         let reqs = extractor.extract(&code_context());
-        let mr = reqs.model_requirements.expect("should set model_requirements");
+        let mr = reqs
+            .model_requirements
+            .expect("should set model_requirements");
         assert_eq!(mr.min_coding_score, Some(0.8));
         assert!(mr.requires_streaming);
     }
@@ -171,7 +199,9 @@ mod tests {
     fn test_tools_present_sets_requires_tools() {
         let extractor = super::DefaultRequirementsExtractor;
         let reqs = extractor.extract(&tools_context());
-        let mr = reqs.model_requirements.expect("should set model_requirements");
+        let mr = reqs
+            .model_requirements
+            .expect("should set model_requirements");
         assert!(mr.requires_tools);
     }
 
@@ -179,7 +209,9 @@ mod tests {
     fn test_large_context_sets_min_tokens() {
         let extractor = super::DefaultRequirementsExtractor;
         let reqs = extractor.extract(&large_context());
-        let mr = reqs.model_requirements.expect("should set model_requirements");
+        let mr = reqs
+            .model_requirements
+            .expect("should set model_requirements");
         assert!(mr.min_context_tokens.is_some());
         assert!(mr.min_context_tokens.unwrap() > 0);
     }
@@ -190,7 +222,10 @@ mod tests {
         let extractor = super::DefaultRequirementsExtractor;
 
         let ctx = crate::types::ContextSnapshot {
-            messages: vec![ChatMessage { role: "user".into(), content: "hello".into() }],
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "hello".into(),
+            }],
             files: vec![],
             tools: vec![],
             max_tokens: 4096,
@@ -199,16 +234,25 @@ mod tests {
         assert_eq!(extractor.extract(&ctx).complexity, ComplexityLevel::Low);
 
         let ctx = crate::types::ContextSnapshot {
-            messages: vec![ChatMessage { role: "user".into(), content: "x".repeat(10001) }],
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "x".repeat(10001),
+            }],
             files: vec![],
             tools: vec![],
             max_tokens: 4096,
             temperature: 0.7,
         };
-        assert_eq!(extractor.extract(&ctx).complexity, ComplexityLevel::Critical);
+        assert_eq!(
+            extractor.extract(&ctx).complexity,
+            ComplexityLevel::Critical
+        );
 
         let ctx = crate::types::ContextSnapshot {
-            messages: vec![ChatMessage { role: "user".into(), content: "x".repeat(6000) }],
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "x".repeat(6000),
+            }],
             files: vec![],
             tools: vec![],
             max_tokens: 4096,
@@ -217,7 +261,10 @@ mod tests {
         assert_eq!(extractor.extract(&ctx).complexity, ComplexityLevel::High);
 
         let ctx = crate::types::ContextSnapshot {
-            messages: vec![ChatMessage { role: "user".into(), content: "x".repeat(2000) }],
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "x".repeat(2000),
+            }],
             files: vec![],
             tools: vec![],
             max_tokens: 4096,
@@ -226,11 +273,26 @@ mod tests {
         assert_eq!(extractor.extract(&ctx).complexity, ComplexityLevel::Medium);
 
         let ctx = crate::types::ContextSnapshot {
-            messages: vec![ChatMessage { role: "user".into(), content: "hello".into() }],
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "hello".into(),
+            }],
             files: vec![
-                FileRef { name: "a".into(), content: "".into(), mime_type: None },
-                FileRef { name: "b".into(), content: "".into(), mime_type: None },
-                FileRef { name: "c".into(), content: "".into(), mime_type: None },
+                FileRef {
+                    name: "a".into(),
+                    content: "".into(),
+                    mime_type: None,
+                },
+                FileRef {
+                    name: "b".into(),
+                    content: "".into(),
+                    mime_type: None,
+                },
+                FileRef {
+                    name: "c".into(),
+                    content: "".into(),
+                    mime_type: None,
+                },
             ],
             tools: vec![],
             max_tokens: 4096,
@@ -254,7 +316,9 @@ mod tests {
             temperature: 0.7,
         };
         let reqs = extractor.extract(&code_ctx);
-        let mr = reqs.model_requirements.expect("should set model_requirements");
+        let mr = reqs
+            .model_requirements
+            .expect("should set model_requirements");
         assert_eq!(mr.min_coding_score, Some(0.8));
         assert_eq!(mr.min_reasoning_score, None);
 
@@ -269,7 +333,9 @@ mod tests {
             temperature: 0.7,
         };
         let reqs = extractor.extract(&analysis_ctx);
-        let mr = reqs.model_requirements.expect("should set model_requirements");
+        let mr = reqs
+            .model_requirements
+            .expect("should set model_requirements");
         assert_eq!(mr.min_reasoning_score, Some(0.7));
     }
 
@@ -295,6 +361,9 @@ mod tests {
         };
         let mut reqs = extractor.extract(&ctx);
         reqs.execution_intent = request.execution.clone();
-        assert!(matches!(reqs.execution_intent, Some(ExecutionIntent::Speed)));
+        assert!(matches!(
+            reqs.execution_intent,
+            Some(ExecutionIntent::Speed)
+        ));
     }
 }

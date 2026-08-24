@@ -1,6 +1,6 @@
-use std::sync::OnceLock;
-use prometheus::{Histogram, IntCounter};
 use crate::resource::stream_meter::StreamMeterReport;
+use prometheus::{Histogram, IntCounter};
+use std::sync::OnceLock;
 
 static STREAM_METRICS: OnceLock<StreamMetrics> = OnceLock::new();
 

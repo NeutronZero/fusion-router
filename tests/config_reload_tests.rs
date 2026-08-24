@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use fusion_router::config::manager::ConfigManager;
 use fusion_router::config::error::ReloadError;
+use fusion_router::config::manager::ConfigManager;
 use fusion_router::config::{
-    AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig,
-    ResourceConfig, ServerConfig, StrategyConfig, ToolsConfig,
+    AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig, ResourceConfig,
+    ServerConfig, StrategyConfig, ToolsConfig,
 };
 use fusion_router::providers::circuit_breaker::CircuitBreaker;
 use fusion_router::providers::registry::ProviderRegistry;
@@ -66,7 +66,8 @@ fn empty_config() -> AppConfig {
         server: ServerConfig {
             host: "0.0.0.0".into(),
             port: 8080,
-            shutdown_timeout_secs: 30,            request_timeout_secs: 300,
+            shutdown_timeout_secs: 30,
+            request_timeout_secs: 300,
             cors: CorsConfig::default(),
         },
         resources: ResourceConfig {
@@ -157,12 +158,8 @@ impl TempGuard {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "fr_cfg_test_{}_{}_{}",
-            std::process::id(),
-            ts,
-            seq
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("fr_cfg_test_{}_{}_{}", std::process::id(), ts, seq));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         Self { path: dir }
     }
@@ -189,7 +186,11 @@ async fn test_provider_registry_completes_two_phase_reload() {
     let (config_path, _guard) = write_temp_config(&yaml);
 
     let registry = Arc::new(ProviderRegistry::new(dummy_target("default")));
-    let manager = ConfigManager::new(config_path, empty_config(), vec![Box::new(registry.clone())]);
+    let manager = ConfigManager::new(
+        config_path,
+        empty_config(),
+        vec![Box::new(registry.clone())],
+    );
 
     let gen = manager.reload().await.expect("reload should succeed");
     assert_eq!(gen, 2);
@@ -224,7 +225,11 @@ async fn test_provider_registry_rejects_bad_prepare() {
     );
     let (config_path, _guard) = write_temp_config(&yaml);
 
-    let manager = ConfigManager::new(config_path, empty_config(), vec![Box::new(registry.clone())]);
+    let manager = ConfigManager::new(
+        config_path,
+        empty_config(),
+        vec![Box::new(registry.clone())],
+    );
 
     let err = manager.reload().await.unwrap_err();
     match &err {
@@ -279,7 +284,11 @@ async fn test_config_generation_increments_on_each_reload() {
     let (config_path, _guard) = write_temp_config(&yaml);
 
     let registry = Arc::new(ProviderRegistry::new(dummy_target("default")));
-    let manager = ConfigManager::new(config_path, empty_config(), vec![Box::new(registry.clone())]);
+    let manager = ConfigManager::new(
+        config_path,
+        empty_config(),
+        vec![Box::new(registry.clone())],
+    );
 
     assert_eq!(manager.snapshot().generation, 1);
 
@@ -314,7 +323,11 @@ async fn test_subscriber_commit_updates_targets() {
     let yaml = config_yaml("  p:\n    api_key_env: FR_TEST_COMMIT_KEY\n");
     let (config_path, _guard) = write_temp_config(&yaml);
 
-    let manager = ConfigManager::new(config_path, empty_config(), vec![Box::new(registry.clone())]);
+    let manager = ConfigManager::new(
+        config_path,
+        empty_config(),
+        vec![Box::new(registry.clone())],
+    );
 
     manager.reload().await.expect("reload should succeed");
 
@@ -335,10 +348,7 @@ async fn test_connector_add_via_reload() {
     let subscriber = Box::new(ConnectorSubscriber::new(resolver.clone()));
 
     let registry = Arc::new(ProviderRegistry::new(dummy_target("default")));
-    let yaml = config_yaml_connectors(
-        "",
-        "  my-http:\n    connector_type: http\n",
-    );
+    let yaml = config_yaml_connectors("", "  my-http:\n    connector_type: http\n");
     let (config_path, _guard) = write_temp_config(&yaml);
 
     let manager = ConfigManager::new(
@@ -394,10 +404,7 @@ async fn test_connector_invalid_type_rejected() {
     let subscriber = Box::new(ConnectorSubscriber::new(resolver.clone()));
 
     let registry = Arc::new(ProviderRegistry::new(dummy_target("default")));
-    let yaml = config_yaml_connectors(
-        "",
-        "  bad:\n    connector_type: nonexistent\n",
-    );
+    let yaml = config_yaml_connectors("", "  bad:\n    connector_type: nonexistent\n");
     let (config_path, _guard) = write_temp_config(&yaml);
 
     let manager = ConfigManager::new(
@@ -409,12 +416,11 @@ async fn test_connector_invalid_type_rejected() {
     let err = manager.reload().await.unwrap_err();
     match &err {
         ReloadError::ConnectorError(msg) => {
-            assert!(msg.contains("nonexistent"), "reason should mention unknown type");
+            assert!(
+                msg.contains("nonexistent"),
+                "reason should mention unknown type"
+            );
         }
         other => panic!("expected ReloadError::ConnectorError, got {other:?}"),
     }
 }
-
-
-
-

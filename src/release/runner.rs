@@ -60,8 +60,8 @@ mod tests {
     use crate::release::gate::{GateCategory, GateError, GateMetadata, GateResult, MockGate};
     use async_trait::async_trait;
     use std::path::PathBuf;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     struct FailingGate {
@@ -117,7 +117,11 @@ mod tests {
 
         async fn run(&self, _context: &GateContext) -> GateExecution {
             let prev = self.counter.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(prev, self.expected, "Gate {:?} executed out of order", self.id);
+            assert_eq!(
+                prev, self.expected,
+                "Gate {:?} executed out of order",
+                self.id
+            );
             GateExecution::Success(GateResult {
                 gate_id: self.id,
                 passed: true,
@@ -215,7 +219,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_runner_execution_error_converted_to_failed_result() {
-        let failing = FailingGate { id: GateId::Replay1 };
+        let failing = FailingGate {
+            id: GateId::Replay1,
+        };
         let mut runner = GateRunner::new();
         runner.register(Box::new(failing));
 
@@ -227,7 +233,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_runner_error_becomes_failed_result_with_identity() {
-        let failing = FailingGate { id: GateId::Replay1 };
+        let failing = FailingGate {
+            id: GateId::Replay1,
+        };
         let mut runner = GateRunner::new();
         runner.register(Box::new(failing));
 
@@ -247,7 +255,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_runner_run_one_error_becomes_failed_result() {
-        let failing = FailingGate { id: GateId::Upgrade1 };
+        let failing = FailingGate {
+            id: GateId::Upgrade1,
+        };
         let mut runner = GateRunner::new();
         runner.register(Box::new(failing));
 

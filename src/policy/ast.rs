@@ -2,9 +2,9 @@
 //!
 //! Abstract Syntax Tree representing declarative user-facing policy definitions.
 
+use crate::policy::diagnostics::PolicyDiagnostic;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::policy::diagnostics::PolicyDiagnostic;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyDeclaration {
@@ -38,7 +38,10 @@ impl PolicyParser {
                 diagnostics.push(PolicyDiagnostic::error(
                     format!("declaration '{}'", decl.name),
                     Some(decl.name.clone()),
-                    format!("Invalid effect '{}'. Expected one of: deny, approval, allow", decl.effect),
+                    format!(
+                        "Invalid effect '{}'. Expected one of: deny, approval, allow",
+                        decl.effect
+                    ),
                 ));
             }
         }

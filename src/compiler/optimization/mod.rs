@@ -1,5 +1,5 @@
-use crate::compiler::ir::PrimitiveGraph;
 use crate::compiler::diagnostics::CompilerDiagnostic;
+use crate::compiler::ir::PrimitiveGraph;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptimizationGoal {
@@ -78,12 +78,14 @@ impl OptimizationPass for DeadNodeEliminationPass {
             }
         }
 
-        let live_nodes: Vec<crate::compiler::ir::PrimitiveNode> = graph.nodes
+        let live_nodes: Vec<crate::compiler::ir::PrimitiveNode> = graph
+            .nodes
             .into_iter()
             .filter(|n| live.contains(&n.id))
             .collect();
 
-        let live_edges: Vec<crate::compiler::ir::PrimitiveEdge> = graph.edges
+        let live_edges: Vec<crate::compiler::ir::PrimitiveEdge> = graph
+            .edges
             .into_iter()
             .filter(|e| live.contains(&e.from) && live.contains(&e.to))
             .collect();
@@ -123,7 +125,7 @@ impl OptimizationPass for FanOutConsolidationPass {
     }
 
     fn optimize(&self, graph: PrimitiveGraph) -> Result<PrimitiveGraph, CompilerDiagnostic> {
-        use crate::compiler::ir::{PrimitiveNodeKind, PrimitiveEdge};
+        use crate::compiler::ir::{PrimitiveEdge, PrimitiveNodeKind};
 
         let graph_id = graph.graph_id.clone();
         let mut nodes = graph.nodes;
@@ -141,11 +143,13 @@ impl OptimizationPass for FanOutConsolidationPass {
 
         for id in &single_consumer_fanouts {
             remove_ids.insert(id.clone());
-            let incoming: Vec<String> = edges.iter()
+            let incoming: Vec<String> = edges
+                .iter()
                 .filter(|e| e.to == *id)
                 .map(|e| e.from.clone())
                 .collect();
-            let outgoing: Vec<(String, Option<String>)> = edges.iter()
+            let outgoing: Vec<(String, Option<String>)> = edges
+                .iter()
                 .filter(|e| e.from == *id)
                 .map(|e| (e.to.clone(), e.condition.clone()))
                 .collect();
@@ -161,9 +165,13 @@ impl OptimizationPass for FanOutConsolidationPass {
         }
 
         // Phase 2: Merge adjacent FanOuts
-        let mut adjacency: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut adjacency: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
         for e in &edges {
-            adjacency.entry(e.from.clone()).or_default().push(e.to.clone());
+            adjacency
+                .entry(e.from.clone())
+                .or_default()
+                .push(e.to.clone());
         }
 
         // Frozen node list: an id -> index map turns repeated linear scans into O(1) lookups.
@@ -173,8 +181,11 @@ impl OptimizationPass for FanOutConsolidationPass {
             .map(|(i, n)| (n.id.clone(), i))
             .collect();
 
-        let fanout_ids: Vec<String> = nodes.iter()
-            .filter(|n| matches!(n.kind, PrimitiveNodeKind::FanOut { .. }) && !remove_ids.contains(&n.id))
+        let fanout_ids: Vec<String> = nodes
+            .iter()
+            .filter(|n| {
+                matches!(n.kind, PrimitiveNodeKind::FanOut { .. }) && !remove_ids.contains(&n.id)
+            })
             .map(|n| n.id.clone())
             .collect();
 
@@ -187,13 +198,19 @@ impl OptimizationPass for FanOutConsolidationPass {
                 if remove_ids.contains(succ_id) {
                     continue;
                 }
-                if matches!(nodes[node_index[succ_id]].kind, PrimitiveNodeKind::FanOut { .. }) {
-                    let count1 = if let PrimitiveNodeKind::FanOut { count } = &nodes[node_index[id]].kind {
-                        *count
-                    } else {
-                        1
-                    };
-                    let count2 = if let PrimitiveNodeKind::FanOut { count } = &nodes[node_index[succ_id]].kind {
+                if matches!(
+                    nodes[node_index[succ_id]].kind,
+                    PrimitiveNodeKind::FanOut { .. }
+                ) {
+                    let count1 =
+                        if let PrimitiveNodeKind::FanOut { count } = &nodes[node_index[id]].kind {
+                            *count
+                        } else {
+                            1
+                        };
+                    let count2 = if let PrimitiveNodeKind::FanOut { count } =
+                        &nodes[node_index[succ_id]].kind
+                    {
                         *count
                     } else {
                         1
@@ -201,10 +218,13 @@ impl OptimizationPass for FanOutConsolidationPass {
                     let merged_count = count1.max(count2);
 
                     // Update the first FanOut's count
-                    nodes[node_index[id]].kind = PrimitiveNodeKind::FanOut { count: merged_count };
+                    nodes[node_index[id]].kind = PrimitiveNodeKind::FanOut {
+                        count: merged_count,
+                    };
 
                     // Reroute edges: everything that went to succ_id now comes from id
-                    let succ_outgoing: Vec<(String, Option<String>)> = edges.iter()
+                    let succ_outgoing: Vec<(String, Option<String>)> = edges
+                        .iter()
                         .filter(|e| e.from == *succ_id)
                         .map(|e| (e.to.clone(), e.condition.clone()))
                         .collect();
@@ -299,7 +319,10 @@ mod tests {
         let mut g = PrimitiveGraph::new("test");
         g.add_node(PrimitiveNode {
             id: "n1".into(),
-            kind: PrimitiveNodeKind::LLMGenerate { model: "gpt-4".into(), role: None },
+            kind: PrimitiveNodeKind::LLMGenerate {
+                model: "gpt-4".into(),
+                role: None,
+            },
             artifact_kind: None,
         });
         g
@@ -316,7 +339,10 @@ mod tests {
     #[test]
     fn test_pipeline_rollback_on_failure() {
         let mut pipeline = OptimizationPipeline::new();
-        pipeline.add_pass(Box::new(TestPass { name: "fail", should_fail: true }));
+        pipeline.add_pass(Box::new(TestPass {
+            name: "fail",
+            should_fail: true,
+        }));
         let graph = make_graph();
         let result = pipeline.run(graph);
         assert!(result.is_err());
@@ -327,8 +353,14 @@ mod tests {
     #[test]
     fn test_pipeline_multi_pass() {
         let mut pipeline = OptimizationPipeline::new();
-        pipeline.add_pass(Box::new(TestPass { name: "p1", should_fail: false }));
-        pipeline.add_pass(Box::new(TestPass { name: "p2", should_fail: false }));
+        pipeline.add_pass(Box::new(TestPass {
+            name: "p1",
+            should_fail: false,
+        }));
+        pipeline.add_pass(Box::new(TestPass {
+            name: "p2",
+            should_fail: false,
+        }));
         let graph = make_graph();
         let result = pipeline.run(graph).unwrap();
         assert_eq!(result.nodes.len(), 1);
@@ -336,20 +368,29 @@ mod tests {
 
     #[test]
     fn test_pass_goal() {
-        let pass = TestPass { name: "test", should_fail: false };
+        let pass = TestPass {
+            name: "test",
+            should_fail: false,
+        };
         assert_eq!(pass.goal(), OptimizationGoal::GraphSimplification);
     }
 
     #[test]
     fn test_pass_preconditions_default_ok() {
-        let pass = TestPass { name: "test", should_fail: false };
+        let pass = TestPass {
+            name: "test",
+            should_fail: false,
+        };
         let graph = make_graph();
         assert!(pass.preconditions(&graph).is_ok());
     }
 
     #[test]
     fn test_pass_postconditions_default_ok() {
-        let pass = TestPass { name: "test", should_fail: false };
+        let pass = TestPass {
+            name: "test",
+            should_fail: false,
+        };
         let graph = make_graph();
         assert!(pass.postconditions(&graph, &graph).is_ok());
     }

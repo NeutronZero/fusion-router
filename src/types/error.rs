@@ -76,28 +76,59 @@ pub enum RouterError {
 impl fmt::Display for RouterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::StageFailure { stage, request_id, message } => {
+            Self::StageFailure {
+                stage,
+                request_id,
+                message,
+            } => {
                 write!(f, "[{}] Stage '{}' failed: {}", request_id, stage, message)
             }
-            Self::ResourceExhausted { request_id, details } => {
+            Self::ResourceExhausted {
+                request_id,
+                details,
+            } => {
                 write!(f, "[{}] Resource quota exhausted: {}", request_id, details)
             }
-            Self::CapacityExceeded { request_id, details } => {
+            Self::CapacityExceeded {
+                request_id,
+                details,
+            } => {
                 write!(f, "[{}] Router capacity exceeded: {}", request_id, details)
             }
             Self::ClientCancelled { request_id } => {
-                write!(f, "[{}] Client disconnected or cancelled request", request_id)
+                write!(
+                    f,
+                    "[{}] Client disconnected or cancelled request",
+                    request_id
+                )
             }
-            Self::BudgetExceeded { request_id, detail, .. } => {
+            Self::BudgetExceeded {
+                request_id, detail, ..
+            } => {
                 write!(f, "[{}] Budget exceeded: {}", request_id, detail)
             }
-            Self::MaxIterationsExceeded { request_id, current, max, .. } => {
-                write!(f, "[{}] Max iterations exceeded: {} > {}", request_id, current, max)
+            Self::MaxIterationsExceeded {
+                request_id,
+                current,
+                max,
+                ..
+            } => {
+                write!(
+                    f,
+                    "[{}] Max iterations exceeded: {} > {}",
+                    request_id, current, max
+                )
             }
-            Self::Internal { request_id, message } => {
+            Self::Internal {
+                request_id,
+                message,
+            } => {
                 write!(f, "[{}] Internal error: {}", request_id, message)
             }
-            Self::PolicyDenied { request_id, rule_id } => {
+            Self::PolicyDenied {
+                request_id,
+                rule_id,
+            } => {
                 write!(f, "[{}] Denied by policy rule '{}'", request_id, rule_id)
             }
         }

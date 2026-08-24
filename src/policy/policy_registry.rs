@@ -47,7 +47,11 @@ impl PolicyRegistry {
     /// Returns a specific historical snapshot by version number.
     /// Returns `None` if the version does not exist.
     pub fn snapshot_at(&self, version: u64) -> Option<PolicySnapshot> {
-        self.history.read().iter().find(|s| s.version == version).cloned()
+        self.history
+            .read()
+            .iter()
+            .find(|s| s.version == version)
+            .cloned()
     }
 
     /// Returns all historical snapshots (append-only log).

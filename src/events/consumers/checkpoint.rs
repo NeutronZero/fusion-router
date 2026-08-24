@@ -1,9 +1,9 @@
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use crate::events::projection::EventProjection;
 use crate::events::ExecutionEventEnvelope;
 use crate::release::gate::GateError;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CheckpointPolicy {
@@ -39,11 +39,17 @@ impl EventProjection for CheckpointProjection {
 
     async fn handle_event(&mut self, envelope: &ExecutionEventEnvelope) -> Result<(), GateError> {
         // Enforce idempotency: skip duplicate event sequence numbers
-        if self.saved_sequence_numbers.contains(&envelope.sequence_number) {
+        if self
+            .saved_sequence_numbers
+            .contains(&envelope.sequence_number)
+        {
             return Ok(());
         }
 
-        if matches!(envelope.payload, crate::events::payload::ExecutionEvent::NodeFinished { .. }) {
+        if matches!(
+            envelope.payload,
+            crate::events::payload::ExecutionEvent::NodeFinished { .. }
+        ) {
             self.node_count += 1;
             let should_checkpoint = match self.policy {
                 CheckpointPolicy::EveryNode => true,
@@ -53,13 +59,18 @@ impl EventProjection for CheckpointProjection {
 
             if should_checkpoint {
                 self.saved_sequence_numbers.insert(envelope.sequence_number);
-                let path = self.storage_dir.join(format!("{}-seq{}.chk", envelope.execution_id, envelope.sequence_number));
+                let path = self.storage_dir.join(format!(
+                    "{}-seq{}.chk",
+                    envelope.execution_id, envelope.sequence_number
+                ));
                 if let Some(parent) = path.parent() {
                     tokio::fs::create_dir_all(parent).await.map_err(|e| {
                         GateError::ExecutionFailed(format!("checkpoint dir create error: {e}"))
                     })?;
                 }
-                let json = serde_json::to_string_pretty(envelope).map_err(|e| GateError::ExecutionFailed(format!("checkpoint serialize error: {e}")))?;
+                let json = serde_json::to_string_pretty(envelope).map_err(|e| {
+                    GateError::ExecutionFailed(format!("checkpoint serialize error: {e}"))
+                })?;
                 tokio::fs::write(&path, json).await.map_err(|e| {
                     GateError::ExecutionFailed(format!("checkpoint write error: {e}"))
                 })?;
@@ -126,7 +137,10 @@ mod tests {
         );
 
         let result = proj.handle_event(&env).await;
-        assert!(result.is_err(), "checkpoint write failure must not be silent");
+        assert!(
+            result.is_err(),
+            "checkpoint write failure must not be silent"
+        );
         let _ = std::fs::remove_dir_all(temp_dir);
     }
 }

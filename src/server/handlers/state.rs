@@ -1,8 +1,9 @@
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
+use crate::capability::CapabilityRegistry;
 use crate::config::manager::ConfigManager;
 use crate::config::AppConfig;
 use crate::context::assembler::DefaultContextAssembler;
@@ -25,7 +26,6 @@ use crate::telemetry::EvidenceRepository;
 use crate::tools::builtin::{CalculatorTool, FileReadTool, SearchTool};
 use crate::tools::{HTTPRequestTool, ShellCommandTool, ToolRegistry};
 use crate::types::*;
-use crate::capability::CapabilityRegistry;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -176,7 +176,10 @@ impl AppState {
         ))
     }
 
-    pub fn with_policy_registry(mut self, policy_registry: Arc<crate::policy::PolicyRegistry>) -> Self {
+    pub fn with_policy_registry(
+        mut self,
+        policy_registry: Arc<crate::policy::PolicyRegistry>,
+    ) -> Self {
         self.policy_registry = policy_registry;
         self
     }
@@ -201,5 +204,3 @@ impl AppState {
         self
     }
 }
-
-

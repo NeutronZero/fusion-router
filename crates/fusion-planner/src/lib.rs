@@ -34,74 +34,118 @@ impl IntentPlanner {
         // 2. Select a strategy constraint. Strategy graph expansion belongs to
         // the compiler; the planner emits a strategy-bearing node rather than
         // duplicating each strategy's topology here.
-        let stages: Vec<(String, WorkflowNodeKind, String, String)> = if let Some(ref strat) = req.requested_strategy {
-            let capability = req.requirements.required_capabilities.first()
-                .cloned().unwrap_or_else(|| "CodeGeneration".into());
-            vec![("n1".into(), WorkflowNodeKind::Task, capability, strat.clone())]
-        } else {
-            let mut capabilities = req.requirements.required_capabilities.clone();
-            if capabilities.is_empty() {
-                match intent {
-                    ExecutionIntent::Speed => capabilities.push("CodeGeneration".into()),
-                    ExecutionIntent::Balanced => {
-                        capabilities.extend(["CodeGeneration".into(), "CodeGeneration".into(), "CodeReview".into()]);
-                    }
-                    ExecutionIntent::Quality => {
-                        capabilities.extend([
-                            "CodeGeneration".into(), "CodeReview".into(),
-                            "CodeGeneration".into(), "CodeReview".into(),
-                            "CodeGeneration".into(),
-                        ]);
-                    }
-                    ExecutionIntent::Exhaustive => {
-                        capabilities.extend([
-                            "CodeGeneration".into(), "CodeReview".into(),
-                            "CodeGeneration".into(), "CodeReview".into(),
-                            "CodeGeneration".into(), "Judgment".into(),
-                        ]);
-                    }
-                    ExecutionIntent::Constrained { max_cost } => {
-                        if max_cost.as_ref().is_some_and(|c| c.as_nanos() >= 20_000_000) {
-                            capabilities.extend(["CodeGeneration".into(), "CodeGeneration".into(), "CodeReview".into()]);
-                        } else {
-                            capabilities.push("CodeGeneration".into());
+        let stages: Vec<(String, WorkflowNodeKind, String, String)> =
+            if let Some(ref strat) = req.requested_strategy {
+                let capability = req
+                    .requirements
+                    .required_capabilities
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "CodeGeneration".into());
+                vec![(
+                    "n1".into(),
+                    WorkflowNodeKind::Task,
+                    capability,
+                    strat.clone(),
+                )]
+            } else {
+                let mut capabilities = req.requirements.required_capabilities.clone();
+                if capabilities.is_empty() {
+                    match intent {
+                        ExecutionIntent::Speed => capabilities.push("CodeGeneration".into()),
+                        ExecutionIntent::Balanced => {
+                            capabilities.extend([
+                                "CodeGeneration".into(),
+                                "CodeGeneration".into(),
+                                "CodeReview".into(),
+                            ]);
+                        }
+                        ExecutionIntent::Quality => {
+                            capabilities.extend([
+                                "CodeGeneration".into(),
+                                "CodeReview".into(),
+                                "CodeGeneration".into(),
+                                "CodeReview".into(),
+                                "CodeGeneration".into(),
+                            ]);
+                        }
+                        ExecutionIntent::Exhaustive => {
+                            capabilities.extend([
+                                "CodeGeneration".into(),
+                                "CodeReview".into(),
+                                "CodeGeneration".into(),
+                                "CodeReview".into(),
+                                "CodeGeneration".into(),
+                                "Judgment".into(),
+                            ]);
+                        }
+                        ExecutionIntent::Constrained { max_cost } => {
+                            if max_cost
+                                .as_ref()
+                                .is_some_and(|c| c.as_nanos() >= 20_000_000)
+                            {
+                                capabilities.extend([
+                                    "CodeGeneration".into(),
+                                    "CodeGeneration".into(),
+                                    "CodeReview".into(),
+                                ]);
+                            } else {
+                                capabilities.push("CodeGeneration".into());
+                            }
                         }
                     }
                 }
-            }
-            let limit = match intent {
-                ExecutionIntent::Speed => 1,
-                ExecutionIntent::Constrained { max_cost: Some(cost) } if cost.as_nanos() < 20_000_000 => 1,
-                _ => capabilities.len().max(1),
+                let limit = match intent {
+                    ExecutionIntent::Speed => 1,
+                    ExecutionIntent::Constrained {
+                        max_cost: Some(cost),
+                    } if cost.as_nanos() < 20_000_000 => 1,
+                    _ => capabilities.len().max(1),
+                };
+                // A zero healthy-provider count means telemetry is unavailable,
+                // not that the planner must collapse to a single stage.
+                let telemetry_limit = if req.telemetry.healthy_provider_count == 0 {
+                    capabilities.len().max(1)
+                } else {
+                    req.telemetry.healthy_provider_count
+                };
+                capabilities.truncate(limit.min(telemetry_limit));
+                capabilities
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, capability)| {
+                        let kind = if capability.to_ascii_lowercase().contains("review") {
+                            WorkflowNodeKind::Review
+                        } else {
+                            WorkflowNodeKind::Task
+                        };
+                        (
+                            format!("n{}", i + 1),
+                            kind,
+                            capability,
+                            "Single".to_string(),
+                        )
+                    })
+                    .collect()
             };
-            // A zero healthy-provider count means telemetry is unavailable,
-            // not that the planner must collapse to a single stage.
-            let telemetry_limit = if req.telemetry.healthy_provider_count == 0 {
-                capabilities.len().max(1)
-            } else {
-                req.telemetry.healthy_provider_count
-            };
-            capabilities.truncate(limit.min(telemetry_limit));
-            capabilities.into_iter().enumerate().map(|(i, capability)| {
-                let kind = if capability.to_ascii_lowercase().contains("review") { WorkflowNodeKind::Review } else { WorkflowNodeKind::Task };
-                (format!("n{}", i + 1), kind, capability, "Single".to_string())
-            }).collect()
-        };
 
         // 3. Score and select models for each stage
-        let identity = format!("{:?}|{}|{}|{}|{}|{}|{}|{}", req.intent, req.user_prompt,
-            req.requirements.complexity, req.requirements.required_capabilities.join(","),
-            req.policies.version, req.model_catalog.catalog.code,
-            req.telemetry.avg_latency_ms, req.telemetry.healthy_provider_count);
+        let identity = format!(
+            "{:?}|{}|{}|{}|{}|{}|{}|{}",
+            req.intent,
+            req.user_prompt,
+            req.requirements.complexity,
+            req.requirements.required_capabilities.join(","),
+            req.policies.version,
+            req.model_catalog.catalog.code,
+            req.telemetry.avg_latency_ms,
+            req.telemetry.healthy_provider_count
+        );
         let workflow_id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, identity.as_bytes());
         let mut builder = WorkflowBuilder::new().with_workflow_id(workflow_id);
 
         for (idx, (node_id, kind, capability, strategy)) in stages.iter().enumerate() {
-            let model = self.resolve_stage_model(
-                capability,
-                kind,
-                req,
-            );
+            let model = self.resolve_stage_model(capability, kind, req);
 
             let mut config = BTreeMap::new();
             config.insert("strategy".to_string(), serde_json::json!(strategy));
@@ -128,11 +172,13 @@ impl IntentPlanner {
         for i in 0..stages.len().saturating_sub(1) {
             let from = stages[i].0.as_str();
             let to = stages[i + 1].0.as_str();
-            builder = builder.sequential(from, to).map_err(|e| PlatformError::Planner {
-                code: "EDGE_ERR".to_string(),
-                message: format!("Failed to wire edge {from} -> {to}: {e}"),
-                recovery_suggestion: "Ensure source and target nodes exist".into(),
-            })?;
+            builder = builder
+                .sequential(from, to)
+                .map_err(|e| PlatformError::Planner {
+                    code: "EDGE_ERR".to_string(),
+                    message: format!("Failed to wire edge {from} -> {to}: {e}"),
+                    recovery_suggestion: "Ensure source and target nodes exist".into(),
+                })?;
         }
 
         // 5. Calculate metadata (estimated cost, estimated tokens, policy tracking)
@@ -158,11 +204,14 @@ impl IntentPlanner {
             estimated_tokens,
         };
 
-        builder.metadata(metadata).build().map_err(|e| PlatformError::Planner {
-            code: "BUILD_ERR".to_string(),
-            message: format!("Failed to finalize workflow IR: {e}"),
-            recovery_suggestion: "Validate workflow DAG acyclicity and metadata".into(),
-        })
+        builder
+            .metadata(metadata)
+            .build()
+            .map_err(|e| PlatformError::Planner {
+                code: "BUILD_ERR".to_string(),
+                message: format!("Failed to finalize workflow IR: {e}"),
+                recovery_suggestion: "Validate workflow DAG acyclicity and metadata".into(),
+            })
     }
 
     /// Resolves target model per stage using snapshot constraints, capabilities, and telemetry.
@@ -234,12 +283,17 @@ impl PlannerService {
         self.plan_with_intent(intent_text, ExecutionIntent::Balanced)
     }
 
-    pub fn plan_with_intent(&self, intent_text: &str, execution_intent: ExecutionIntent) -> Result<WorkflowIR, PlatformError> {
+    pub fn plan_with_intent(
+        &self,
+        intent_text: &str,
+        execution_intent: ExecutionIntent,
+    ) -> Result<WorkflowIR, PlatformError> {
         if intent_text.is_empty() {
             return Err(PlatformError::Planner {
                 code: "EMPTY_INTENT".to_string(),
                 message: "Intent cannot be empty".to_string(),
-                recovery_suggestion: "Provide a valid natural language prompt or workflow spec".to_string(),
+                recovery_suggestion: "Provide a valid natural language prompt or workflow spec"
+                    .to_string(),
             });
         }
         let _ = &self.capability_system;
@@ -267,10 +321,14 @@ mod tests {
     fn test_planner_service_with_intents() {
         let system = CapabilitySystem::new();
         let planner = PlannerService::new(system);
-        let quality_ir = planner.plan_with_intent("Build web application", ExecutionIntent::Quality).expect("Plan");
+        let quality_ir = planner
+            .plan_with_intent("Build web application", ExecutionIntent::Quality)
+            .expect("Plan");
         assert_eq!(quality_ir.nodes().len(), 5);
 
-        let speed_ir = planner.plan_with_intent("Quick fix", ExecutionIntent::Speed).expect("Plan");
+        let speed_ir = planner
+            .plan_with_intent("Quick fix", ExecutionIntent::Speed)
+            .expect("Plan");
         assert_eq!(speed_ir.nodes().len(), 1);
     }
 
@@ -311,7 +369,10 @@ mod tests {
         let ir = planner.plan(&req).expect("Plan");
         assert_eq!(ir.nodes().len(), 5);
         assert_eq!(ir.edges().len(), 4);
-        assert!(ir.metadata().policy_applied.contains(&"deny-unauth".to_string()));
+        assert!(ir
+            .metadata()
+            .policy_applied
+            .contains(&"deny-unauth".to_string()));
         assert_eq!(ir.metadata().policy_version, 1);
         for node in ir.nodes() {
             assert_eq!(node.selected_model(), Some("custom-llm"));
@@ -327,8 +388,14 @@ mod tests {
             requested_model: None,
             requested_strategy: None,
             strategy_config: None,
-            requirements: RequirementsSnapshot { required_capabilities: vec!["CodeGeneration".into()], ..Default::default() },
-            policies: PolicySnapshot { version: 7, ..Default::default() },
+            requirements: RequirementsSnapshot {
+                required_capabilities: vec!["CodeGeneration".into()],
+                ..Default::default()
+            },
+            policies: PolicySnapshot {
+                version: 7,
+                ..Default::default()
+            },
             capability_catalog: CapabilityCatalogSnapshot::default(),
             model_catalog: ModelCatalogSnapshot::default(),
             telemetry: RoutingTelemetrySnapshot::default(),

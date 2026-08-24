@@ -38,7 +38,13 @@ impl ExecutionLeaseManager {
     }
 
     /// Grants an exclusive, single-worker lease under Invariant 12.
-    pub fn grant_lease(&self, exec_id: &str, node_id: &str, worker_id: &str, ttl_ms: u64) -> Result<ExecutionLease, PlatformError> {
+    pub fn grant_lease(
+        &self,
+        exec_id: &str,
+        node_id: &str,
+        worker_id: &str,
+        ttl_ms: u64,
+    ) -> Result<ExecutionLease, PlatformError> {
         let lease_key = format!("lease:{}:{}:{}", exec_id, node_id, worker_id);
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -55,8 +61,13 @@ impl ExecutionLeaseManager {
                     if existing.worker_id != worker_id {
                         return Err(PlatformError::Runtime {
                             code: "ERR_LEASE_VIOLATION".into(),
-                            message: format!("Node {} already leased to worker {}", node_id, existing.worker_id),
-                            recovery_suggestion: "Wait for existing lease to expire or revoke it before reissuing".into(),
+                            message: format!(
+                                "Node {} already leased to worker {}",
+                                node_id, existing.worker_id
+                            ),
+                            recovery_suggestion:
+                                "Wait for existing lease to expire or revoke it before reissuing"
+                                    .into(),
                         });
                     }
                     prev_epoch = existing.epoch;
@@ -115,19 +126,26 @@ mod tests {
     #[test]
     fn test_lease_manager_enforces_invariant_13_single_worker_exclusivity() {
         let manager = ExecutionLeaseManager::new();
-        let lease1 = manager.grant_lease("exec_100", "n1", "w1", 30000).expect("Grant lease 1");
+        let lease1 = manager
+            .grant_lease("exec_100", "n1", "w1", 30000)
+            .expect("Grant lease 1");
         assert_eq!(lease1.epoch, 1);
 
         // Attempting to grant the same node to w2 must be rejected under Invariant 12
         let err = manager.grant_lease("exec_100", "n1", "w2", 30000);
-        assert!(err.is_err(), "Must reject concurrent lease on same node to different worker");
+        assert!(
+            err.is_err(),
+            "Must reject concurrent lease on same node to different worker"
+        );
 
         // Renewing lease1 advances epoch
         assert!(manager.renew_lease(&lease1.lease_key));
 
         // Revoking lease1 allows new worker to claim
         assert!(manager.revoke_lease(&lease1.lease_key));
-        let lease2 = manager.grant_lease("exec_100", "n1", "w2", 30000).expect("Grant lease 2");
+        let lease2 = manager
+            .grant_lease("exec_100", "n1", "w2", 30000)
+            .expect("Grant lease 2");
         assert_eq!(lease2.worker_id, "w2");
     }
 
@@ -144,6 +162,9 @@ mod tests {
 
         let mut l = lease.clone();
         l.is_revoked = true;
-        assert!(l.is_expired(l.granted_at_ms), "revoked lease counts as expired");
+        assert!(
+            l.is_expired(l.granted_at_ms),
+            "revoked lease counts as expired"
+        );
     }
 }

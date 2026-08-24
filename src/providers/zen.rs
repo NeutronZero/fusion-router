@@ -1,21 +1,18 @@
-use crate::transport::HttpTransport;
 use super::zen_model::ZenModel;
 use super::Provider;
+use crate::transport::HttpTransport;
 use std::time::Duration;
 
 pub fn new_zen_provider(api_key: String) -> Provider {
     new_zen_provider_with_base_url(api_key, None)
 }
 
-pub fn new_zen_provider_with_base_url(
-    api_key: String,
-    base_url: Option<String>,
-) -> Provider {
-    let model = Box::new(ZenModel::with_base_url("opencode-zen-model".to_string(), base_url));
-    let transport = Box::new(
-        HttpTransport::new(Duration::from_secs(300))
-            .unwrap_or_default(),
-    );
+pub fn new_zen_provider_with_base_url(api_key: String, base_url: Option<String>) -> Provider {
+    let model = Box::new(ZenModel::with_base_url(
+        "opencode-zen-model".to_string(),
+        base_url,
+    ));
+    let transport = Box::new(HttpTransport::new(Duration::from_secs(300)).unwrap_or_default());
     Provider::new(model, transport, api_key)
 }
 

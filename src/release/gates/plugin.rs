@@ -1,10 +1,10 @@
-use async_trait::async_trait;
-use std::path::PathBuf;
-use std::time::Instant;
 use crate::release::certification::{CertificationArtifact, CertificationContext};
 use crate::release::fixture::FixtureKind;
 use crate::release::fixture_loader::{discover_fixtures, load_fixture_manifest, FixtureLoader};
 use crate::release::gate::*;
+use async_trait::async_trait;
+use std::path::PathBuf;
+use std::time::Instant;
 
 pub struct PluginGateConfig {
     pub fixture_root: PathBuf,
@@ -50,24 +50,24 @@ impl CertificationArtifact for PluginArtifact {
     }
 
     fn schema_checks(&self, _ctx: &CertificationContext) -> Result<Vec<GateCheck>, GateError> {
-        Ok(vec![
-            GateCheck {
-                name: "plugin-manifest-schema".into(),
-                passed: self.valid_manifest,
-                message: if self.valid_manifest {
-                    format!("plugin {} manifest schema valid", self.name)
-                } else {
-                    format!("plugin {} manifest schema invalid", self.name)
-                },
+        Ok(vec![GateCheck {
+            name: "plugin-manifest-schema".into(),
+            passed: self.valid_manifest,
+            message: if self.valid_manifest {
+                format!("plugin {} manifest schema valid", self.name)
+            } else {
+                format!("plugin {} manifest schema invalid", self.name)
             },
-        ])
+        }])
     }
 
     fn contract_checks(&self, ctx: &CertificationContext) -> Result<Vec<GateCheck>, GateError> {
         let sdk_compat = self.sdk_version.major == ctx.sdk_version.major
             && self.sdk_version.minor <= ctx.sdk_version.minor;
         let symbol_compat = self.exported_symbols.contains(&"create_plugin".to_string())
-            || self.exported_symbols.contains(&"plugin_api_version".to_string());
+            || self
+                .exported_symbols
+                .contains(&"plugin_api_version".to_string());
         let caps_compat = !self.capabilities.is_empty();
 
         Ok(vec![
@@ -106,19 +106,25 @@ pub struct FilesystemPluginBackend {
 
 impl FilesystemPluginBackend {
     pub fn new(fixture_root: PathBuf) -> Self {
-        Self { loader: FixtureLoader::new(fixture_root) }
+        Self {
+            loader: FixtureLoader::new(fixture_root),
+        }
     }
 }
 
 impl PluginBackend for FilesystemPluginBackend {
-    fn name(&self) -> &'static str { "filesystem" }
+    fn name(&self) -> &'static str {
+        "filesystem"
+    }
 
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<PluginArtifact>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
         let entries = discover_fixtures(&manifest, FixtureKind::Plugins);
         let mut results = Vec::new();
         for entry in &entries {
-            let full_path = self.loader.resolve(&PathBuf::from("tests/fixtures").join(&entry.path));
+            let full_path = self
+                .loader
+                .resolve(&PathBuf::from("tests/fixtures").join(&entry.path));
             results.push(self.load(&full_path)?);
         }
         Ok(results)
@@ -126,7 +132,10 @@ impl PluginBackend for FilesystemPluginBackend {
 
     fn load(&self, path: &std::path::Path) -> Result<PluginArtifact, GateError> {
         if !path.exists() {
-            return Err(GateError::ExecutionFailed(format!("plugin path not found: {}", path.display())));
+            return Err(GateError::ExecutionFailed(format!(
+                "plugin path not found: {}",
+                path.display()
+            )));
         }
         Ok(PluginArtifact::new(
             "echo",
@@ -162,8 +171,12 @@ impl PluginGate {
 
 #[async_trait]
 impl ReleaseGate for PluginGate {
-    fn id(&self) -> GateId { GateId::Plugin1 }
-    fn name(&self) -> &'static str { "Plugin Conformance" }
+    fn id(&self) -> GateId {
+        GateId::Plugin1
+    }
+    fn name(&self) -> &'static str {
+        "Plugin Conformance"
+    }
     fn description(&self) -> &'static str {
         "Verify plugin manifest, capability contracts, symbol exports, and initialization compatibility"
     }
@@ -228,10 +241,14 @@ pub struct MockPluginBackend {
 
 #[cfg(test)]
 impl PluginBackend for MockPluginBackend {
-    fn name(&self) -> &'static str { "mock" }
+    fn name(&self) -> &'static str {
+        "mock"
+    }
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<PluginArtifact>, GateError> {
         if self.should_error {
-            return Err(GateError::ExecutionFailed("mock plugin backend error".into()));
+            return Err(GateError::ExecutionFailed(
+                "mock plugin backend error".into(),
+            ));
         }
         Ok(self.artifacts.clone())
     }
@@ -247,8 +264,13 @@ mod tests {
     #[test]
     fn test_plugin_gate_metadata() {
         let gate = PluginGate::new(
-            Box::new(MockPluginBackend { artifacts: vec![], should_error: false }),
-            PluginGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockPluginBackend {
+                artifacts: vec![],
+                should_error: false,
+            }),
+            PluginGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let meta = gate.metadata();
         assert_eq!(meta.id, GateId::Plugin1);
@@ -267,8 +289,13 @@ mod tests {
             true,
         );
         let gate = PluginGate::new(
-            Box::new(MockPluginBackend { artifacts: vec![artifact], should_error: false }),
-            PluginGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockPluginBackend {
+                artifacts: vec![artifact],
+                should_error: false,
+            }),
+            PluginGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -289,8 +316,13 @@ mod tests {
             true,
         );
         let gate = PluginGate::new(
-            Box::new(MockPluginBackend { artifacts: vec![artifact], should_error: false }),
-            PluginGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockPluginBackend {
+                artifacts: vec![artifact],
+                should_error: false,
+            }),
+            PluginGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -303,8 +335,13 @@ mod tests {
     #[tokio::test]
     async fn test_plugin_gate_execution_error() {
         let gate = PluginGate::new(
-            Box::new(MockPluginBackend { artifacts: vec![], should_error: true }),
-            PluginGateConfig { fixture_root: PathBuf::from(".") },
+            Box::new(MockPluginBackend {
+                artifacts: vec![],
+                should_error: true,
+            }),
+            PluginGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),

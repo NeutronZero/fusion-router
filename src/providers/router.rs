@@ -94,10 +94,10 @@ impl ProviderRouter {
         let matched = self.matching_targets(model);
         if !matched.is_empty() {
             // Return Arc clones of the matched targets
-            return self.targets.iter()
-                .filter(|(prefixes, _)| {
-                    prefixes.iter().any(|p| model.starts_with(p))
-                })
+            return self
+                .targets
+                .iter()
+                .filter(|(prefixes, _)| prefixes.iter().any(|p| model.starts_with(p)))
                 .map(|(_, target)| target.clone())
                 .collect();
         }
@@ -286,7 +286,8 @@ mod tests {
     }
 
     fn mock_target(name: &str, succeed: bool) -> ProviderTarget {
-        let factory: Box<dyn Fn() -> Arc<dyn ChatProvider + Send + Sync> + Send + Sync> = if succeed {
+        let factory: Box<dyn Fn() -> Arc<dyn ChatProvider + Send + Sync> + Send + Sync> = if succeed
+        {
             Box::new(move || Arc::new(MockOkProvider) as Arc<dyn ChatProvider + Send + Sync>)
         } else {
             Box::new(move || Arc::new(MockFailProvider) as Arc<dyn ChatProvider + Send + Sync>)
@@ -316,7 +317,10 @@ mod tests {
             .with_provider(vec!["a/".into()], mock_target("ok", true));
 
         let res = router.chat_completion(&dummy_request("a/test")).await;
-        assert!(res.is_ok(), "Should fall through from failing to succeeding provider");
+        assert!(
+            res.is_ok(),
+            "Should fall through from failing to succeeding provider"
+        );
     }
 
     #[tokio::test]
@@ -344,8 +348,13 @@ mod tests {
         let router = ProviderRouter::new(mock_target("default", true))
             .with_provider(vec!["other/".into()], mock_target("other", false));
 
-        let res = router.chat_completion(&dummy_request("unknown/model")).await;
-        assert!(res.is_ok(), "Default provider should handle unmatched models");
+        let res = router
+            .chat_completion(&dummy_request("unknown/model"))
+            .await;
+        assert!(
+            res.is_ok(),
+            "Default provider should handle unmatched models"
+        );
     }
 
     #[test]
@@ -362,17 +371,30 @@ mod tests {
     fn test_resolve_target_fallsback_to_registry() {
         let router = ProviderRouter::new(mock_target("default", true));
 
-        let registry = crate::providers::registry::ProviderRegistry::new(mock_target("default", true));
+        let registry =
+            crate::providers::registry::ProviderRegistry::new(mock_target("default", true));
         registry.register_target_with_capabilities(
             vec!["fallback/".into()],
             mock_target("fallback-model", true),
             crate::providers::ModelCapabilities {
-                coding_score: 0.5, reasoning_score: 0.5, max_context_tokens: 32_000, max_output_tokens: 0,
-                supports_tools: false, supports_streaming: true, supports_vision: false,
-                supports_audio: false, supports_pdf: false, supports_json_mode: true,
-                supports_thinking: false, supports_parallel_tools: false, supports_structured_output: false,
+                coding_score: 0.5,
+                reasoning_score: 0.5,
+                max_context_tokens: 32_000,
+                max_output_tokens: 0,
+                supports_tools: false,
+                supports_streaming: true,
+                supports_vision: false,
+                supports_audio: false,
+                supports_pdf: false,
+                supports_json_mode: true,
+                supports_thinking: false,
+                supports_parallel_tools: false,
+                supports_structured_output: false,
             },
-            crate::providers::ModelPricing { input_cost_per_1k: crate::types::NanoUSD::from_nanos(150_000_000), output_cost_per_1k: crate::types::NanoUSD::from_nanos(600_000_000) },
+            crate::providers::ModelPricing {
+                input_cost_per_1k: crate::types::NanoUSD::from_nanos(150_000_000),
+                output_cost_per_1k: crate::types::NanoUSD::from_nanos(600_000_000),
+            },
         );
 
         let reqs = crate::providers::ModelRequirements {

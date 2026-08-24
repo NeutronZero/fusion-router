@@ -235,7 +235,10 @@ async fn law5_non_denied_target_passes_deny_compiler() {
     )
     .await;
 
-    assert_eq!(status, 400, "EchoProvider aborts execution, but compile must succeed: {body}");
+    assert_eq!(
+        status, 400,
+        "EchoProvider aborts execution, but compile must succeed: {body}"
+    );
     assert!(
         body["error"].as_str().unwrap().contains("Provider error"),
         "workflow must fail in the executor, not the compiler: {body}"
@@ -265,7 +268,10 @@ async fn law5_execution_plane_rejects_dangling_edge() {
     let (status, body) = post_workflow(&addr, workflow).await;
     assert_eq!(status, 400, "dangling edge must be rejected: {body}");
     assert!(
-        body["error"].as_str().unwrap().contains("unknown source node"),
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown source node"),
         "error must identify the dangling edge: {body}"
     );
 }
@@ -308,7 +314,10 @@ async fn law5_execution_plane_uses_full_passes() {
     .await;
 
     assert_eq!(status, 200, "clean workflow must compile and run: {body}");
-    assert_eq!(body["status"], "completed", "execution must complete: {body}");
+    assert_eq!(
+        body["status"], "completed",
+        "execution must complete: {body}"
+    );
 }
 
 #[tokio::test]
@@ -321,7 +330,10 @@ async fn law1_build_compiler_produces_mandatory_passes() {
                 .expect("policy AST must normalize"),
         ),
     );
-    assert!(!compiler.passes.is_empty(), "Law 1: pass list must never be empty");
+    assert!(
+        !compiler.passes.is_empty(),
+        "Law 1: pass list must never be empty"
+    );
     let names: Vec<&str> = compiler.passes.iter().map(|p| p.name()).collect();
     for mandatory in [
         "constraint_validation",
@@ -331,7 +343,10 @@ async fn law1_build_compiler_produces_mandatory_passes() {
         "budget_optimisation",
         "policy",
     ] {
-        assert!(names.contains(&mandatory), "missing mandatory pass {mandatory}: {names:?}");
+        assert!(
+            names.contains(&mandatory),
+            "missing mandatory pass {mandatory}: {names:?}"
+        );
     }
 }
 
@@ -343,12 +358,27 @@ fn law6_release_fails_closed() {
     let default = fusion_router::config::AppConfig::load("config/default.yaml")
         .expect("config/default.yaml must parse");
 
-    assert_eq!(default.server.host, "127.0.0.1", "default bind must be loopback");
+    assert_eq!(
+        default.server.host, "127.0.0.1",
+        "default bind must be loopback"
+    );
     assert!(default.auth.enabled, "auth must be enabled by default");
-    assert!(default.rate_limiting.enabled, "rate limiting must be enabled by default");
-    assert!(default.server.cors.allowed_origins.is_empty(), "CORS must be same-origin by default");
-    assert!(default.tools.allowed_shell_commands.is_empty(), "shell tools must be disabled by default");
-    assert!(!default.tools.enable_http_tool, "HTTP tool must be disabled by default");
+    assert!(
+        default.rate_limiting.enabled,
+        "rate limiting must be enabled by default"
+    );
+    assert!(
+        default.server.cors.allowed_origins.is_empty(),
+        "CORS must be same-origin by default"
+    );
+    assert!(
+        default.tools.allowed_shell_commands.is_empty(),
+        "shell tools must be disabled by default"
+    );
+    assert!(
+        !default.tools.enable_http_tool,
+        "HTTP tool must be disabled by default"
+    );
 
     // Default install has no API keys configured: boot must be refused
     // (unreachable without authentication) in any profile.
@@ -398,7 +428,7 @@ fn law6_release_fails_closed() {
 /// native calls outside the allowlist are never executed either.
 #[tokio::test]
 async fn law7_no_freeform_tool_parsing() {
-use fusion_router::executor::{DefaultExecutor, Executor};
+    use fusion_router::executor::{DefaultExecutor, Executor};
     use fusion_router::providers::ChatProvider;
     use fusion_router::strategies::single::SingleStrategy;
     use fusion_router::tools::builtin::CalculatorTool;
@@ -508,8 +538,10 @@ use fusion_router::executor::{DefaultExecutor, Executor};
     );
 
     // 2. Native tool_calls: only allowlisted tools execute.
-    let mut strategies: HashMap<StrategyKind, Box<dyn fusion_router::strategies::Strategy + Send + Sync>> =
-        HashMap::new();
+    let mut strategies: HashMap<
+        StrategyKind,
+        Box<dyn fusion_router::strategies::Strategy + Send + Sync>,
+    > = HashMap::new();
     strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
     let executor = Arc::new(
         DefaultExecutor::new(
@@ -563,8 +595,10 @@ use fusion_router::executor::{DefaultExecutor, Executor};
     let output = result.output.expect("tool call results must be produced");
     assert_eq!(output["tool_calls"][0]["executed"], false);
     assert!(
-        output["tool_calls"][0]["reason"].as_str().unwrap_or("").contains("allowlist"),
+        output["tool_calls"][0]["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("allowlist"),
         "non-allowlisted calls must be surfaced as text with a reason"
     );
 }
-

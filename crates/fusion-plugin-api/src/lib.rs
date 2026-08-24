@@ -51,7 +51,9 @@ impl Permission {
         match self {
             Permission::Network => Ok(()),
             Permission::Filesystem(path) if path.is_empty() => Err(PermissionError::EmptyArgument),
-            Permission::Http(endpoint) if endpoint.is_empty() => Err(PermissionError::EmptyArgument),
+            Permission::Http(endpoint) if endpoint.is_empty() => {
+                Err(PermissionError::EmptyArgument)
+            }
             Permission::Secrets(name) if name.is_empty() => Err(PermissionError::EmptyArgument),
             Permission::Environment(name) if name.is_empty() => Err(PermissionError::EmptyArgument),
             _ => Ok(()),
@@ -75,7 +77,10 @@ impl std::str::FromStr for Permission {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some(arg) = s.strip_prefix("Filesystem(").and_then(|s| s.strip_suffix(')')) {
+        if let Some(arg) = s
+            .strip_prefix("Filesystem(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
             return Ok(Permission::Filesystem(arg.to_string()));
         }
         if let Some(arg) = s.strip_prefix("Http(").and_then(|s| s.strip_suffix(')')) {
@@ -84,7 +89,10 @@ impl std::str::FromStr for Permission {
         if let Some(arg) = s.strip_prefix("Secrets(").and_then(|s| s.strip_suffix(')')) {
             return Ok(Permission::Secrets(arg.to_string()));
         }
-        if let Some(arg) = s.strip_prefix("Environment(").and_then(|s| s.strip_suffix(')')) {
+        if let Some(arg) = s
+            .strip_prefix("Environment(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
             return Ok(Permission::Environment(arg.to_string()));
         }
         if s == "Network" {
@@ -274,7 +282,10 @@ mod tests {
             description: "typed permissions".into(),
             inputs_schema: serde_json::json!({}),
             outputs_schema: serde_json::json!({}),
-            permissions: vec![Permission::Network, Permission::Http("https://example.com".into())],
+            permissions: vec![
+                Permission::Network,
+                Permission::Http("https://example.com".into()),
+            ],
             dependencies: vec![],
             estimated_cost: NanoUSD::ZERO,
             estimated_latency_ms: 0,

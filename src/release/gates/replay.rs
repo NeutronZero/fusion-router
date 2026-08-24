@@ -1,9 +1,9 @@
-use async_trait::async_trait;
-use std::path::PathBuf;
-use std::time::Instant;
 use crate::release::fixture::{FixtureKind, FixtureManifest};
 use crate::release::fixture_loader::{discover_fixtures, load_fixture_manifest, FixtureLoader};
 use crate::release::gate::*;
+use async_trait::async_trait;
+use std::path::PathBuf;
+use std::time::Instant;
 
 pub struct ReplayGateConfig {
     pub fixture_root: PathBuf,
@@ -60,12 +60,16 @@ impl SnapshotMetadataHeader {
 
 impl FilesystemReplayBackend {
     pub fn new(fixture_root: PathBuf) -> Self {
-        Self { loader: FixtureLoader::new(fixture_root) }
+        Self {
+            loader: FixtureLoader::new(fixture_root),
+        }
     }
 }
 
 impl ReplayBackend for FilesystemReplayBackend {
-    fn name(&self) -> &'static str { "filesystem" }
+    fn name(&self) -> &'static str {
+        "filesystem"
+    }
 
     fn discover_snapshots(&self, ctx: &ReplayContext) -> Result<Vec<SnapshotData>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
@@ -83,22 +87,26 @@ impl ReplayBackend for FilesystemReplayBackend {
     }
 
     fn load_snapshot(&self, path: &std::path::Path) -> Result<SnapshotData, GateError> {
-        let content = std::fs::read(path)
-            .map_err(|e| GateError::ExecutionFailed(format!("read snapshot {}: {e}", path.display())))?;
-        let header_end = content
-            .iter()
-            .position(|&b| b == b'\n')
-            .ok_or_else(|| {
-                GateError::ExecutionFailed(format!(
-                    "snapshot {}: missing metadata header line",
-                    path.display()
-                ))
-            })?;
+        let content = std::fs::read(path).map_err(|e| {
+            GateError::ExecutionFailed(format!("read snapshot {}: {e}", path.display()))
+        })?;
+        let header_end = content.iter().position(|&b| b == b'\n').ok_or_else(|| {
+            GateError::ExecutionFailed(format!(
+                "snapshot {}: missing metadata header line",
+                path.display()
+            ))
+        })?;
         let header = std::str::from_utf8(&content[..header_end]).map_err(|e| {
-            GateError::ExecutionFailed(format!("snapshot {}: invalid header encoding: {e}", path.display()))
+            GateError::ExecutionFailed(format!(
+                "snapshot {}: invalid header encoding: {e}",
+                path.display()
+            ))
         })?;
         let header: SnapshotMetadataHeader = serde_json::from_str(header).map_err(|e| {
-            GateError::ExecutionFailed(format!("snapshot {}: invalid metadata header: {e}", path.display()))
+            GateError::ExecutionFailed(format!(
+                "snapshot {}: invalid metadata header: {e}",
+                path.display()
+            ))
         })?;
         Ok(SnapshotData {
             metadata: header.to_snapshot_metadata(),
@@ -130,8 +138,12 @@ impl ReplayGate {
 
 #[async_trait]
 impl ReleaseGate for ReplayGate {
-    fn id(&self) -> GateId { GateId::Replay1 }
-    fn name(&self) -> &'static str { "Replay Compatibility" }
+    fn id(&self) -> GateId {
+        GateId::Replay1
+    }
+    fn name(&self) -> &'static str {
+        "Replay Compatibility"
+    }
     fn description(&self) -> &'static str {
         "Verify replay snapshots remain readable and structurally valid"
     }
@@ -163,7 +175,8 @@ impl ReleaseGate for ReplayGate {
             all_checks.push(GateCheck {
                 name: format!("metadata-version/v{}", snapshot.metadata.version),
                 passed: true,
-                message: format!("snapshot v{} format={} schema={} producer={}",
+                message: format!(
+                    "snapshot v{} format={} schema={} producer={}",
                     snapshot.metadata.version,
                     snapshot.metadata.format_version,
                     snapshot.metadata.schema_version,
@@ -173,7 +186,10 @@ impl ReleaseGate for ReplayGate {
             all_checks.push(GateCheck {
                 name: "schema-version".into(),
                 passed: snapshot.metadata.schema_version <= 1,
-                message: format!("schema version {} (compatible: <=1)", snapshot.metadata.schema_version),
+                message: format!(
+                    "schema version {} (compatible: <=1)",
+                    snapshot.metadata.schema_version
+                ),
             });
             all_checks.push(GateCheck {
                 name: "format-version".into(),
@@ -191,7 +207,10 @@ impl ReleaseGate for ReplayGate {
             format!("{} snapshots compatible", snapshots.len())
         } else {
             let failed = all_checks.iter().filter(|c| !c.passed).count();
-            format!("{failed} compatibility checks failed across {} snapshots", snapshots.len())
+            format!(
+                "{failed} compatibility checks failed across {} snapshots",
+                snapshots.len()
+            )
         };
         GateExecution::Success(GateResult {
             gate_id: GateId::Replay1,
@@ -212,14 +231,31 @@ pub struct MockReplayBackend {
 
 #[cfg(test)]
 impl MockReplayBackend {
-    pub fn passing() -> Self { Self { should_pass: true, should_error: false } }
-    pub fn failing() -> Self { Self { should_pass: false, should_error: false } }
-    pub fn error() -> Self { Self { should_pass: false, should_error: true } }
+    pub fn passing() -> Self {
+        Self {
+            should_pass: true,
+            should_error: false,
+        }
+    }
+    pub fn failing() -> Self {
+        Self {
+            should_pass: false,
+            should_error: false,
+        }
+    }
+    pub fn error() -> Self {
+        Self {
+            should_pass: false,
+            should_error: true,
+        }
+    }
 }
 
 #[cfg(test)]
 impl ReplayBackend for MockReplayBackend {
-    fn name(&self) -> &'static str { "mock" }
+    fn name(&self) -> &'static str {
+        "mock"
+    }
     fn discover_snapshots(&self, _ctx: &ReplayContext) -> Result<Vec<SnapshotData>, GateError> {
         if self.should_error {
             return Err(GateError::ExecutionFailed("mock error".into()));
@@ -231,7 +267,11 @@ impl ReplayBackend for MockReplayBackend {
                 schema_version: if self.should_pass { 1 } else { 999 },
                 producer_version: "mock/0.1.0".into(),
             },
-            payload: if self.should_pass { vec![1, 2, 3] } else { vec![] },
+            payload: if self.should_pass {
+                vec![1, 2, 3]
+            } else {
+                vec![]
+            },
         }])
     }
     fn load_snapshot(&self, _path: &std::path::Path) -> Result<SnapshotData, GateError> {
@@ -247,7 +287,9 @@ mod tests {
     fn test_replay_gate_metadata() {
         let gate = ReplayGate::new(
             Box::new(MockReplayBackend::passing()),
-            ReplayGateConfig { fixture_root: PathBuf::from(".") },
+            ReplayGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let meta = gate.metadata();
         assert_eq!(meta.id, GateId::Replay1);
@@ -265,14 +307,19 @@ mod tests {
         };
         let snapshots = backend.discover_snapshots(&ctx).unwrap();
         assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].metadata.version, semver::Version::new(0, 10, 0));
+        assert_eq!(
+            snapshots[0].metadata.version,
+            semver::Version::new(0, 10, 0)
+        );
     }
 
     #[tokio::test]
     async fn test_replay_gate_passing() {
         let gate = ReplayGate::new(
             Box::new(MockReplayBackend::passing()),
-            ReplayGateConfig { fixture_root: PathBuf::from(".") },
+            ReplayGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -291,7 +338,9 @@ mod tests {
     async fn test_replay_gate_failing_deserialization() {
         let gate = ReplayGate::new(
             Box::new(MockReplayBackend::failing()),
-            ReplayGateConfig { fixture_root: PathBuf::from(".") },
+            ReplayGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -305,7 +354,9 @@ mod tests {
     async fn test_replay_gate_backend_error() {
         let gate = ReplayGate::new(
             Box::new(MockReplayBackend::error()),
-            ReplayGateConfig { fixture_root: PathBuf::from(".") },
+            ReplayGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
         );
         let ctx = GateContext {
             workspace_root: PathBuf::from("."),
@@ -314,7 +365,7 @@ mod tests {
         let result = gate.run(&ctx).await;
         assert!(result.is_error());
         match result {
-            GateExecution::ExecutionError(GateError::ExecutionFailed(_)) => {},
+            GateExecution::ExecutionError(GateError::ExecutionFailed(_)) => {}
             _ => panic!("expected ExecutionFailed inside GateExecution::ExecutionError"),
         }
     }
@@ -357,7 +408,10 @@ mod tests {
 
         let backend = FilesystemReplayBackend::new(temp.clone());
         let result = backend.load_snapshot(&temp.join("bare.snap"));
-        assert!(result.is_err(), "snapshot without metadata header must not fabricate metadata");
+        assert!(
+            result.is_err(),
+            "snapshot without metadata header must not fabricate metadata"
+        );
 
         let _ = std::fs::remove_dir_all(temp);
     }

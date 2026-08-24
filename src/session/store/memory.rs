@@ -37,7 +37,10 @@ impl SessionStore for InMemorySessionStore {
         Ok(())
     }
 
-    async fn load_session(&self, session_id: &SessionId) -> Result<Option<ExecutionSession>, String> {
+    async fn load_session(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<ExecutionSession>, String> {
         let guard = self.sessions.read();
         Ok(guard.get(session_id).cloned())
     }
@@ -51,7 +54,10 @@ impl SessionStore for InMemorySessionStore {
         Ok(())
     }
 
-    async fn list_checkpoints(&self, session_id: &SessionId) -> Result<Vec<SessionSnapshot>, String> {
+    async fn list_checkpoints(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<SessionSnapshot>, String> {
         let guard = self.snapshots.read();
         Ok(guard.get(session_id).cloned().unwrap_or_default())
     }

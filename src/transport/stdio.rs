@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-use crate::transport::{Transport, TransportRequest, TransportResponse, TransportEvent, TransportError};
+use crate::transport::{
+    Transport, TransportError, TransportEvent, TransportRequest, TransportResponse,
+};
 
 pub struct StdioTransport {
     command: String,
@@ -63,8 +65,16 @@ impl Transport for StdioTransport {
     }
 
     #[tracing::instrument(skip(self, _req))]
-    async fn stream(&self, _req: TransportRequest) -> Result<futures::stream::BoxStream<'static, Result<TransportEvent, TransportError>>, TransportError> {
-        Err(TransportError::Network("Streaming not yet supported for stdio transport".to_string()))
+    async fn stream(
+        &self,
+        _req: TransportRequest,
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<TransportEvent, TransportError>>,
+        TransportError,
+    > {
+        Err(TransportError::Network(
+            "Streaming not yet supported for stdio transport".to_string(),
+        ))
     }
 }
 
@@ -74,12 +84,12 @@ mod tests {
 
     #[test]
     fn test_new_stores_command_and_args() {
-        let transport = StdioTransport::new(
-            "python".into(),
-            vec!["-c".into(), "print(1)".into()],
-        );
+        let transport = StdioTransport::new("python".into(), vec!["-c".into(), "print(1)".into()]);
 
         assert_eq!(transport.command, "python");
-        assert_eq!(transport.args, vec!["-c".to_string(), "print(1)".to_string()]);
+        assert_eq!(
+            transport.args,
+            vec!["-c".to_string(), "print(1)".to_string()]
+        );
     }
 }

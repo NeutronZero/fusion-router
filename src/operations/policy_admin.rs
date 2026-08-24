@@ -1,19 +1,23 @@
-use std::sync::Arc;
+use crate::operations::OperationError;
 use crate::policy::PolicyDeclaration;
 use crate::policy::PolicyRegistry;
-use crate::telemetry::audit::{AuditLog, AuditEntry};
-use crate::operations::OperationError;
+use crate::telemetry::audit::{AuditEntry, AuditLog};
 use fusion_planner::PolicySnapshot;
+use std::sync::Arc;
 
 const VALID_EFFECTS: [&str; 3] = ["deny", "approval", "allow"];
 
 /// Fail-closed validation at the administrative boundary.
 fn validate_declaration(decl: &PolicyDeclaration) -> Result<(), OperationError> {
     if decl.name.trim().is_empty() {
-        return Err(OperationError::Policy("policy name must not be empty".into()));
+        return Err(OperationError::Policy(
+            "policy name must not be empty".into(),
+        ));
     }
     if decl.match_target.trim().is_empty() {
-        return Err(OperationError::Policy("policy match_target must not be empty".into()));
+        return Err(OperationError::Policy(
+            "policy match_target must not be empty".into(),
+        ));
     }
     if !VALID_EFFECTS.contains(&decl.effect.as_str()) {
         return Err(OperationError::Policy(format!(
@@ -24,11 +28,13 @@ fn validate_declaration(decl: &PolicyDeclaration) -> Result<(), OperationError> 
     Ok(())
 }
 
-fn parse_declaration(name: &str, id: &str, rule_json: &str) -> Result<PolicyDeclaration, OperationError> {
+fn parse_declaration(
+    name: &str,
+    id: &str,
+    rule_json: &str,
+) -> Result<PolicyDeclaration, OperationError> {
     serde_json::from_str(rule_json).map_err(|e| {
-        OperationError::Policy(format!(
-            "stored policy '{name}' (id {id}) is corrupt: {e}"
-        ))
+        OperationError::Policy(format!("stored policy '{name}' (id {id}) is corrupt: {e}"))
     })
 }
 
@@ -43,7 +49,10 @@ pub struct PolicyAdmin {
 
 impl PolicyAdmin {
     pub fn new(registry: Arc<PolicyRegistry>, audit_log: Arc<AuditLog>) -> Self {
-        Self { registry, audit_log }
+        Self {
+            registry,
+            audit_log,
+        }
     }
 
     /// Returns `true` if `self` holds the same `PolicyRegistry` instance as `other`.
@@ -92,7 +101,10 @@ impl PolicyAdmin {
     pub fn create_policy(&self, decl: PolicyDeclaration) -> Result<(), OperationError> {
         validate_declaration(&decl)?;
         if self.registry.has_policy(&decl.name) {
-            return Err(OperationError::Policy(format!("Policy '{}' already exists", decl.name)));
+            return Err(OperationError::Policy(format!(
+                "Policy '{}' already exists",
+                decl.name
+            )));
         }
         self.store(decl, "create")
     }
@@ -102,7 +114,10 @@ impl PolicyAdmin {
     pub fn update_policy(&self, name: &str, decl: PolicyDeclaration) -> Result<(), OperationError> {
         validate_declaration(&decl)?;
         if !self.registry.has_policy(name) {
-            return Err(OperationError::Policy(format!("Policy '{}' not found", name)));
+            return Err(OperationError::Policy(format!(
+                "Policy '{}' not found",
+                name
+            )));
         }
         if decl.name != name {
             return Err(OperationError::Policy(
@@ -133,7 +148,10 @@ impl PolicyAdmin {
     /// Deletes a policy by name.
     pub fn delete_policy(&self, name: &str) -> Result<(), OperationError> {
         if !self.registry.has_policy(name) {
-            return Err(OperationError::Policy(format!("Policy '{}' not found", name)));
+            return Err(OperationError::Policy(format!(
+                "Policy '{}' not found",
+                name
+            )));
         }
         self.registry.remove_policy(name);
         self.audit_log.record(AuditEntry {
@@ -210,7 +228,9 @@ mod tests {
     fn test_update_policy() {
         let admin = test_admin();
         admin.create_policy(test_decl("original")).unwrap();
-        admin.update_policy("original", test_decl("original")).unwrap();
+        admin
+            .update_policy("original", test_decl("original"))
+            .unwrap();
         let snap = admin.current_snapshot();
         assert_eq!(snap.policies.len(), 1, "update must replace, not duplicate");
         assert_eq!(snap.policies[0].name, "original");
@@ -251,7 +271,10 @@ mod tests {
         let listed = admin.list_policies().unwrap();
         assert_eq!(listed[0].effect, "deny", "effect must survive storage");
         assert_eq!(listed[0].match_target, "shell.exec");
-        assert_eq!(admin.get_policy("deny-shell").unwrap().unwrap().effect, "deny");
+        assert_eq!(
+            admin.get_policy("deny-shell").unwrap().unwrap().effect,
+            "deny"
+        );
     }
 
     #[test]
@@ -259,7 +282,10 @@ mod tests {
         let admin = test_admin();
         let mut decl = test_decl("bad");
         decl.effect = "Deny".into();
-        assert!(admin.create_policy(decl).is_err(), "case mismatch must be rejected");
+        assert!(
+            admin.create_policy(decl).is_err(),
+            "case mismatch must be rejected"
+        );
         let mut decl2 = test_decl("bad2");
         decl2.effect = "block".into();
         assert!(admin.create_policy(decl2).is_err());

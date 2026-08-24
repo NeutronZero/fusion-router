@@ -1,4 +1,4 @@
-use super::{Parallelism, StreamingMode, Strategy, StrategyDescriptor};
+use super::{Parallelism, Strategy, StrategyDescriptor, StreamingMode};
 use crate::compiler::context::CompilationContext;
 use crate::compiler::diagnostics::CompilerDiagnostic;
 use crate::compiler::ir::{PrimitiveGraph, StrategyIR};
@@ -23,7 +23,11 @@ impl Strategy for ChainStrategy {
         }
     }
 
-    fn lower(&self, ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
+    fn lower(
+        &self,
+        ir: &StrategyIR,
+        ctx: &CompilationContext,
+    ) -> Result<PrimitiveGraph, CompilerDiagnostic> {
         let mut combined_graph = PrimitiveGraph::new("chain_graph");
 
         let stages = match ir {
@@ -45,7 +49,6 @@ impl Strategy for ChainStrategy {
 
         Ok(combined_graph)
     }
-
 }
 
 #[cfg(test)]
@@ -64,12 +67,19 @@ mod tests {
                 parallelism: Parallelism::Sequential,
                 requires_barrier: false,
                 supports_streaming: StreamingMode::None,
-                retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    backoff_ms: 0,
+                },
                 expected_outputs: vec![ArtifactKind::Generic],
             }
         }
 
-        fn lower(&self, _ir: &StrategyIR, _ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
+        fn lower(
+            &self,
+            _ir: &StrategyIR,
+            _ctx: &CompilationContext,
+        ) -> Result<PrimitiveGraph, CompilerDiagnostic> {
             let mut graph = PrimitiveGraph::new(format!("mock_{}", self.0));
             graph.add_node(PrimitiveNode {
                 id: format!("mock_node_{}", self.0),

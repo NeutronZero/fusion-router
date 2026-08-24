@@ -14,4 +14,3 @@ pub trait Executor: Send + Sync {
         ctx: &NodeExecContext,
     ) -> NodeExecutionResult;
 }
-

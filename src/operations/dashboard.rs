@@ -1,11 +1,17 @@
-use std::sync::Arc;
 use crate::capability::CapabilityRegistry;
-use crate::operations::{OperationError, RegistrySummary, RuntimeSummary, InvocationMetric, TimeWindow, RuntimeModuleCache};
+use crate::operations::{
+    InvocationMetric, OperationError, RegistrySummary, RuntimeModuleCache, RuntimeSummary,
+    TimeWindow,
+};
+use std::sync::Arc;
 
 pub trait DashboardDataProvider: Send + Sync {
     fn registry_summary(&self) -> Result<RegistrySummary, OperationError>;
     fn runtime_summary(&self) -> Result<RuntimeSummary, OperationError>;
-    fn invocation_metrics(&self, window: TimeWindow) -> Result<Vec<InvocationMetric>, OperationError>;
+    fn invocation_metrics(
+        &self,
+        window: TimeWindow,
+    ) -> Result<Vec<InvocationMetric>, OperationError>;
 }
 
 pub struct DefaultDashboardDataProvider {
@@ -18,7 +24,10 @@ impl DefaultDashboardDataProvider {
         registry: Arc<dyn CapabilityRegistry>,
         module_cache: Arc<RuntimeModuleCache>,
     ) -> Self {
-        Self { registry, module_cache }
+        Self {
+            registry,
+            module_cache,
+        }
     }
 
     /// Returns `true` if `self` holds the same `CapabilityRegistry` instance as `other`.
@@ -55,7 +64,10 @@ impl DashboardDataProvider for DefaultDashboardDataProvider {
         })
     }
 
-    fn invocation_metrics(&self, _window: TimeWindow) -> Result<Vec<InvocationMetric>, OperationError> {
+    fn invocation_metrics(
+        &self,
+        _window: TimeWindow,
+    ) -> Result<Vec<InvocationMetric>, OperationError> {
         Ok(vec![])
     }
 }

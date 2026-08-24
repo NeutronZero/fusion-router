@@ -18,7 +18,9 @@ struct LoadMockProvider;
 
 #[async_trait::async_trait]
 impl ChatProvider for LoadMockProvider {
-    fn name(&self) -> &str { "load-mock" }
+    fn name(&self) -> &str {
+        "load-mock"
+    }
 
     async fn chat_completion(
         &self,
@@ -52,19 +54,25 @@ struct NoopEvidence;
 
 #[async_trait::async_trait]
 impl EvidenceRepository for NoopEvidence {
-    async fn record(&self, _entry: fusion_router::types::ExecutionRecord) -> anyhow::Result<()> { Ok(()) }
+    async fn record(&self, _entry: fusion_router::types::ExecutionRecord) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn snapshot(&self) -> anyhow::Result<fusion_router::types::EvidenceSnapshot> {
         Ok(fusion_router::types::EvidenceSnapshot {
-            record_count: 0, success_rates: Default::default(),
-            avg_latencies: Default::default(), avg_costs: Default::default(),
+            record_count: 0,
+            success_rates: Default::default(),
+            avg_latencies: Default::default(),
+            avg_costs: Default::default(),
             model_rankings: vec![],
         })
     }
-    async fn get_model_stats(&self, _window_hours: u32) -> anyhow::Result<Vec<fusion_router::telemetry::ModelPerformanceStats>> {
+    async fn get_model_stats(
+        &self,
+        _window_hours: u32,
+    ) -> anyhow::Result<Vec<fusion_router::telemetry::ModelPerformanceStats>> {
         Ok(vec![])
     }
 }
-
 
 fn build_app(quota: &Quota) -> Router {
     let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(LoadMockProvider);
@@ -72,7 +80,13 @@ fn build_app(quota: &Quota) -> Router {
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = AppConfig {
         unsafe_dev: false,
-        server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 0, shutdown_timeout_secs: 30, request_timeout_secs: 300, cors: Default::default() },
+        server: fusion_router::config::ServerConfig {
+            host: "0.0.0.0".to_string(),
+            port: 0,
+            shutdown_timeout_secs: 30,
+            request_timeout_secs: 300,
+            cors: Default::default(),
+        },
         resources: fusion_router::config::ResourceConfig {
             max_daily_cost: quota.max_daily_cost,
             max_daily_tokens: quota.max_daily_tokens,
@@ -92,9 +106,19 @@ fn build_app(quota: &Quota) -> Router {
         features: std::collections::HashMap::new(),
     };
 
-    let state = fusion_router::server::handlers::AppState::new(provider, resource_manager, evidence, config, PathBuf::from("config/default.yaml"), Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()));
+    let state = fusion_router::server::handlers::AppState::new(
+        provider,
+        resource_manager,
+        evidence,
+        config,
+        PathBuf::from("config/default.yaml"),
+        Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()),
+    );
     Router::new()
-        .route("/v1/chat/completions", post(fusion_router::server::handlers::chat_completions))
+        .route(
+            "/v1/chat/completions",
+            post(fusion_router::server::handlers::chat_completions),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -117,7 +141,9 @@ async fn test_response_contains_actual_llm_output() {
     let app = build_app(&quota);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let client = reqwest::Client::builder()
@@ -134,12 +160,13 @@ async fn test_response_contains_actual_llm_output() {
 
     assert!(resp.status().is_success(), "Request should succeed");
     let body: serde_json::Value = resp.json().await.unwrap();
-    let content = body["choices"][0]["message"]["content"].as_str().unwrap_or("");
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("");
 
     // The response must NOT be the static placeholder — it should contain actual LLM output
     assert_ne!(
-        content,
-        "Request processed successfully.",
+        content, "Request processed successfully.",
         "Response must contain actual LLM-generated content, not a static placeholder"
     );
     assert!(!content.is_empty(), "Response content must not be empty");
@@ -156,7 +183,9 @@ async fn test_concurrent_throughput() {
     let app = build_app(&quota);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let client = reqwest::Client::builder()
@@ -187,7 +216,11 @@ async fn test_concurrent_throughput() {
         let mut latencies = Vec::new();
         for h in handles {
             if let Ok((Ok(resp), lat)) = h.await {
-                if resp.status().is_success() { ok += 1; } else { err += 1; }
+                if resp.status().is_success() {
+                    ok += 1;
+                } else {
+                    err += 1;
+                }
                 latencies.push(lat);
             } else {
                 err += 1;
@@ -196,9 +229,18 @@ async fn test_concurrent_throughput() {
 
         let elapsed = start.elapsed();
         latencies.sort();
-        let p50 = latencies.get(latencies.len() / 2).map(|d| d.as_millis()).unwrap_or(0);
-        let p90 = latencies.get((latencies.len() as f64 * 0.9) as usize).map(|d| d.as_millis()).unwrap_or(0);
-        let p99 = latencies.get((latencies.len() as f64 * 0.99) as usize).map(|d| d.as_millis()).unwrap_or(0);
+        let p50 = latencies
+            .get(latencies.len() / 2)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let p90 = latencies
+            .get((latencies.len() as f64 * 0.9) as usize)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let p99 = latencies
+            .get((latencies.len() as f64 * 0.99) as usize)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
 
         println!(
             "concurrency={}: {} ok / {} err in {:?} | p50={}ms p90={}ms p99={}ms throughput={:.0} req/s",
@@ -220,7 +262,9 @@ async fn test_quota_enforcement() {
     let app = build_app(&quota);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let client = reqwest::Client::builder()
@@ -248,9 +292,15 @@ async fn test_quota_enforcement() {
         }
     }
 
-    println!("quota test: {} success / {} rejected", successes, rejections);
+    println!(
+        "quota test: {} success / {} rejected",
+        successes, rejections
+    );
     assert!(rejections > 0, "Quota exhaustion should produce rejections");
-    assert!(successes < 20, "Budget-limited requests should fail after exhaust");
+    assert!(
+        successes < 20,
+        "Budget-limited requests should fail after exhaust"
+    );
 }
 
 #[tokio::test]
@@ -264,7 +314,9 @@ async fn test_concurrent_streaming() {
     let app = build_app(&quota);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     let client = reqwest::Client::builder()
@@ -304,9 +356,16 @@ async fn test_concurrent_streaming() {
     let mut err = 0u32;
     for h in handles {
         if let Ok((status_ok, _lat, body)) = h.await {
-            if status_ok { ok += 1; } else { err += 1; }
+            if status_ok {
+                ok += 1;
+            } else {
+                err += 1;
+            }
             if let Some(text) = body {
-                assert!(text.contains("[DONE]"), "Streaming response should contain [DONE]");
+                assert!(
+                    text.contains("[DONE]"),
+                    "Streaming response should contain [DONE]"
+                );
             }
         } else {
             err += 1;
@@ -323,16 +382,16 @@ async fn test_concurrent_streaming() {
 
 #[tokio::test]
 async fn test_concurrent_dag_workflows() {
-    use std::collections::HashMap;
     use fusion_router::executor::DefaultExecutor;
     use fusion_router::scheduler::default::DefaultScheduler;
     use fusion_router::scheduler::Scheduler;
+    use std::collections::HashMap;
 
     use fusion_router::strategies::single::SingleStrategy;
     use fusion_router::strategies::Strategy;
     use fusion_router::types::{
-        ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind,
-        GraphMetadata, RetryPolicy, StrategyKind, ReservationId,
+        ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata,
+        ReservationId, RetryPolicy, StrategyKind,
     };
 
     let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(LoadMockProvider);
@@ -348,11 +407,21 @@ async fn test_concurrent_dag_workflows() {
 
     fn make_node(id: Uuid, kind: ExecutionNodeKind) -> ExecutionNode {
         let mut config = HashMap::new();
-        config.insert("messages".into(), serde_json::json!([{"role": "user", "content": "hello"}]));
+        config.insert(
+            "messages".into(),
+            serde_json::json!([{"role": "user", "content": "hello"}]),
+        );
         ExecutionNode {
-            id, kind, strategy: StrategyKind::Single, model: "test".into(),
-            retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
-            fallback: None, config,
+            id,
+            kind,
+            strategy: StrategyKind::Single,
+            model: "test".into(),
+            retry_policy: RetryPolicy {
+                max_retries: 0,
+                backoff_ms: 0,
+            },
+            fallback: None,
+            config,
             subgraph: None,
         }
     }
@@ -366,14 +435,33 @@ async fn test_concurrent_dag_workflows() {
             make_node(join_id, ExecutionNodeKind::Join),
         ],
         edges: vec![
-            ExecutionEdge { from: split_id, to: a_id, condition: None },
-            ExecutionEdge { from: split_id, to: b_id, condition: None },
-            ExecutionEdge { from: a_id, to: join_id, condition: None },
-            ExecutionEdge { from: b_id, to: join_id, condition: None },
+            ExecutionEdge {
+                from: split_id,
+                to: a_id,
+                condition: None,
+            },
+            ExecutionEdge {
+                from: split_id,
+                to: b_id,
+                condition: None,
+            },
+            ExecutionEdge {
+                from: a_id,
+                to: join_id,
+                condition: None,
+            },
+            ExecutionEdge {
+                from: b_id,
+                to: join_id,
+                condition: None,
+            },
         ],
         metadata: GraphMetadata {
             policy_version: 0,
-            estimated_cost: NanoUSD::from_nanos(20_000_000), estimated_tokens: 1000, max_depth: 2, node_count: 4,
+            estimated_cost: NanoUSD::from_nanos(20_000_000),
+            estimated_tokens: 1000,
+            max_depth: 2,
+            node_count: 4,
         },
         total_tokens: 1000,
         total_cost: NanoUSD::from_nanos(1_000_000_000),
@@ -406,23 +494,26 @@ async fn test_concurrent_dag_workflows() {
     let elapsed = start.elapsed();
     println!(
         "concurrent DAG: {} ok / {} err in {:?} throughput={:.0} graphs/s",
-        ok, err, elapsed, n as f64 / elapsed.as_secs_f64()
+        ok,
+        err,
+        elapsed,
+        n as f64 / elapsed.as_secs_f64()
     );
     assert_eq!(err, 0, "All concurrent DAG workflows should succeed");
 }
 
 #[tokio::test]
 async fn test_loop_iteration_stress() {
-    use std::collections::HashMap;
     use fusion_router::executor::DefaultExecutor;
     use fusion_router::scheduler::default::DefaultScheduler;
     use fusion_router::scheduler::Scheduler;
+    use std::collections::HashMap;
 
     use fusion_router::strategies::single::SingleStrategy;
     use fusion_router::strategies::Strategy;
     use fusion_router::types::{
-        ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind,
-        GraphMetadata, RetryPolicy, StrategyKind, ReservationId,
+        ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata,
+        ReservationId, RetryPolicy, StrategyKind,
     };
 
     let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(LoadMockProvider);
@@ -439,41 +530,77 @@ async fn test_loop_iteration_stress() {
     loop_config.insert("max_iterations".into(), serde_json::json!(50));
 
     let mut body_config = HashMap::new();
-    body_config.insert("messages".into(), serde_json::json!([{"role": "user", "content": "iter"}]));
+    body_config.insert(
+        "messages".into(),
+        serde_json::json!([{"role": "user", "content": "iter"}]),
+    );
 
     let graph = ExecutionGraph {
         graph_id: Uuid::nil(),
         nodes: vec![
             ExecutionNode {
-                id: loop_id, kind: ExecutionNodeKind::Loop,
-                strategy: StrategyKind::Single, model: "test".into(),
-                retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
-                fallback: None, config: loop_config,
+                id: loop_id,
+                kind: ExecutionNodeKind::Loop,
+                strategy: StrategyKind::Single,
+                model: "test".into(),
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    backoff_ms: 0,
+                },
+                fallback: None,
+                config: loop_config,
                 subgraph: None,
             },
             ExecutionNode {
-                id: body_id, kind: ExecutionNodeKind::LLMGenerate,
-                strategy: StrategyKind::Single, model: "test".into(),
-                retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
-                fallback: None, config: body_config,
+                id: body_id,
+                kind: ExecutionNodeKind::LLMGenerate,
+                strategy: StrategyKind::Single,
+                model: "test".into(),
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    backoff_ms: 0,
+                },
+                fallback: None,
+                config: body_config,
                 subgraph: None,
             },
             ExecutionNode {
-                id: exit_id, kind: ExecutionNodeKind::LLMGenerate,
-                strategy: StrategyKind::Single, model: "test".into(),
-                retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
-                fallback: None, config: HashMap::new(),
+                id: exit_id,
+                kind: ExecutionNodeKind::LLMGenerate,
+                strategy: StrategyKind::Single,
+                model: "test".into(),
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    backoff_ms: 0,
+                },
+                fallback: None,
+                config: HashMap::new(),
                 subgraph: None,
             },
         ],
         edges: vec![
-            ExecutionEdge { from: loop_id, to: body_id, condition: None },
-            ExecutionEdge { from: body_id, to: loop_id, condition: None },
-            ExecutionEdge { from: loop_id, to: exit_id, condition: Some("exit".into()) },
+            ExecutionEdge {
+                from: loop_id,
+                to: body_id,
+                condition: None,
+            },
+            ExecutionEdge {
+                from: body_id,
+                to: loop_id,
+                condition: None,
+            },
+            ExecutionEdge {
+                from: loop_id,
+                to: exit_id,
+                condition: Some("exit".into()),
+            },
         ],
         metadata: GraphMetadata {
             policy_version: 0,
-            estimated_cost: NanoUSD::from_nanos(500_000_000), estimated_tokens: 25000, max_depth: 50, node_count: 3,
+            estimated_cost: NanoUSD::from_nanos(500_000_000),
+            estimated_tokens: 25000,
+            max_depth: 50,
+            node_count: 3,
         },
         total_tokens: 25000,
         total_cost: NanoUSD::from_nanos(1_000_000_000),
@@ -497,7 +624,7 @@ async fn test_compilation_throughput() {
     use fusion_router::compiler::{build_compiler, Compiler};
     use fusion_router::resource::DefaultResourceManager;
     use fusion_router::types::{
-        IRMetadata, IRNode, IRNodeKind, IREdge, Quota, StrategyKind, WorkflowIR,
+        IREdge, IRMetadata, IRNode, IRNodeKind, Quota, StrategyKind, WorkflowIR,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -510,11 +637,7 @@ async fn test_compilation_throughput() {
         provider_limits: Default::default(),
     };
     let resource_manager = Arc::new(DefaultResourceManager::new(quota));
-    let compiler = build_compiler(
-        Default::default(),
-        resource_manager,
-        None,
-    );
+    let compiler = build_compiler(Default::default(), resource_manager, None);
 
     let nodes: Vec<IRNode> = (0..50)
         .map(|_i| {
@@ -560,11 +683,7 @@ async fn test_compilation_throughput() {
         "Compilation throughput: {:.0} compilations/sec ({} in {:?})",
         throughput, count, elapsed
     );
-    assert!(
-        throughput > 10.0,
-        "Throughput too low: {:.0}/s",
-        throughput
-    );
+    assert!(throughput > 10.0, "Throughput too low: {:.0}/s", throughput);
 }
 
 #[tokio::test]
@@ -581,7 +700,8 @@ async fn test_cache_contention() {
         handles.push(tokio::spawn(async move {
             for j in 0..100 {
                 let key = format!("writer-{}-{}", i, j);
-                c.put(&key, serde_json::json!(format!("value-{}-{}", i, j))).await;
+                c.put(&key, serde_json::json!(format!("value-{}-{}", i, j)))
+                    .await;
             }
         }));
         let c = cache.clone();
@@ -594,28 +714,33 @@ async fn test_cache_contention() {
     for h in handles {
         h.await.unwrap();
     }
-    assert!(!cache.is_empty(), "Cache should have entries after contention");
+    assert!(
+        !cache.is_empty(),
+        "Cache should have entries after contention"
+    );
 }
 
 #[tokio::test]
 async fn test_high_concurrency_scheduling() {
-    use std::collections::HashMap;
     use fusion_router::executor::DefaultExecutor;
+    use fusion_router::providers::ChatProvider;
     use fusion_router::scheduler::default::DefaultScheduler;
     use fusion_router::scheduler::Scheduler;
     use fusion_router::strategies::single::SingleStrategy;
     use fusion_router::strategies::Strategy;
     use fusion_router::types::{
-        ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind,
-        GraphMetadata, RetryPolicy, StrategyKind, ReservationId,
+        ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata,
+        ReservationId, RetryPolicy, StrategyKind,
     };
-    use fusion_router::providers::ChatProvider;
+    use std::collections::HashMap;
 
     struct HighLoadProvider;
 
     #[async_trait::async_trait]
     impl ChatProvider for HighLoadProvider {
-        fn name(&self) -> &str { "high-load" }
+        fn name(&self) -> &str {
+            "high-load"
+        }
 
         async fn chat_completion(
             &self,
@@ -660,7 +785,10 @@ async fn test_high_concurrency_scheduling() {
                     kind: ExecutionNodeKind::LLMGenerate,
                     strategy: StrategyKind::Single,
                     model: "test".into(),
-                    retry_policy: RetryPolicy { max_retries: 0, backoff_ms: 0 },
+                    retry_policy: RetryPolicy {
+                        max_retries: 0,
+                        backoff_ms: 0,
+                    },
                     fallback: None,
                     config,
                     subgraph: None,
@@ -749,13 +877,14 @@ async fn test_budget_no_race_on_concurrent_reserve() {
     for _ in 0..5 {
         let rm = rm.clone();
         let g = graph.clone();
-        handles.push(tokio::spawn(async move {
-            rm.try_reserve(&g).await
-        }));
+        handles.push(tokio::spawn(async move { rm.try_reserve(&g).await }));
     }
 
     let results: Vec<_> = futures::future::join_all(handles).await;
-    let successes = results.iter().filter(|r| r.as_ref().map(|ok| *ok).unwrap_or(false)).count();
+    let successes = results
+        .iter()
+        .filter(|r| r.as_ref().map(|ok| *ok).unwrap_or(false))
+        .count();
 
     assert_eq!(
         successes, 1,
@@ -763,6 +892,3 @@ async fn test_budget_no_race_on_concurrent_reserve() {
         successes
     );
 }
-
-
-

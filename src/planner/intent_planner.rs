@@ -1,15 +1,14 @@
 use async_trait::async_trait;
 
 use super::Planner;
-use crate::types::execution::ExecutionIntent;
-use crate::types::{
-    ComplexityLevel, EvidenceSnapshot, ModelCatalog, Policy, Requirements,
-    WorkflowIR,
-};
 use crate::capability::CapabilityRegistry;
 use crate::planner::PlannerFailure;
-use std::sync::Arc;
+use crate::types::execution::ExecutionIntent;
+use crate::types::{
+    ComplexityLevel, EvidenceSnapshot, ModelCatalog, Policy, Requirements, WorkflowIR,
+};
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 pub struct IntentPlanner {
     pub model_catalog: ModelCatalog,
@@ -35,7 +34,9 @@ impl IntentPlanner {
         }
     }
 
-    fn snapshot_from_registry(registry: &dyn CapabilityRegistry) -> fusion_kernel::CapabilityCatalog {
+    fn snapshot_from_registry(
+        registry: &dyn CapabilityRegistry,
+    ) -> fusion_kernel::CapabilityCatalog {
         let mut catalog = std::collections::HashMap::new();
         for contract in registry.list() {
             catalog.insert(contract.id.as_str().to_string(), Vec::new());
@@ -74,7 +75,9 @@ impl IntentPlanner {
             ExecutionIntent::Balanced => fusion_planner::ExecutionIntent::Balanced,
             ExecutionIntent::Exhaustive => fusion_planner::ExecutionIntent::Exhaustive,
             ExecutionIntent::Constrained { max_cost, .. } => {
-                fusion_planner::ExecutionIntent::Constrained { max_cost: *max_cost }
+                fusion_planner::ExecutionIntent::Constrained {
+                    max_cost: *max_cost,
+                }
             }
         };
 
@@ -89,22 +92,44 @@ impl IntentPlanner {
 
         let mut required_capabilities = Vec::new();
         if let Some(model_requirements) = &requirements.model_requirements {
-            if model_requirements.requires_tools { required_capabilities.push("ToolCalling".into()); }
-            if model_requirements.requires_vision { required_capabilities.push("Vision".into()); }
-            if model_requirements.requires_streaming { required_capabilities.push("Streaming".into()); }
+            if model_requirements.requires_tools {
+                required_capabilities.push("ToolCalling".into());
+            }
+            if model_requirements.requires_vision {
+                required_capabilities.push("Vision".into());
+            }
+            if model_requirements.requires_streaming {
+                required_capabilities.push("Streaming".into());
+            }
         }
-        let (avg_latency_ms, error_rate, healthy_provider_count) = evidence.map(|snapshot| {
-            let avg_latency_ms = if snapshot.avg_latencies.is_empty() { 0 } else {
-                (snapshot.avg_latencies.values().sum::<f64>() / snapshot.avg_latencies.len() as f64).max(0.0) as u64
-            };
-            let healthy = snapshot.success_rates.values().filter(|rate| **rate > 0.0).count();
-            let error_rate = if snapshot.success_rates.is_empty() { 0.0 } else {
-                1.0 - snapshot.success_rates.values().sum::<f64>() / snapshot.success_rates.len() as f64
-            };
-            (avg_latency_ms, error_rate.clamp(0.0, 1.0), healthy)
-        }).unwrap_or((0, 0.0, 0));
+        let (avg_latency_ms, error_rate, healthy_provider_count) = evidence
+            .map(|snapshot| {
+                let avg_latency_ms = if snapshot.avg_latencies.is_empty() {
+                    0
+                } else {
+                    (snapshot.avg_latencies.values().sum::<f64>()
+                        / snapshot.avg_latencies.len() as f64)
+                        .max(0.0) as u64
+                };
+                let healthy = snapshot
+                    .success_rates
+                    .values()
+                    .filter(|rate| **rate > 0.0)
+                    .count();
+                let error_rate = if snapshot.success_rates.is_empty() {
+                    0.0
+                } else {
+                    1.0 - snapshot.success_rates.values().sum::<f64>()
+                        / snapshot.success_rates.len() as f64
+                };
+                (avg_latency_ms, error_rate.clamp(0.0, 1.0), healthy)
+            })
+            .unwrap_or((0, 0.0, 0));
 
-        let requested_strategy_str = requirements.requested_strategy.as_ref().map(|s| s.kind.clone());
+        let requested_strategy_str = requirements
+            .requested_strategy
+            .as_ref()
+            .map(|s| s.kind.clone());
         let req = fusion_planner::PlanningRequest {
             intent: crates_intent.clone(),
             user_prompt: requirements.original_text.clone(),
@@ -121,16 +146,26 @@ impl IntentPlanner {
                 policies: policy_declarations,
                 created_at: 0,
             },
-            capability_catalog: fusion_planner::CapabilityCatalogSnapshot::new(self.capability_snapshot.read().clone()),
-            model_catalog: fusion_planner::ModelCatalogSnapshot::new(Self::to_fusion_core_catalog(&self.model_catalog)),
-            telemetry: fusion_planner::RoutingTelemetrySnapshot { avg_latency_ms, error_rate, healthy_provider_count },
+            capability_catalog: fusion_planner::CapabilityCatalogSnapshot::new(
+                self.capability_snapshot.read().clone(),
+            ),
+            model_catalog: fusion_planner::ModelCatalogSnapshot::new(Self::to_fusion_core_catalog(
+                &self.model_catalog,
+            )),
+            telemetry: fusion_planner::RoutingTelemetrySnapshot {
+                avg_latency_ms,
+                error_rate,
+                healthy_provider_count,
+            },
         };
-        let planner = fusion_planner::IntentPlanner::new(Self::to_fusion_core_catalog(&self.model_catalog));
+        let planner =
+            fusion_planner::IntentPlanner::new(Self::to_fusion_core_catalog(&self.model_catalog));
         let contract = match planner.plan(&req) {
             Ok(c) => c,
             Err(e) => return Err(format!("fusion_planner error: {:?}", e)),
         };
-        crate::ir::adapter::workflow_to_types(&contract).map_err(|e| format!("adapter error: {}", e))
+        crate::ir::adapter::workflow_to_types(&contract)
+            .map_err(|e| format!("adapter error: {}", e))
     }
 }
 
@@ -142,7 +177,8 @@ impl Planner for IntentPlanner {
         policies: &[Policy],
         evidence: Option<&EvidenceSnapshot>,
     ) -> Result<WorkflowIR, PlannerFailure> {
-        self.plan_with_policy_version(requirements, policies, evidence, 0).await
+        self.plan_with_policy_version(requirements, policies, evidence, 0)
+            .await
     }
 
     async fn plan_with_policy_version(
@@ -152,7 +188,6 @@ impl Planner for IntentPlanner {
         evidence: Option<&EvidenceSnapshot>,
         policy_version: u64,
     ) -> Result<WorkflowIR, PlannerFailure> {
-
         let intent = requirements.execution_intent.clone().unwrap_or({
             match requirements.complexity {
                 ComplexityLevel::Critical => ExecutionIntent::Quality,
@@ -203,9 +238,15 @@ mod tests {
     #[tokio::test]
     async fn test_planning_is_snapshot_driven() {
         let planner = make_planner();
-        let ir = planner.plan(&make_reqs(Some(ExecutionIntent::Balanced)), &[], None).await.unwrap();
+        let ir = planner
+            .plan(&make_reqs(Some(ExecutionIntent::Balanced)), &[], None)
+            .await
+            .unwrap();
         assert!(ir.nodes.iter().all(|n| n.model.is_some()));
-        assert!(ir.metadata.policy_applied.contains(&"planner:synthesized".to_string()));
+        assert!(ir
+            .metadata
+            .policy_applied
+            .contains(&"planner:synthesized".to_string()));
     }
 
     #[tokio::test]
@@ -443,5 +484,3 @@ mod tests {
         }
     }
 }
-
-

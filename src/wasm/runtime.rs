@@ -27,7 +27,9 @@ impl Default for WasmRuntime {
     fn default() -> Self {
         Self::new().unwrap_or_else(|e| {
             tracing::error!(error = %e, "Failed to initialize default WasmRuntime engine");
-            Self { engine: Engine::default() }
+            Self {
+                engine: Engine::default(),
+            }
         })
     }
 }
@@ -145,7 +147,10 @@ mod tests {
         let module = runtime.load_module(wat.as_bytes()).unwrap();
 
         let result = module.instantiate(&runtime);
-        assert!(result.is_err(), "instantiate must fail for unresolved imports");
+        assert!(
+            result.is_err(),
+            "instantiate must fail for unresolved imports"
+        );
     }
 
     #[test]

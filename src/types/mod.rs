@@ -1,37 +1,63 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+pub mod anthropic;
+pub mod artifact;
 pub mod error;
 pub mod execution;
-pub mod artifact;
 pub mod execution_context;
-pub mod anthropic;
 
-pub use error::{PipelineStage, RouterError};
-pub use artifact::ArtifactKind;
 pub use anthropic::{AnthropicMessagesRequest, AnthropicMessagesResponse};
+pub use artifact::ArtifactKind;
+pub use error::{PipelineStage, RouterError};
 
 // Re-export core types from fusion-types (the canonical source)
 pub use fusion_types::{
-    // IR types
-    WorkflowIR, IRNode, IRNodeKind, IREdge, IRMetadata,
+    ChatMessage,
+    // Errors
+    CompilerError,
+    ComplexityLevel,
+    EvidenceSnapshot,
+    ExecutionEdge,
+    // Execution graph
+    ExecutionGraph,
+    // Execution intent
+    ExecutionIntent,
+    ExecutionNode,
+    ExecutionNodeKind,
+    ExecutionRecord,
+    ExecutionResult,
+    FallbackConfig,
+    GraphMetadata,
+    IREdge,
+    IRMetadata,
+    IRNode,
+    IRNodeKind,
+    Intent,
+    ModelCatalog,
+    NanoUSD,
+    NodeExecContext,
+    NodeExecutionResult,
+    // Runtime state
+    NodeState,
+    OutputPreferences,
+    // Policy
+    Policy,
+    PolicyAction,
+    PolicyCondition,
+    ProviderLimit,
+    Quota,
+    ReservationId,
+    RetryPolicy,
+    SchedulerError,
     // Strategy
     StrategyKind,
-    // Execution graph
-    ExecutionGraph, ExecutionNode, ExecutionNodeKind, ExecutionEdge, GraphMetadata,
-    RetryPolicy, FallbackConfig,
-    // Runtime state
-    NodeState, ExecutionResult, ReservationId, NodeExecutionResult, ExecutionRecord, NodeExecContext,
+    ToolCall,
     // Shared value objects
-    Usage, ChatMessage, ToolCall, ModelCatalog, Intent, ComplexityLevel,
-    EvidenceSnapshot, Quota, ProviderLimit, NanoUSD,
-    // Policy
-    Policy, PolicyCondition, PolicyAction,
-    // Errors
-    CompilerError, SchedulerError,
-    // Execution intent
-    ExecutionIntent, OutputPreferences,
+    Usage,
+    // IR types
+    WorkflowIR,
 };
 
 // ---------------------------------------------------------------------------
@@ -182,20 +208,32 @@ impl ChatStreamChunk {
         }
         let json_str = trimmed.strip_prefix("data: ").unwrap_or(trimmed);
         let body: serde_json::Value = serde_json::from_str(json_str)?;
-        let content = body["choices"][0]["delta"]["content"].as_str().map(|s| s.to_string());
+        let content = body["choices"][0]["delta"]["content"]
+            .as_str()
+            .map(|s| s.to_string());
         if content.as_deref() == Some("") {
-            let finish = body["choices"][0]["finish_reason"].as_str().map(|s| s.to_string());
+            let finish = body["choices"][0]["finish_reason"]
+                .as_str()
+                .map(|s| s.to_string());
             let usage = body["usage"].as_object().map(|u| Usage {
                 prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
                 completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
                 total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
             });
             if finish.is_some() || usage.is_some() {
-                return Ok(Some(ChatStreamChunk { content: None, finish_reason: finish, usage }));
+                return Ok(Some(ChatStreamChunk {
+                    content: None,
+                    finish_reason: finish,
+                    usage,
+                }));
             }
             return Ok(None);
         }
-        Ok(Some(ChatStreamChunk { content, finish_reason: None, usage: None }))
+        Ok(Some(ChatStreamChunk {
+            content,
+            finish_reason: None,
+            usage: None,
+        }))
     }
 }
 
@@ -230,7 +268,10 @@ mod tests {
         for variant in variants {
             let expected = format!("{:?}", variant);
             let actual = variant.as_label();
-            assert_eq!(actual, expected, "as_label must match Debug format for Prometheus metric label continuity");
+            assert_eq!(
+                actual, expected,
+                "as_label must match Debug format for Prometheus metric label continuity"
+            );
         }
     }
 }

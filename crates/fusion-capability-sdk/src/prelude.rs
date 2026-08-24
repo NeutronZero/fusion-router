@@ -2,14 +2,6 @@
 
 pub use fusion_capability_macros::capability;
 
-pub use fusion_plugin_api::{
-    CapabilityPlugin,
-    CapabilityContract,
-    CapabilityId,
-    Permission,
-};
+pub use fusion_plugin_api::{CapabilityContract, CapabilityId, CapabilityPlugin, Permission};
 
-pub use crate::{
-    CapabilityBuilder,
-    CapabilityManifestBuilder,
-};
+pub use crate::{CapabilityBuilder, CapabilityManifestBuilder};

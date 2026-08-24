@@ -1,6 +1,6 @@
-use std::time::Instant;
 use crate::providers::ModelPricing;
 use crate::types::{ChatStreamChunk, NanoUSD};
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct StreamMeter {

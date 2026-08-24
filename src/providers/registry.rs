@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use async_trait::async_trait;
-use futures::stream::BoxStream;
 use super::router::ProviderTarget;
 use super::ChatProvider;
 use crate::config::error::ReloadError;
-use crate::config::manager::{ConfigSubscriber, ConfigSnapshot};
+use crate::config::manager::{ConfigSnapshot, ConfigSubscriber};
 use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk};
+use async_trait::async_trait;
+use futures::stream::BoxStream;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct ProviderRegistryConfig {
@@ -86,7 +86,6 @@ impl ProviderRegistry {
         }
     }
 
-
     pub fn unregister_target(&self, name: &str) -> bool {
         let removed = {
             let mut targets = self.targets.write();
@@ -131,7 +130,9 @@ impl ProviderRegistry {
             .values()
             .filter(|t| t.can_execute())
             .filter(|t| {
-                caps_map.get(&t.name).zip(pricing_map.get(&t.name))
+                caps_map
+                    .get(&t.name)
+                    .zip(pricing_map.get(&t.name))
                     .map(|(c, p)| reqs.matches(c, p))
                     .unwrap_or(true)
             })
@@ -139,13 +140,17 @@ impl ProviderRegistry {
             .collect();
 
         candidates.sort_by(|a, b| {
-            let cost_a = pricing_map.get(&a.name)
+            let cost_a = pricing_map
+                .get(&a.name)
                 .map(|p| p.input_cost_per_1k + p.output_cost_per_1k)
                 .unwrap_or(crate::types::NanoUSD::from_nanos(u64::MAX));
-            let cost_b = pricing_map.get(&b.name)
+            let cost_b = pricing_map
+                .get(&b.name)
                 .map(|p| p.input_cost_per_1k + p.output_cost_per_1k)
                 .unwrap_or(crate::types::NanoUSD::from_nanos(u64::MAX));
-            cost_a.partial_cmp(&cost_b).unwrap_or(std::cmp::Ordering::Equal)
+            cost_a
+                .partial_cmp(&cost_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         candidates
@@ -186,7 +191,9 @@ impl ChatProvider for ProviderRegistry {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no available providers for model: {}", request.model)))
+        Err(last_err.unwrap_or_else(|| {
+            anyhow::anyhow!("no available providers for model: {}", request.model)
+        }))
     }
 
     async fn chat_stream(
@@ -213,7 +220,9 @@ impl ChatProvider for ProviderRegistry {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no available providers for model: {}", request.model)))
+        Err(last_err.unwrap_or_else(|| {
+            anyhow::anyhow!("no available providers for model: {}", request.model)
+        }))
     }
 }
 
@@ -242,11 +251,12 @@ impl ConfigSubscriber for ProviderRegistry {
         let mut candidates = HashMap::new();
 
         for (name, cfg) in &new.config.providers {
-            let api_key = factory::resolve_api_key(cfg, name, false)
-                .map_err(|e| ReloadError::Subscriber {
+            let api_key = factory::resolve_api_key(cfg, name, false).map_err(|e| {
+                ReloadError::Subscriber {
                     name: "ProviderRegistry".into(),
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
 
             let target = factory::create_reload_target(name, cfg, api_key);
             candidates.insert(name.clone(), Arc::new(target));
@@ -263,10 +273,14 @@ impl ConfigSubscriber for ProviderRegistry {
             let old_names: Vec<String> = targets.keys().cloned().collect();
             let new_names: Vec<String> = candidates.keys().cloned().collect();
 
-            let added: Vec<&String> =
-                new_names.iter().filter(|n| !old_names.contains(n)).collect();
-            let removed: Vec<&String> =
-                old_names.iter().filter(|n| !new_names.contains(n)).collect();
+            let added: Vec<&String> = new_names
+                .iter()
+                .filter(|n| !old_names.contains(n))
+                .collect();
+            let removed: Vec<&String> = old_names
+                .iter()
+                .filter(|n| !new_names.contains(n))
+                .collect();
             let updated: Vec<&String> =
                 new_names.iter().filter(|n| old_names.contains(n)).collect();
 
@@ -310,10 +324,10 @@ impl ConfigSubscriber for ProviderRegistry {
 
 #[cfg(test)]
 mod tests {
-use super::*;
-use crate::types::NanoUSD;
     use super::super::circuit_breaker::CircuitBreaker;
     use super::super::{ChatProvider, ModelCapabilities, ModelPricing, ModelRequirements};
+    use super::*;
+    use crate::types::NanoUSD;
     use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Choice};
     use async_trait::async_trait;
     use std::sync::Arc;
@@ -321,14 +335,26 @@ use crate::types::NanoUSD;
     struct DummyProvider;
     #[async_trait]
     impl ChatProvider for DummyProvider {
-        fn name(&self) -> &str { "dummy" }
-        async fn chat_completion(&self, _req: &ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        async fn chat_completion(
+            &self,
+            _req: &ChatCompletionRequest,
+        ) -> anyhow::Result<ChatCompletionResponse> {
             Ok(ChatCompletionResponse {
                 id: "dummy".into(),
                 object: "chat.completion".into(),
                 created: 0,
                 model: "dummy".into(),
-                choices: vec![Choice { index: 0, message: ChatMessage { role: "assistant".into(), content: "dummy".into() }, finish_reason: "stop".into() }],
+                choices: vec![Choice {
+                    index: 0,
+                    message: ChatMessage {
+                        role: "assistant".into(),
+                        content: "dummy".into(),
+                    },
+                    finish_reason: "stop".into(),
+                }],
                 native_tool_calls: None,
                 usage: None,
             })
@@ -345,37 +371,75 @@ use crate::types::NanoUSD;
 
     fn cheap_caps() -> ModelCapabilities {
         ModelCapabilities {
-            coding_score: 0.5, reasoning_score: 0.5, max_context_tokens: 32_000, max_output_tokens: 0,
-            supports_tools: false, supports_streaming: true, supports_vision: false,
-            supports_audio: false, supports_pdf: false, supports_json_mode: true,
-            supports_thinking: false, supports_parallel_tools: false, supports_structured_output: false,
+            coding_score: 0.5,
+            reasoning_score: 0.5,
+            max_context_tokens: 32_000,
+            max_output_tokens: 0,
+            supports_tools: false,
+            supports_streaming: true,
+            supports_vision: false,
+            supports_audio: false,
+            supports_pdf: false,
+            supports_json_mode: true,
+            supports_thinking: false,
+            supports_parallel_tools: false,
+            supports_structured_output: false,
         }
     }
 
     fn premium_caps() -> ModelCapabilities {
         ModelCapabilities {
-            coding_score: 0.95, reasoning_score: 0.95, max_context_tokens: 200_000, max_output_tokens: 0,
-            supports_tools: true, supports_streaming: true, supports_vision: true,
-            supports_audio: false, supports_pdf: false, supports_json_mode: true,
-            supports_thinking: false, supports_parallel_tools: false, supports_structured_output: false,
+            coding_score: 0.95,
+            reasoning_score: 0.95,
+            max_context_tokens: 200_000,
+            max_output_tokens: 0,
+            supports_tools: true,
+            supports_streaming: true,
+            supports_vision: true,
+            supports_audio: false,
+            supports_pdf: false,
+            supports_json_mode: true,
+            supports_thinking: false,
+            supports_parallel_tools: false,
+            supports_structured_output: false,
         }
     }
 
     fn cheap_pricing() -> ModelPricing {
-        ModelPricing { input_cost_per_1k: NanoUSD::from_nanos(150_000_000), output_cost_per_1k: NanoUSD::from_nanos(600_000_000) }
+        ModelPricing {
+            input_cost_per_1k: NanoUSD::from_nanos(150_000_000),
+            output_cost_per_1k: NanoUSD::from_nanos(600_000_000),
+        }
     }
 
     fn premium_pricing() -> ModelPricing {
-        ModelPricing { input_cost_per_1k: NanoUSD::from_nanos(10_000_000_000), output_cost_per_1k: NanoUSD::from_nanos(30_000_000_000) }
+        ModelPricing {
+            input_cost_per_1k: NanoUSD::from_nanos(10_000_000_000),
+            output_cost_per_1k: NanoUSD::from_nanos(30_000_000_000),
+        }
     }
 
     #[test]
     fn test_select_target_by_capability() {
         let registry = ProviderRegistry::new(dummy_target("default"));
-        registry.register_target_with_capabilities(vec!["cheap/".into()], dummy_target("cheap-model"), cheap_caps(), cheap_pricing());
-        registry.register_target_with_capabilities(vec!["premium/".into()], dummy_target("premium-model"), premium_caps(), premium_pricing());
+        registry.register_target_with_capabilities(
+            vec!["cheap/".into()],
+            dummy_target("cheap-model"),
+            cheap_caps(),
+            cheap_pricing(),
+        );
+        registry.register_target_with_capabilities(
+            vec!["premium/".into()],
+            dummy_target("premium-model"),
+            premium_caps(),
+            premium_pricing(),
+        );
 
-        let req = ModelRequirements { requires_tools: true, requires_vision: true, ..Default::default() };
+        let req = ModelRequirements {
+            requires_tools: true,
+            requires_vision: true,
+            ..Default::default()
+        };
         let matching = registry.select_targets(&req);
         assert_eq!(matching.len(), 1);
         assert_eq!(matching[0].name, "premium-model");
@@ -384,10 +448,23 @@ use crate::types::NanoUSD;
     #[test]
     fn test_select_target_cost_sorting() {
         let registry = ProviderRegistry::new(dummy_target("default"));
-        registry.register_target_with_capabilities(vec!["cheap/".into()], dummy_target("cheap-model"), cheap_caps(), cheap_pricing());
-        registry.register_target_with_capabilities(vec!["premium/".into()], dummy_target("premium-model"), premium_caps(), premium_pricing());
+        registry.register_target_with_capabilities(
+            vec!["cheap/".into()],
+            dummy_target("cheap-model"),
+            cheap_caps(),
+            cheap_pricing(),
+        );
+        registry.register_target_with_capabilities(
+            vec!["premium/".into()],
+            dummy_target("premium-model"),
+            premium_caps(),
+            premium_pricing(),
+        );
 
-        let req = ModelRequirements { requires_streaming: true, ..Default::default() };
+        let req = ModelRequirements {
+            requires_streaming: true,
+            ..Default::default()
+        };
         let matching = registry.select_targets(&req);
         assert_eq!(matching.len(), 2);
         assert_eq!(matching[0].name, "cheap-model");
@@ -399,9 +476,23 @@ use crate::types::NanoUSD;
         let registry = ProviderRegistry::new(dummy_target("default"));
         let broken_breaker = CircuitBreaker::new(1, 2, 60);
         broken_breaker.record_failure();
-        let broken_target = ProviderTarget::new("broken".into(), broken_breaker, Box::new(|| Arc::new(DummyProvider)));
-        registry.register_target_with_capabilities(vec!["broken/".into()], broken_target, cheap_caps(), cheap_pricing());
-        registry.register_target_with_capabilities(vec!["good/".into()], dummy_target("good-model"), cheap_caps(), cheap_pricing());
+        let broken_target = ProviderTarget::new(
+            "broken".into(),
+            broken_breaker,
+            Box::new(|| Arc::new(DummyProvider)),
+        );
+        registry.register_target_with_capabilities(
+            vec!["broken/".into()],
+            broken_target,
+            cheap_caps(),
+            cheap_pricing(),
+        );
+        registry.register_target_with_capabilities(
+            vec!["good/".into()],
+            dummy_target("good-model"),
+            cheap_caps(),
+            cheap_pricing(),
+        );
 
         let matching = registry.select_targets(&ModelRequirements::default());
         assert_eq!(matching.len(), 1);
@@ -411,9 +502,17 @@ use crate::types::NanoUSD;
     #[test]
     fn test_select_target_no_matches_returns_empty() {
         let registry = ProviderRegistry::new(dummy_target("default"));
-        registry.register_target_with_capabilities(vec!["basic/".into()], dummy_target("basic-model"), cheap_caps(), cheap_pricing());
+        registry.register_target_with_capabilities(
+            vec!["basic/".into()],
+            dummy_target("basic-model"),
+            cheap_caps(),
+            cheap_pricing(),
+        );
 
-        let req = ModelRequirements { max_cost_per_1k_tokens: Some(NanoUSD::from_nanos(10_000_000)), ..Default::default() };
+        let req = ModelRequirements {
+            max_cost_per_1k_tokens: Some(NanoUSD::from_nanos(10_000_000)),
+            ..Default::default()
+        };
         let matching = registry.select_targets(&req);
         assert!(matching.is_empty());
     }

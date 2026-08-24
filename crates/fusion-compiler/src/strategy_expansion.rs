@@ -54,15 +54,16 @@ pub fn compile_custom_subgraph(
 /// This is the structurally-mandatory entry point for `lower_to_graph`.
 pub fn expanded_subgraph_with_compilers(
     node: &ExecutionNode,
-    custom_compilers: &std::collections::HashMap<String, std::sync::Arc<dyn crate::strategy_compiler::StrategyCompiler>>,
+    custom_compilers: &std::collections::HashMap<
+        String,
+        std::sync::Arc<dyn crate::strategy_compiler::StrategyCompiler>,
+    >,
 ) -> Option<ExecutionSubgraph> {
     match &node.strategy {
-        StrategyKind::Custom(custom_name) => {
-            custom_compilers.get(custom_name).map(|c| {
-                let arc: &dyn crate::strategy_compiler::StrategyCompiler = c.as_ref();
-                compile_custom_subgraph(node, custom_name, arc)
-            })
-        }
+        StrategyKind::Custom(custom_name) => custom_compilers.get(custom_name).map(|c| {
+            let arc: &dyn crate::strategy_compiler::StrategyCompiler = c.as_ref();
+            compile_custom_subgraph(node, custom_name, arc)
+        }),
         _ => expanded_subgraph(node),
     }
 }
@@ -189,7 +190,9 @@ pub fn expand_reflection(node: &ExecutionNode) -> ExecutionSubgraph {
 
 /// Expands Chain strategy into a sequential pipeline.
 pub fn expand_chain(node: &ExecutionNode) -> ExecutionSubgraph {
-    let steps = node.config.get("steps")
+    let steps = node
+        .config
+        .get("steps")
         .and_then(|v| v.as_u64())
         .unwrap_or(2) as usize;
 
@@ -270,8 +273,16 @@ pub fn expand_debate(node: &ExecutionNode) -> ExecutionSubgraph {
     ExecutionSubgraph {
         nodes: vec![proposer, opposer, judge],
         edges: vec![
-            ExecutionEdge { from: prop_id, to: opp_id, condition: None },
-            ExecutionEdge { from: opp_id, to: judge_id, condition: None },
+            ExecutionEdge {
+                from: prop_id,
+                to: opp_id,
+                condition: None,
+            },
+            ExecutionEdge {
+                from: opp_id,
+                to: judge_id,
+                condition: None,
+            },
         ],
         entry_node_id: prop_id,
         exit_node_id: judge_id,
@@ -307,7 +318,11 @@ pub fn expand_react(node: &ExecutionNode) -> ExecutionSubgraph {
 
     ExecutionSubgraph {
         nodes: vec![reasoner, tool_node],
-        edges: vec![ExecutionEdge { from: reason_id, to: tool_id, condition: None }],
+        edges: vec![ExecutionEdge {
+            from: reason_id,
+            to: tool_id,
+            condition: None,
+        }],
         entry_node_id: reason_id,
         exit_node_id: tool_id,
     }
@@ -355,8 +370,16 @@ pub fn expand_fusion(node: &ExecutionNode) -> ExecutionSubgraph {
     ExecutionSubgraph {
         nodes: vec![cand1, cand2, merger],
         edges: vec![
-            ExecutionEdge { from: cand1_id, to: merger_id, condition: None },
-            ExecutionEdge { from: cand2_id, to: merger_id, condition: None },
+            ExecutionEdge {
+                from: cand1_id,
+                to: merger_id,
+                condition: None,
+            },
+            ExecutionEdge {
+                from: cand2_id,
+                to: merger_id,
+                condition: None,
+            },
         ],
         entry_node_id: cand1_id,
         exit_node_id: merger_id,
@@ -396,8 +419,14 @@ mod tests {
             kind: ExecutionNodeKind::LLMGenerate,
             strategy,
             model: "parent-model".into(),
-            retry_policy: RetryPolicy { max_retries: 1, backoff_ms: 50 },
-            fallback: Some(FallbackConfig { model: "fb".into(), provider: "fb-p".into() }),
+            retry_policy: RetryPolicy {
+                max_retries: 1,
+                backoff_ms: 50,
+            },
+            fallback: Some(FallbackConfig {
+                model: "fb".into(),
+                provider: "fb-p".into(),
+            }),
             config: HashMap::new(),
             subgraph: None,
         }
@@ -422,13 +451,20 @@ mod tests {
 
         for kind in built_in {
             let node = make_node(kind.clone());
-            let sg = expanded_subgraph(&node).unwrap_or_else(|| panic!("Strategy {kind:?} must expand"));
-            assert!(!sg.nodes.is_empty(), "Expanded subgraph for {kind:?} must not be empty");
+            let sg =
+                expanded_subgraph(&node).unwrap_or_else(|| panic!("Strategy {kind:?} must expand"));
+            assert!(
+                !sg.nodes.is_empty(),
+                "Expanded subgraph for {kind:?} must not be empty"
+            );
         }
 
         // Custom requires a registered delegate — expanded_subgraph returns None.
         let custom_node = make_node(StrategyKind::Custom("my_custom".into()));
-        assert!(expanded_subgraph(&custom_node).is_none(), "Custom without delegate must return None");
+        assert!(
+            expanded_subgraph(&custom_node).is_none(),
+            "Custom without delegate must return None"
+        );
 
         // With a delegate, Custom expands via expanded_subgraph_with_custom.
         struct MockCustomCompiler;
@@ -439,6 +475,9 @@ mod tests {
         }
         let sg = expanded_subgraph_with_custom(&custom_node, Some(&MockCustomCompiler))
             .expect("Custom with delegate must expand");
-        assert!(!sg.nodes.is_empty(), "Expanded subgraph for Custom must not be empty");
+        assert!(
+            !sg.nodes.is_empty(),
+            "Expanded subgraph for Custom must not be empty"
+        );
     }
 }

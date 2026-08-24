@@ -72,15 +72,18 @@ impl WasmStrategy {
         let memory = instance
             .get_memory(&mut store, EXPORT_MEMORY)
             .ok_or_else(|| anyhow::anyhow!("missing export: memory"))?;
-        let func = instance
-            .get_typed_func::<(), i32>(&mut store, EXPORT_DESCRIPTOR)?;
+        let func = instance.get_typed_func::<(), i32>(&mut store, EXPORT_DESCRIPTOR)?;
         let ptr = func.call(&mut store, ())?;
         let json_str = read_string(&store, &memory, ptr)?;
         let descriptor: StrategyDescriptor = serde_json::from_str(&json_str)?;
         Ok(descriptor)
     }
 
-    fn lower_inner(&self, ir: &StrategyIR, ctx: &CompilationContext) -> anyhow::Result<PrimitiveGraph> {
+    fn lower_inner(
+        &self,
+        ir: &StrategyIR,
+        ctx: &CompilationContext,
+    ) -> anyhow::Result<PrimitiveGraph> {
         let (mut store, instance) = instantiate(&self.engine, &self.module)?;
         let memory = instance
             .get_memory(&mut store, EXPORT_MEMORY)
@@ -95,8 +98,8 @@ impl WasmStrategy {
         let alloc: TypedFunc<i32, i32> = instance
             .get_typed_func(&mut store, EXPORT_ALLOC)
             .map_err(|_| anyhow::anyhow!("missing export: alloc"))?;
-        let lower: TypedFunc<(i32, i32), i32> = instance
-            .get_typed_func(&mut store, EXPORT_LOWER)?;
+        let lower: TypedFunc<(i32, i32), i32> =
+            instance.get_typed_func(&mut store, EXPORT_LOWER)?;
 
         let len = input_json.len() as i32;
         let ptr = alloc.call(&mut store, len)?;
@@ -175,8 +178,7 @@ fn read_name(engine: &Engine, module: &Module) -> anyhow::Result<String> {
     let memory = instance
         .get_memory(&mut store, EXPORT_MEMORY)
         .ok_or_else(|| anyhow::anyhow!("missing export: memory"))?;
-    let func = instance
-        .get_typed_func::<(), i32>(&mut store, EXPORT_NAME)?;
+    let func = instance.get_typed_func::<(), i32>(&mut store, EXPORT_NAME)?;
     let ptr = func.call(&mut store, ())?;
     read_string(&store, &memory, ptr)
 }
@@ -265,6 +267,9 @@ mod tests {
         assert!(negative.is_err(), "negative pointer must error, not panic");
 
         let past_end = read_string(&store, &memory, 65537);
-        assert!(past_end.is_err(), "pointer past memory end must error, not panic");
+        assert!(
+            past_end.is_err(),
+            "pointer past memory end must error, not panic"
+        );
     }
 }

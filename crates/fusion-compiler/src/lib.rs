@@ -4,19 +4,19 @@
 //! `fusion_types::ExecutionGraph`. The planning-level IR (`fusion_ir::WorkflowIR`)
 //! is converted via the adapter before entering this pipeline.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use fusion_types::*;
 use fusion_core::PlatformError;
 use fusion_kernel::resource::StubResourceManager;
+use fusion_types::*;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+pub mod content_hash;
 pub mod passes;
 pub mod policy;
 pub mod score;
 pub mod strategy_compiler;
 pub mod strategy_expansion;
-pub mod content_hash;
 
 use strategy_compiler::StrategyLoweringPass;
 
@@ -87,7 +87,9 @@ pub struct ConstraintValidationPass;
 
 #[async_trait::async_trait]
 impl CompilerPass for ConstraintValidationPass {
-    fn name(&self) -> &str { "constraint_validation" }
+    fn name(&self) -> &str {
+        "constraint_validation"
+    }
 
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
         if ir.nodes.is_empty() {
@@ -118,7 +120,9 @@ impl ModelResolutionPass {
 
 #[async_trait::async_trait]
 impl CompilerPass for ModelResolutionPass {
-    fn name(&self) -> &str { "model_resolution" }
+    fn name(&self) -> &str {
+        "model_resolution"
+    }
 
     async fn apply(&self, mut ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
         for node in &mut ir.nodes {
@@ -145,7 +149,9 @@ pub struct ControlFlowValidationPass;
 
 #[async_trait::async_trait]
 impl CompilerPass for ControlFlowValidationPass {
-    fn name(&self) -> &str { "control_flow_validation" }
+    fn name(&self) -> &str {
+        "control_flow_validation"
+    }
 
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
         let node_ids: HashSet<uuid::Uuid> = ir.nodes.iter().map(|n| n.id).collect();
@@ -172,9 +178,8 @@ impl CompilerPass for ControlFlowValidationPass {
         for node in &ir.nodes {
             match node.kind {
                 IRNodeKind::Conditional => {
-                    let outgoing: Vec<&IREdge> = ir.edges.iter()
-                        .filter(|e| e.from == node.id)
-                        .collect();
+                    let outgoing: Vec<&IREdge> =
+                        ir.edges.iter().filter(|e| e.from == node.id).collect();
                     if outgoing.is_empty() {
                         return Err(CompilerError::ValidationError {
                             pass: "control_flow_validation".into(),
@@ -186,14 +191,15 @@ impl CompilerPass for ControlFlowValidationPass {
                         return Err(CompilerError::ValidationError {
                             pass: "control_flow_validation".into(),
                             node_id: Some(node.id),
-                            message: "Conditional node must have at least one edge with a condition".into(),
+                            message:
+                                "Conditional node must have at least one edge with a condition"
+                                    .into(),
                         });
                     }
                 }
                 IRNodeKind::Loop => {
-                    let outgoing: Vec<&IREdge> = ir.edges.iter()
-                        .filter(|e| e.from == node.id)
-                        .collect();
+                    let outgoing: Vec<&IREdge> =
+                        ir.edges.iter().filter(|e| e.from == node.id).collect();
                     if outgoing.is_empty() {
                         return Err(CompilerError::ValidationError {
                             pass: "control_flow_validation".into(),
@@ -210,36 +216,38 @@ impl CompilerPass for ControlFlowValidationPass {
                     }
                 }
                 IRNodeKind::Split => {
-                    let outgoing: Vec<&IREdge> = ir.edges.iter()
-                        .filter(|e| e.from == node.id)
-                        .collect();
+                    let outgoing: Vec<&IREdge> =
+                        ir.edges.iter().filter(|e| e.from == node.id).collect();
                     if outgoing.len() < 2 {
                         return Err(CompilerError::ValidationError {
                             pass: "control_flow_validation".into(),
                             node_id: Some(node.id),
-                            message: format!("Split node must have at least 2 outgoing edges, got {}", outgoing.len()),
+                            message: format!(
+                                "Split node must have at least 2 outgoing edges, got {}",
+                                outgoing.len()
+                            ),
                         });
                     }
                 }
                 IRNodeKind::Join => {
-                    let incoming: Vec<&IREdge> = ir.edges.iter()
-                        .filter(|e| e.to == node.id)
-                        .collect();
+                    let incoming: Vec<&IREdge> =
+                        ir.edges.iter().filter(|e| e.to == node.id).collect();
                     if incoming.len() < 2 {
                         return Err(CompilerError::ValidationError {
                             pass: "control_flow_validation".into(),
                             node_id: Some(node.id),
-                            message: format!("Join node must have at least 2 incoming edges, got {}", incoming.len()),
+                            message: format!(
+                                "Join node must have at least 2 incoming edges, got {}",
+                                incoming.len()
+                            ),
                         });
                     }
                 }
                 IRNodeKind::Barrier => {
-                    let outgoing: Vec<&IREdge> = ir.edges.iter()
-                        .filter(|e| e.from == node.id)
-                        .collect();
-                    let incoming: Vec<&IREdge> = ir.edges.iter()
-                        .filter(|e| e.to == node.id)
-                        .collect();
+                    let outgoing: Vec<&IREdge> =
+                        ir.edges.iter().filter(|e| e.from == node.id).collect();
+                    let incoming: Vec<&IREdge> =
+                        ir.edges.iter().filter(|e| e.to == node.id).collect();
                     if incoming.is_empty() {
                         return Err(CompilerError::ValidationError {
                             pass: "control_flow_validation".into(),
@@ -267,7 +275,9 @@ impl CompilerPass for ControlFlowValidationPass {
 }
 
 fn detect_illegal_cycles(ir: &WorkflowIR) -> Result<(), CompilerError> {
-    let edges: Vec<(uuid::Uuid, uuid::Uuid)> = ir.edges.iter()
+    let edges: Vec<(uuid::Uuid, uuid::Uuid)> = ir
+        .edges
+        .iter()
         .filter(|e| e.condition.as_deref() != Some("loop"))
         .map(|e| (e.from, e.to))
         .collect();
@@ -284,7 +294,11 @@ fn detect_illegal_cycles(ir: &WorkflowIR) -> Result<(), CompilerError> {
 
 fn three_color_cycle_detect(edges: &[(uuid::Uuid, uuid::Uuid)]) -> Result<(), uuid::Uuid> {
     #[derive(Clone, Copy, PartialEq)]
-    enum Color { White, Grey, Black }
+    enum Color {
+        White,
+        Grey,
+        Black,
+    }
 
     let mut colors: HashMap<uuid::Uuid, Color> = HashMap::new();
     let mut graph: HashMap<uuid::Uuid, Vec<uuid::Uuid>> = HashMap::new();
@@ -304,7 +318,9 @@ fn three_color_cycle_detect(edges: &[(uuid::Uuid, uuid::Uuid)]) -> Result<(), uu
                 match colors.get(&next).unwrap_or(&Color::White) {
                     Color::Grey => return true,
                     Color::White => {
-                        if dfs(next, graph, colors) { return true; }
+                        if dfs(next, graph, colors) {
+                            return true;
+                        }
                     }
                     Color::Black => continue,
                 }
@@ -316,9 +332,10 @@ fn three_color_cycle_detect(edges: &[(uuid::Uuid, uuid::Uuid)]) -> Result<(), uu
 
     for node in graph.keys().copied().collect::<Vec<_>>() {
         if colors.get(&node).unwrap_or(&Color::White) == &Color::White
-            && dfs(node, &graph, &mut colors) {
-                return Err(node);
-            }
+            && dfs(node, &graph, &mut colors)
+        {
+            return Err(node);
+        }
     }
 
     Ok(())
@@ -337,7 +354,10 @@ pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
 /// entry point — `Custom` strategies require a registered delegate.
 pub fn lower_to_graph_with_compilers(
     ir: WorkflowIR,
-    custom_compilers: &std::collections::HashMap<String, std::sync::Arc<dyn strategy_compiler::StrategyCompiler>>,
+    custom_compilers: &std::collections::HashMap<
+        String,
+        std::sync::Arc<dyn strategy_compiler::StrategyCompiler>,
+    >,
 ) -> Result<ExecutionGraph, CompilerError> {
     let mut exec_nodes = Vec::new();
     let mut exec_edges = Vec::new();
@@ -370,7 +390,8 @@ pub fn lower_to_graph_with_compilers(
         // Phase 3.5: attach prebuilt subgraph for non-Single strategies so the
         // Phase 4 runtime subgraph path is the production path for Consensus.
         // Custom strategies require a registered delegate compiler.
-        node.subgraph = strategy_expansion::expanded_subgraph_with_compilers(&node, custom_compilers);
+        node.subgraph =
+            strategy_expansion::expanded_subgraph_with_compilers(&node, custom_compilers);
         exec_nodes.push(node);
     }
 
@@ -410,45 +431,82 @@ pub struct CompilerEngine {
     passes: Vec<Box<dyn CompilerPass>>,
     resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>,
     score_sources: score::ScoreSources,
-    custom_compilers: std::collections::HashMap<String, std::sync::Arc<dyn strategy_compiler::StrategyCompiler>>,
+    custom_compilers:
+        std::collections::HashMap<String, std::sync::Arc<dyn strategy_compiler::StrategyCompiler>>,
 }
 
 impl CompilerEngine {
     pub fn new() -> Self {
-        Self::with_resource_manager(Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: fusion_core::NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX })))
+        Self::with_resource_manager(Arc::new(StubResourceManager::new(
+            fusion_kernel::resource::Quota {
+                max_daily_cost: fusion_core::NanoUSD::from_nanos(u64::MAX),
+                max_daily_tokens: u64::MAX,
+            },
+        )))
     }
 
-    pub fn with_resource_manager(resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>) -> Self {
+    pub fn with_resource_manager(
+        resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>,
+    ) -> Self {
         let passes: Vec<Box<dyn CompilerPass>> = vec![
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
             Box::new(DeadNodeEliminationPass),
             Box::new(ModelResolutionPass::new(ModelCatalog::default())),
-            Box::new(BudgetOptimisationPass { resource_manager: resource_manager.clone() }),
+            Box::new(BudgetOptimisationPass {
+                resource_manager: resource_manager.clone(),
+            }),
         ];
-        Self { passes, resource_manager, score_sources: score::ScoreSources::default(), custom_compilers: std::collections::HashMap::new() }
+        Self {
+            passes,
+            resource_manager,
+            score_sources: score::ScoreSources::default(),
+            custom_compilers: std::collections::HashMap::new(),
+        }
     }
 
     pub fn with_model_catalog(model_catalog: ModelCatalog) -> Self {
-        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: fusion_core::NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> =
+            Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota {
+                max_daily_cost: fusion_core::NanoUSD::from_nanos(u64::MAX),
+                max_daily_tokens: u64::MAX,
+            }));
         let passes: Vec<Box<dyn CompilerPass>> = vec![
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
             Box::new(DeadNodeEliminationPass),
             Box::new(ModelResolutionPass::new(model_catalog)),
-            Box::new(BudgetOptimisationPass { resource_manager: rm.clone() }),
+            Box::new(BudgetOptimisationPass {
+                resource_manager: rm.clone(),
+            }),
         ];
-        Self { passes, resource_manager: rm, score_sources: score::ScoreSources::default(), custom_compilers: std::collections::HashMap::new() }
+        Self {
+            passes,
+            resource_manager: rm,
+            score_sources: score::ScoreSources::default(),
+            custom_compilers: std::collections::HashMap::new(),
+        }
     }
 
     /// Creates an engine with an empty pass list and the given resource manager.
-    pub fn with_resource_manager_custom(resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>) -> Self {
-        Self { passes: Vec::new(), resource_manager, score_sources: score::ScoreSources::default(), custom_compilers: std::collections::HashMap::new() }
+    pub fn with_resource_manager_custom(
+        resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>,
+    ) -> Self {
+        Self {
+            passes: Vec::new(),
+            resource_manager,
+            score_sources: score::ScoreSources::default(),
+            custom_compilers: std::collections::HashMap::new(),
+        }
     }
 
     /// Register a custom strategy compiler delegate. The compiler is used during
     /// `lower_to_graph` to expand `Custom` strategy nodes.
-    pub fn register_custom_compiler(mut self, name: impl Into<String>, compiler: std::sync::Arc<dyn strategy_compiler::StrategyCompiler>) -> Self {
+    pub fn register_custom_compiler(
+        mut self,
+        name: impl Into<String>,
+        compiler: std::sync::Arc<dyn strategy_compiler::StrategyCompiler>,
+    ) -> Self {
         self.custom_compilers.insert(name.into(), compiler);
         self
     }
@@ -464,7 +522,11 @@ impl CompilerEngine {
         self.passes.push(pass);
     }
 
-    pub async fn compile(&self, intent: &str, ir: &WorkflowIR) -> Result<CompilerReport, PlatformError> {
+    pub async fn compile(
+        &self,
+        intent: &str,
+        ir: &WorkflowIR,
+    ) -> Result<CompilerReport, PlatformError> {
         if intent.is_empty() {
             return Err(PlatformError::Compiler {
                 code: "EMPTY_INTENT".to_string(),
@@ -482,13 +544,14 @@ impl CompilerEngine {
             let pass_name = pass.name().to_string();
             let input_count = current_ir.nodes.len();
             let pass_start = std::time::Instant::now();
-            current_ir = pass.apply(current_ir).await.map_err(|e| {
-                PlatformError::Compiler {
+            current_ir = pass
+                .apply(current_ir)
+                .await
+                .map_err(|e| PlatformError::Compiler {
                     code: "PASS_ERROR".to_string(),
                     message: format!("Pass '{}' failed: {}", pass_name, e),
                     recovery_suggestion: "Check IR validity and pass constraints".to_string(),
-                }
-            })?;
+                })?;
             let output_count = current_ir.nodes.len();
             let duration_ms = pass_start.elapsed().as_millis() as u64;
 
@@ -548,13 +611,14 @@ impl CompilerEngine {
             let pass_name = pass.name().to_string();
             let input_count = current_ir.nodes.len();
             let pass_start = std::time::Instant::now();
-            current_ir = pass.apply(current_ir).await.map_err(|e| {
-                PlatformError::Compiler {
+            current_ir = pass
+                .apply(current_ir)
+                .await
+                .map_err(|e| PlatformError::Compiler {
                     code: "PASS_ERROR".to_string(),
                     message: format!("Pass '{}' failed: {}", pass_name, e),
                     recovery_suggestion: "Check IR validity and pass constraints".to_string(),
-                }
-            })?;
+                })?;
             let output_count = current_ir.nodes.len();
             let duration_ms = pass_start.elapsed().as_millis() as u64;
 
@@ -579,21 +643,27 @@ impl CompilerEngine {
 
         let provider_comparison = Self::build_provider_comparison(&route_scores);
 
-        let graph = lower_to_graph_with_compilers(current_ir, &self.custom_compilers).map_err(|e| PlatformError::Compiler {
-            code: "LOWER_ERROR".to_string(),
-            message: format!("Failed to lower IR to graph: {}", e),
-            recovery_suggestion: "Check IR validity".to_string(),
-        })?;
+        let graph =
+            lower_to_graph_with_compilers(current_ir, &self.custom_compilers).map_err(|e| {
+                PlatformError::Compiler {
+                    code: "LOWER_ERROR".to_string(),
+                    message: format!("Failed to lower IR to graph: {}", e),
+                    recovery_suggestion: "Check IR validity".to_string(),
+                }
+            })?;
 
-        Ok((CompilerReport {
-            intent: intent.to_string(),
-            passes_executed: pass_names,
-            pass_diffs,
-            graph_id: format!("graph_{}", ir.plan_id),
-            compilation_time_ms,
-            route_scores,
-            provider_comparison,
-        }, graph))
+        Ok((
+            CompilerReport {
+                intent: intent.to_string(),
+                passes_executed: pass_names,
+                pass_diffs,
+                graph_id: format!("graph_{}", ir.plan_id),
+                compilation_time_ms,
+                route_scores,
+                provider_comparison,
+            },
+            graph,
+        ))
     }
 
     /// Computes the multi-dimensional route score for a provider.
@@ -624,10 +694,18 @@ impl CompilerEngine {
             Some(scorer) => scorer.score(provider_name, ir).await,
             None => None,
         };
-        let budget_score = if self.resource_manager.can_afford(
-            fusion_core::NanoUSD::checked_from_decimal_usd(&format!("{:.9}", ir.metadata.estimated_cost)).unwrap_or(fusion_core::NanoUSD::ZERO),
-            ir.metadata.estimated_tokens,
-        ).await {
+        let budget_score = if self
+            .resource_manager
+            .can_afford(
+                fusion_core::NanoUSD::checked_from_decimal_usd(&format!(
+                    "{:.9}",
+                    ir.metadata.estimated_cost
+                ))
+                .unwrap_or(fusion_core::NanoUSD::ZERO),
+                ir.metadata.estimated_tokens,
+            )
+            .await
+        {
             Some(1.0)
         } else {
             Some(0.0)
@@ -658,58 +736,77 @@ impl CompilerEngine {
         }
 
         let mut ranked: Vec<&ExplainRouteScore> = scores.iter().collect();
-        ranked.sort_by(|a, b| b.total_score.partial_cmp(&a.total_score).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.sort_by(|a, b| {
+            b.total_score
+                .partial_cmp(&a.total_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let best_score = ranked[0].total_score;
-        let tied_at_top = ranked.iter()
+        let tied_at_top = ranked
+            .iter()
             .filter(|s| s.total_score == best_score)
             .count();
         let unique_best = tied_at_top == 1;
 
-        ranked.into_iter().enumerate().map(|(i, score)| {
-            let status = if score.total_score == 0.0 {
-                "Unscored"
-            } else if i == 0 && unique_best {
-                "Selected"
-            } else if score.total_score >= best_score * 0.9 {
-                "Alternative"
-            } else {
-                "Filtered"
-            };
-
-            let reason = if score.total_score == 0.0 {
-                "Score not computed — all sub-scores are None".to_string()
-            } else if i == 0 && unique_best {
-                format!("Highest total score ({:.2}) among evaluated providers", score.total_score)
-            } else if i == 0 && !unique_best {
-                format!(
-                    "Tied with {} other provider(s) at {:.2} — selected by position",
-                    tied_at_top - 1, score.total_score
-                )
-            } else {
-                let delta = best_score - score.total_score;
-                if delta < 0.05 {
-                    format!("Close alternative ({:.2} vs {:.2}, delta {:.2})", score.total_score, best_score, delta)
+        ranked
+            .into_iter()
+            .enumerate()
+            .map(|(i, score)| {
+                let status = if score.total_score == 0.0 {
+                    "Unscored"
+                } else if i == 0 && unique_best {
+                    "Selected"
+                } else if score.total_score >= best_score * 0.9 {
+                    "Alternative"
                 } else {
-                    format!("Lower total score ({:.2} vs {:.2}, delta {:.2})", score.total_score, best_score, delta)
+                    "Filtered"
+                };
+
+                let reason = if score.total_score == 0.0 {
+                    "Score not computed — all sub-scores are None".to_string()
+                } else if i == 0 && unique_best {
+                    format!(
+                        "Highest total score ({:.2}) among evaluated providers",
+                        score.total_score
+                    )
+                } else if i == 0 && !unique_best {
+                    format!(
+                        "Tied with {} other provider(s) at {:.2} — selected by position",
+                        tied_at_top - 1,
+                        score.total_score
+                    )
+                } else {
+                    let delta = best_score - score.total_score;
+                    if delta < 0.05 {
+                        format!(
+                            "Close alternative ({:.2} vs {:.2}, delta {:.2})",
+                            score.total_score, best_score, delta
+                        )
+                    } else {
+                        format!(
+                            "Lower total score ({:.2} vs {:.2}, delta {:.2})",
+                            score.total_score, best_score, delta
+                        )
+                    }
+                };
+
+                let model_name = match score.provider_name.as_str() {
+                    "openrouter" => "claude-3-5-sonnet",
+                    "zen" => "gemini-2.5-pro",
+                    "ollama" => "llama3",
+                    _ => "unknown",
+                };
+
+                ProviderComparisonCandidate {
+                    provider_name: score.provider_name.clone(),
+                    model_name: model_name.to_string(),
+                    total_score: score.total_score,
+                    status: status.to_string(),
+                    reason,
                 }
-            };
-
-            let model_name = match score.provider_name.as_str() {
-                "openrouter" => "claude-3-5-sonnet",
-                "zen" => "gemini-2.5-pro",
-                "ollama" => "llama3",
-                _ => "unknown",
-            };
-
-            ProviderComparisonCandidate {
-                provider_name: score.provider_name.clone(),
-                model_name: model_name.to_string(),
-                total_score: score.total_score,
-                status: status.to_string(),
-                reason,
-            }
-        }).collect()
+            })
+            .collect()
     }
 }
 
@@ -729,13 +826,16 @@ pub struct BudgetOptimisationPass {
 
 #[async_trait::async_trait]
 impl CompilerPass for BudgetOptimisationPass {
-    fn name(&self) -> &str { "budget_optimisation" }
+    fn name(&self) -> &str {
+        "budget_optimisation"
+    }
 
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
-        if !self.resource_manager.can_afford(
-            ir.metadata.estimated_cost,
-            ir.metadata.estimated_tokens,
-        ).await {
+        if !self
+            .resource_manager
+            .can_afford(ir.metadata.estimated_cost, ir.metadata.estimated_tokens)
+            .await
+        {
             return Err(CompilerError::ValidationError {
                 pass: "budget_optimisation".into(),
                 node_id: None,
@@ -760,7 +860,9 @@ pub struct DeadNodeEliminationPass;
 
 #[async_trait::async_trait]
 impl CompilerPass for DeadNodeEliminationPass {
-    fn name(&self) -> &str { "dead_node_elimination" }
+    fn name(&self) -> &str {
+        "dead_node_elimination"
+    }
 
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
         if ir.nodes.is_empty() {
@@ -792,10 +894,14 @@ impl CompilerPass for DeadNodeEliminationPass {
         }
 
         // Filter nodes and edges
-        let live_nodes: Vec<IRNode> = ir.nodes.into_iter()
+        let live_nodes: Vec<IRNode> = ir
+            .nodes
+            .into_iter()
             .filter(|n| reachable.contains(&n.id))
             .collect();
-        let live_edges: Vec<IREdge> = ir.edges.into_iter()
+        let live_edges: Vec<IREdge> = ir
+            .edges
+            .into_iter()
             .filter(|e| reachable.contains(&e.from) && reachable.contains(&e.to))
             .collect();
 
@@ -824,7 +930,9 @@ impl PolicyCompilerPass {
 
 #[async_trait::async_trait]
 impl CompilerPass for PolicyCompilerPass {
-    fn name(&self) -> &str { "policy" }
+    fn name(&self) -> &str {
+        "policy"
+    }
 
     async fn apply(&self, ir: WorkflowIR) -> Result<WorkflowIR, CompilerError> {
         let mut new_nodes = ir.nodes.clone();
@@ -841,7 +949,9 @@ impl CompilerPass for PolicyCompilerPass {
                 .or(node.model.as_deref())
                 .unwrap_or("general");
 
-            if let Some(rule) = policy::PolicyPrecedenceEngine::evaluate_matching_rule(&self.policy_ir, symbol_key) {
+            if let Some(rule) =
+                policy::PolicyPrecedenceEngine::evaluate_matching_rule(&self.policy_ir, symbol_key)
+            {
                 trace.record(policy::PolicyMatchEvent::RuleMatched {
                     rule_id: rule.rule_id.clone(),
                     symbol: symbol_key.to_string(),
@@ -863,7 +973,9 @@ impl CompilerPass for PolicyCompilerPass {
                     // Idempotence: skip if a Gate already guards this node
                     let already_guarded = new_edges.iter().any(|edge| {
                         edge.to == node.id
-                            && new_nodes.iter().any(|n| n.id == edge.from && n.kind == IRNodeKind::Gate)
+                            && new_nodes
+                                .iter()
+                                .any(|n| n.id == edge.from && n.kind == IRNodeKind::Gate)
                     });
 
                     if !already_guarded {
@@ -906,7 +1018,8 @@ impl CompilerPass for PolicyCompilerPass {
 // ---------------------------------------------------------------------------
 
 fn compute_total_score(scored_metrics: &[(Option<f64>, f64)]) -> f64 {
-    let total_weight: f64 = scored_metrics.iter()
+    let total_weight: f64 = scored_metrics
+        .iter()
         .filter_map(|(score, weight)| score.map(|_| *weight))
         .sum();
 
@@ -914,7 +1027,8 @@ fn compute_total_score(scored_metrics: &[(Option<f64>, f64)]) -> f64 {
         return 0.0;
     }
 
-    let weighted_sum: f64 = scored_metrics.iter()
+    let weighted_sum: f64 = scored_metrics
+        .iter()
         .filter_map(|(score, weight)| score.map(|s| s * *weight))
         .sum();
 
@@ -931,7 +1045,9 @@ pub struct DefaultCompiler {
 
 impl DefaultCompiler {
     pub fn new() -> Self {
-        Self { engine: CompilerEngine::new() }
+        Self {
+            engine: CompilerEngine::new(),
+        }
     }
 }
 
@@ -944,7 +1060,10 @@ impl Default for DefaultCompiler {
 #[async_trait::async_trait]
 impl Compiler for DefaultCompiler {
     async fn compile(&self, ir: &WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
-        let (_report, graph) = self.engine.compile_and_lower("Default Compilation", ir).await
+        let (_report, graph) = self
+            .engine
+            .compile_and_lower("Default Compilation", ir)
+            .await
             .map_err(|e| CompilerError::PassError {
                 pass: "compile".into(),
                 message: e.to_string(),
@@ -1029,7 +1148,9 @@ mod tests {
         let result = pass.apply(empty_ir).await;
         assert!(result.is_err());
         match result {
-            Err(CompilerError::ValidationError { pass: p, .. }) => assert_eq!(p, "constraint_validation"),
+            Err(CompilerError::ValidationError { pass: p, .. }) => {
+                assert_eq!(p, "constraint_validation")
+            }
             _ => panic!("Expected ValidationError"),
         }
     }
@@ -1127,7 +1248,10 @@ mod tests {
     async fn test_compiler_engine_pass_pipeline() {
         let engine = CompilerEngine::new();
         let ir = test_ir();
-        let report = engine.compile("Code Generation", &ir).await.expect("Compile");
+        let report = engine
+            .compile("Code Generation", &ir)
+            .await
+            .expect("Compile");
         assert_eq!(report.passes_executed.len(), 5);
         assert_eq!(report.pass_diffs.len(), 5);
         // duration_ms is unsigned; non-negativity is guaranteed by the type
@@ -1136,25 +1260,52 @@ mod tests {
     #[tokio::test]
     async fn test_total_score_computed_from_available_scores() {
         let engine = CompilerEngine::new();
-        let score = engine.explain_route("openrouter", "general question", &test_ir()).await;
+        let score = engine
+            .explain_route("openrouter", "general question", &test_ir())
+            .await;
         assert_eq!(score.provider_name, "openrouter");
         assert_eq!(score.budget_score, Some(1.0));
-        assert!(score.capability_score.is_some(), "default engine must produce a capability score");
-        assert!(score.health_score.is_some(), "default engine must produce a health score");
+        assert!(
+            score.capability_score.is_some(),
+            "default engine must produce a capability score"
+        );
+        assert!(
+            score.health_score.is_some(),
+            "default engine must produce a health score"
+        );
         // cap 0.9*0.3 + bud 1.0*0.25 + lat 0.6*0.2 + hea 1.0*0.15 + pol 1.0*0.1
-        assert!((score.total_score - 0.89).abs() < 1e-9, "total was {}", score.total_score);
-        assert!(score.total_score < 1.0, "multi-dimensional score must not tie at 1.0");
+        assert!(
+            (score.total_score - 0.89).abs() < 1e-9,
+            "total was {}",
+            score.total_score
+        );
+        assert!(
+            score.total_score < 1.0,
+            "multi-dimensional score must not tie at 1.0"
+        );
     }
 
     #[test]
     fn test_total_score_zero_when_all_none() {
-        let total = compute_total_score(&[(None, 0.3), (None, 0.25), (None, 0.2), (None, 0.15), (None, 0.1)]);
+        let total = compute_total_score(&[
+            (None, 0.3),
+            (None, 0.25),
+            (None, 0.2),
+            (None, 0.15),
+            (None, 0.1),
+        ]);
         assert_eq!(total, 0.0);
     }
 
     #[test]
     fn test_total_score_renormalizes_weights() {
-        let total = compute_total_score(&[(Some(0.8), 0.3), (Some(0.6), 0.2), (None, 0.2), (None, 0.15), (None, 0.1)]);
+        let total = compute_total_score(&[
+            (Some(0.8), 0.3),
+            (Some(0.6), 0.2),
+            (None, 0.2),
+            (None, 0.15),
+            (None, 0.1),
+        ]);
         assert!((total - 0.72).abs() < 1e-10);
     }
 
@@ -1163,8 +1314,12 @@ mod tests {
         let engine = CompilerEngine::new();
         let ir = test_ir();
         let scores = vec![
-            engine.explain_route("ollama", "general question", &ir).await,
-            engine.explain_route("openrouter", "general question", &ir).await,
+            engine
+                .explain_route("ollama", "general question", &ir)
+                .await,
+            engine
+                .explain_route("openrouter", "general question", &ir)
+                .await,
             engine.explain_route("zen", "general question", &ir).await,
         ];
         let comparison = CompilerEngine::build_provider_comparison(&scores);
@@ -1220,16 +1375,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_budget_pass_under_quota() {
-        let rm = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
-        let pass = BudgetOptimisationPass { resource_manager: rm };
+        let rm = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota {
+            max_daily_cost: NanoUSD::from_nanos(u64::MAX),
+            max_daily_tokens: u64::MAX,
+        }));
+        let pass = BudgetOptimisationPass {
+            resource_manager: rm,
+        };
         let ir = test_ir();
         assert!(pass.apply(ir).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_budget_pass_over_quota() {
-        let rm = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::ZERO, max_daily_tokens: 0 }));
-        let pass = BudgetOptimisationPass { resource_manager: rm };
+        let rm = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota {
+            max_daily_cost: NanoUSD::ZERO,
+            max_daily_tokens: 0,
+        }));
+        let pass = BudgetOptimisationPass {
+            resource_manager: rm,
+        };
         let ir = test_ir();
         let result = pass.apply(ir).await;
         assert!(result.is_err());
@@ -1259,9 +1424,15 @@ mod tests {
                 estimated_tokens: 100,
             },
         };
-        let (_report, graph) = engine.compile_and_lower("test", &ir).await.expect("compile_and_lower");
+        let (_report, graph) = engine
+            .compile_and_lower("test", &ir)
+            .await
+            .expect("compile_and_lower");
         assert_eq!(graph.nodes.len(), 1);
-        assert_eq!(graph.nodes[0].model, "gpt-4o-mini", "model_resolution must fill model from catalog");
+        assert_eq!(
+            graph.nodes[0].model, "gpt-4o-mini",
+            "model_resolution must fill model from catalog"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1350,7 +1521,11 @@ mod tests {
         // Should have 2 nodes (original + gate) and 1 edge (gate -> original)
         assert_eq!(result.nodes.len(), 2);
         assert_eq!(result.edges.len(), 1);
-        let gate = result.nodes.iter().find(|n| n.kind == IRNodeKind::Gate).unwrap();
+        let gate = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == IRNodeKind::Gate)
+            .unwrap();
         assert_eq!(result.edges[0].from, gate.id);
         assert_eq!(result.edges[0].to, node_id);
     }
@@ -1442,12 +1617,39 @@ mod tests {
         let ir = WorkflowIR {
             plan_id: uuid::Uuid::new_v4(),
             nodes: vec![
-                IRNode { id: id_a, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-                IRNode { id: id_b, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-                IRNode { id: id_orphan, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+                IRNode {
+                    id: id_a,
+                    kind: IRNodeKind::Generate,
+                    strategy: StrategyKind::Single,
+                    model: None,
+                    config: HashMap::new(),
+                },
+                IRNode {
+                    id: id_b,
+                    kind: IRNodeKind::Generate,
+                    strategy: StrategyKind::Single,
+                    model: None,
+                    config: HashMap::new(),
+                },
+                IRNode {
+                    id: id_orphan,
+                    kind: IRNodeKind::Generate,
+                    strategy: StrategyKind::Single,
+                    model: None,
+                    config: HashMap::new(),
+                },
             ],
-            edges: vec![IREdge { from: id_a, to: id_b, condition: None }],
-            metadata: IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: NanoUSD::ZERO, estimated_tokens: 0 },
+            edges: vec![IREdge {
+                from: id_a,
+                to: id_b,
+                condition: None,
+            }],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                policy_version: 0,
+                estimated_cost: NanoUSD::ZERO,
+                estimated_tokens: 0,
+            },
         };
         let result = pass.apply(ir).await.expect("pass should succeed");
         assert_eq!(result.nodes.len(), 2, "orphan node should be eliminated");
@@ -1463,11 +1665,32 @@ mod tests {
         let ir = WorkflowIR {
             plan_id: uuid::Uuid::new_v4(),
             nodes: vec![
-                IRNode { id: id_a, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
-                IRNode { id: id_b, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+                IRNode {
+                    id: id_a,
+                    kind: IRNodeKind::Generate,
+                    strategy: StrategyKind::Single,
+                    model: None,
+                    config: HashMap::new(),
+                },
+                IRNode {
+                    id: id_b,
+                    kind: IRNodeKind::Generate,
+                    strategy: StrategyKind::Single,
+                    model: None,
+                    config: HashMap::new(),
+                },
             ],
-            edges: vec![IREdge { from: id_a, to: id_b, condition: None }],
-            metadata: IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: NanoUSD::ZERO, estimated_tokens: 0 },
+            edges: vec![IREdge {
+                from: id_a,
+                to: id_b,
+                condition: None,
+            }],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                policy_version: 0,
+                estimated_cost: NanoUSD::ZERO,
+                estimated_tokens: 0,
+            },
         };
         let result = pass.apply(ir).await.expect("pass should succeed");
         assert_eq!(result.nodes.len(), 2);
@@ -1480,22 +1703,33 @@ mod tests {
 
     #[test]
     fn test_build_compiler_pass_order_without_policy() {
-        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> =
+            Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota {
+                max_daily_cost: NanoUSD::from_nanos(u64::MAX),
+                max_daily_tokens: u64::MAX,
+            }));
         let engine = build_compiler(ModelCatalog::default(), rm, None);
         let names: Vec<&str> = engine.passes.iter().map(|p| p.name()).collect();
-        assert_eq!(names, vec![
-            "constraint_validation",
-            "control_flow_validation",
-            "strategy_lowering",
-            "dead_node_elimination",
-            "model_resolution",
-            "budget_optimisation",
-        ]);
+        assert_eq!(
+            names,
+            vec![
+                "constraint_validation",
+                "control_flow_validation",
+                "strategy_lowering",
+                "dead_node_elimination",
+                "model_resolution",
+                "budget_optimisation",
+            ]
+        );
     }
 
     #[test]
     fn test_build_compiler_appends_policy_when_provided() {
-        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> =
+            Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota {
+                max_daily_cost: NanoUSD::from_nanos(u64::MAX),
+                max_daily_tokens: u64::MAX,
+            }));
         let policy = policy_ir_with_deny("shell.exec");
         let engine = build_compiler(ModelCatalog::default(), rm, Some(policy));
         let names: Vec<&str> = engine.passes.iter().map(|p| p.name()).collect();
@@ -1505,8 +1739,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_compiler_deny_blocks_through_factory() {
-        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota { max_daily_cost: NanoUSD::from_nanos(u64::MAX), max_daily_tokens: u64::MAX }));
-        let engine = build_compiler(ModelCatalog::default(), rm, Some(policy_ir_with_deny("shell.exec")));
+        let rm: Arc<dyn fusion_kernel::resource::ResourceManager> =
+            Arc::new(StubResourceManager::new(fusion_kernel::resource::Quota {
+                max_daily_cost: NanoUSD::from_nanos(u64::MAX),
+                max_daily_tokens: u64::MAX,
+            }));
+        let engine = build_compiler(
+            ModelCatalog::default(),
+            rm,
+            Some(policy_ir_with_deny("shell.exec")),
+        );
         let mut config = HashMap::new();
         config.insert("capability".into(), serde_json::json!("shell.exec"));
         let ir = WorkflowIR {
@@ -1519,10 +1761,18 @@ mod tests {
                 config,
             }],
             edges: vec![],
-            metadata: IRMetadata { policy_applied: vec![], policy_version: 0, estimated_cost: NanoUSD::from_nanos(10_000_000), estimated_tokens: 100 },
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                policy_version: 0,
+                estimated_cost: NanoUSD::from_nanos(10_000_000),
+                estimated_tokens: 100,
+            },
         };
         let result = engine.compile("test", &ir).await;
-        assert!(result.is_err(), "deny policy should block compilation through factory");
+        assert!(
+            result.is_err(),
+            "deny policy should block compilation through factory"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1534,14 +1784,23 @@ mod tests {
         let engine = CompilerEngine::new();
         let ir = test_ir();
         let scores: Vec<ExplainRouteScore> = vec![
-            engine.explain_route("openrouter", "general question", &ir).await,
+            engine
+                .explain_route("openrouter", "general question", &ir)
+                .await,
             engine.explain_route("zen", "general question", &ir).await,
-            engine.explain_route("ollama", "general question", &ir).await,
+            engine
+                .explain_route("ollama", "general question", &ir)
+                .await,
         ];
         let totals: Vec<f64> = scores.iter().map(|s| s.total_score).collect();
-        assert!(totals.iter().any(|t| *t < 1.0), "no provider may tie at 1.0 by default");
         assert!(
-            scores.iter().all(|s| s.capability_score.is_some() && s.health_score.is_some()),
+            totals.iter().any(|t| *t < 1.0),
+            "no provider may tie at 1.0 by default"
+        );
+        assert!(
+            scores
+                .iter()
+                .all(|s| s.capability_score.is_some() && s.health_score.is_some()),
             "default engine must produce ≥1 non-budget score for every provider"
         );
     }
@@ -1552,10 +1811,16 @@ mod tests {
             latency: None,
             ..score::ScoreSources::default()
         });
-        let score = engine.explain_route("openrouter", "general question", &test_ir()).await;
+        let score = engine
+            .explain_route("openrouter", "general question", &test_ir())
+            .await;
         assert_eq!(score.latency_score, None, "removed scorer must yield None");
         // cap 0.9*0.3 + bud 1.0*0.25 + hea 1.0*0.15 + pol 1.0*0.1 over 0.8 weight
-        assert!((score.total_score - 0.9625).abs() < 1e-9, "total was {}", score.total_score);
+        assert!(
+            (score.total_score - 0.9625).abs() < 1e-9,
+            "total was {}",
+            score.total_score
+        );
     }
 
     #[tokio::test]
@@ -1565,7 +1830,9 @@ mod tests {
             ..score::ScoreSources::default()
         });
         let ir = test_ir();
-        let denied = engine.explain_route("openrouter", "general question", &ir).await;
+        let denied = engine
+            .explain_route("openrouter", "general question", &ir)
+            .await;
         let allowed = engine.explain_route("zen", "general question", &ir).await;
         assert_eq!(denied.policy_score, Some(0.0));
         assert_eq!(allowed.policy_score, Some(1.0));
@@ -1575,13 +1842,23 @@ mod tests {
     #[tokio::test]
     async fn test_report_route_scores_carry_capability() {
         let engine = CompilerEngine::new();
-        let report = engine.compile("Code Generation", &test_ir()).await.expect("Compile");
+        let report = engine
+            .compile("Code Generation", &test_ir())
+            .await
+            .expect("Compile");
         assert_eq!(report.route_scores.len(), 3);
         for score in &report.route_scores {
-            assert!(score.capability_score.is_some(), "report must carry capability scores");
+            assert!(
+                score.capability_score.is_some(),
+                "report must carry capability scores"
+            );
         }
         // "Code Generation" intent boosts openrouter capability
-        let openrouter = report.route_scores.iter().find(|s| s.provider_name == "openrouter").unwrap();
+        let openrouter = report
+            .route_scores
+            .iter()
+            .find(|s| s.provider_name == "openrouter")
+            .unwrap();
         let cap = openrouter.capability_score.expect("capability score");
         assert!((cap - 0.95).abs() < 1e-9, "expected 0.95, got {cap}");
     }

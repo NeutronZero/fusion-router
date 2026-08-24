@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -38,12 +38,12 @@ use fusion_router::strategies::react::ReActStrategy;
 use fusion_router::strategies::reflection::ReflectionStrategy;
 use fusion_router::strategies::single::SingleStrategy;
 use fusion_router::strategies::Strategy;
+use fusion_router::types::execution::ExecutionIntent;
 use fusion_router::types::{
     ChatCompletionRequest, ChatMessage, ComplexityLevel, ExecutionGraph, ExecutionNodeKind,
-    IRMetadata, IRNode, IRNodeKind, Intent, NanoUSD, ReservationId, Requirements,
-    StrategyKind, WorkflowIR,
+    IRMetadata, IRNode, IRNodeKind, Intent, NanoUSD, Requirements, ReservationId, StrategyKind,
+    WorkflowIR,
 };
-use fusion_router::types::execution::ExecutionIntent;
 
 // ── CLI ──────────────────────────────────────────────────────────
 
@@ -299,11 +299,17 @@ struct ConditionStats {
 /// Strip markdown code fences from LLM output (```python ... ``` or ``` ... ```).
 fn strip_code_fences(s: &str) -> String {
     let trimmed = s.trim();
-    if let Some(inner) = trimmed.strip_prefix("```").and_then(|rest| rest.strip_suffix("```")) {
+    if let Some(inner) = trimmed
+        .strip_prefix("```")
+        .and_then(|rest| rest.strip_suffix("```"))
+    {
         // Remove optional language tag from first line
         if let Some(newline_pos) = inner.find('\n') {
             let first_line = &inner[..newline_pos];
-            if first_line.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+            if first_line
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            {
                 return inner[newline_pos + 1..].trim().to_string();
             }
         }
@@ -349,7 +355,7 @@ except (ImportError, ValueError, OSError):
     pass
 os.chdir(os.environ.get('EVAL_WORKDIR', '.'))
 "#
-        .replace("{timeout_secs}", &timeout_secs.to_string());
+    .replace("{timeout_secs}", &timeout_secs.to_string());
 
     let full_code = format!("{}\n{}", preamble, code);
 
@@ -382,17 +388,18 @@ os.chdir(os.environ.get('EVAL_WORKDIR', '.'))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-    .or_else(|_| {
-        Command::new("python")
-            .arg(&script_path)
-            .current_dir(&workdir)
-            .env("EVAL_WORKDIR", workdir.to_string_lossy().as_ref())
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-    }) else {
+        .or_else(|_| {
+            Command::new("python")
+                .arg(&script_path)
+                .current_dir(&workdir)
+                .env("EVAL_WORKDIR", workdir.to_string_lossy().as_ref())
+                .env("PYTHONDONTWRITEBYTECODE", "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        })
+    else {
         let _ = std::fs::remove_file(&temp_path);
         return ("PYTHON_NOT_AVAILABLE".to_string(), false);
     };
@@ -433,7 +440,11 @@ os.chdir(os.environ.get('EVAL_WORKDIR', '.'))
     result
 }
 
-fn score_output(task: &TaskDef, output: &str, judge_provider: Option<&dyn ChatProvider>) -> (f64, RunStatus) {
+fn score_output(
+    task: &TaskDef,
+    output: &str,
+    judge_provider: Option<&dyn ChatProvider>,
+) -> (f64, RunStatus) {
     let trimmed = output.trim();
     if trimmed.is_empty() {
         return (0.0, RunStatus::NoOutput);
@@ -605,10 +616,7 @@ fn score_rubric(task: &TaskDef, output: &str, provider: &dyn ChatProvider) -> f6
         rubric
             .dimensions
             .iter()
-            .map(|d| format!(
-                "- {} (weight {:.0}): {}",
-                d.name, d.weight, d.description
-            ))
+            .map(|d| format!("- {} (weight {:.0}): {}", d.name, d.weight, d.description))
             .collect::<Vec<_>>()
             .join("\n")
     );
@@ -634,11 +642,7 @@ fn score_rubric(task: &TaskDef, output: &str, provider: &dyn ChatProvider) -> f6
         Err(_) => return 0.0,
     };
     let response = rt.block_on(async {
-        tokio::time::timeout(
-            Duration::from_secs(60),
-            provider.chat_completion(&request),
-        )
-        .await
+        tokio::time::timeout(Duration::from_secs(60), provider.chat_completion(&request)).await
     });
     match response {
         Ok(Ok(resp)) => {
@@ -678,7 +682,10 @@ fn parse_rubric_scores(text: &str, dimensions: &[RubricDimension]) -> f64 {
 
 // ── Provider setup ──────────────────────────────────────────────
 
-fn build_provider_from_config(config: &AppConfig, provider_name: &str) -> Result<Arc<dyn ChatProvider + Send + Sync>> {
+fn build_provider_from_config(
+    config: &AppConfig,
+    provider_name: &str,
+) -> Result<Arc<dyn ChatProvider + Send + Sync>> {
     let provider_cfg = config
         .providers
         .get(provider_name)
@@ -689,11 +696,18 @@ fn build_provider_from_config(config: &AppConfig, provider_name: &str) -> Result
         .as_deref()
         .with_context(|| format!("provider '{}' has no api_key_env", provider_name))?;
 
-    let api_key = std::env::var(api_key_env)
-        .with_context(|| format!("env var '{}' not set (needed for provider '{}')", api_key_env, provider_name))?;
+    let api_key = std::env::var(api_key_env).with_context(|| {
+        format!(
+            "env var '{}' not set (needed for provider '{}')",
+            api_key_env, provider_name
+        )
+    })?;
 
     let provider: Arc<dyn ChatProvider + Send + Sync> = match provider_name {
-        "openrouter" => Arc::new(OpenRouterProvider::with_base_url(api_key, provider_cfg.base_url.clone())),
+        "openrouter" => Arc::new(OpenRouterProvider::with_base_url(
+            api_key,
+            provider_cfg.base_url.clone(),
+        )),
         "zen" => Arc::new(fusion_router::providers::zen::ZenProvider::with_base_url(
             api_key,
             provider_cfg.base_url.clone(),
@@ -712,11 +726,7 @@ fn build_provider_from_config(config: &AppConfig, provider_name: &str) -> Result
 
 // ── Condition A: Direct call ────────────────────────────────────
 
-async fn run_condition_a(
-    provider: &dyn ChatProvider,
-    task: &TaskDef,
-    model: &str,
-) -> RunResult {
+async fn run_condition_a(provider: &dyn ChatProvider, task: &TaskDef, model: &str) -> RunResult {
     let messages = vec![ChatMessage {
         role: "user".to_string(),
         content: task.prompt.clone().unwrap_or_default(),
@@ -736,11 +746,8 @@ async fn run_condition_a(
     };
 
     let start = Instant::now();
-    let result = tokio::time::timeout(
-        Duration::from_secs(90),
-        provider.chat_completion(&request),
-    )
-    .await;
+    let result =
+        tokio::time::timeout(Duration::from_secs(90), provider.chat_completion(&request)).await;
     let latency = start.elapsed().as_millis() as u64;
 
     match result {
@@ -829,16 +836,23 @@ fn inject_messages(graph: &mut ExecutionGraph, messages: &[ChatMessage]) {
     for node in &mut graph.nodes {
         if matches!(
             node.kind,
-            ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge
+            ExecutionNodeKind::LLMGenerate
+                | ExecutionNodeKind::LLMReview
+                | ExecutionNodeKind::LLMJudge
         ) {
-            node.config.insert("messages".to_string(), messages_val.clone());
+            node.config
+                .insert("messages".to_string(), messages_val.clone());
             if let Some(subgraph) = node.subgraph.as_mut() {
                 for sub_node in &mut subgraph.nodes {
                     if matches!(
                         sub_node.kind,
-                        ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge
+                        ExecutionNodeKind::LLMGenerate
+                            | ExecutionNodeKind::LLMReview
+                            | ExecutionNodeKind::LLMJudge
                     ) {
-                        sub_node.config.insert("messages".to_string(), messages_val.clone());
+                        sub_node
+                            .config
+                            .insert("messages".to_string(), messages_val.clone());
                     }
                 }
             }
@@ -907,7 +921,10 @@ async fn run_condition_b(
     };
 
     // Let planner generate the IR (picks model, strategy structure)
-    let mut ir = planner.plan(&requirements, &[], None).await.expect("planning");
+    let mut ir = planner
+        .plan(&requirements, &[], None)
+        .await
+        .expect("planning");
 
     // Force all nodes to Single strategy (condition B = routing only, no multi-call)
     for node in &mut ir.nodes {
@@ -1048,7 +1065,10 @@ async fn run_condition_c(
     };
 
     // Full pipeline: planner picks model AND strategy
-    let ir = planner.plan(&requirements, &[], None).await.expect("planning");
+    let ir = planner
+        .plan(&requirements, &[], None)
+        .await
+        .expect("planning");
 
     // Compile (strategy expansion happens here)
     let mut graph = match compiler.compile(ir).await {
@@ -1176,7 +1196,9 @@ fn count_llm_nodes(graph: &ExecutionGraph) -> u32 {
         .filter(|n| {
             matches!(
                 n.kind,
-                ExecutionNodeKind::LLMGenerate | ExecutionNodeKind::LLMReview | ExecutionNodeKind::LLMJudge
+                ExecutionNodeKind::LLMGenerate
+                    | ExecutionNodeKind::LLMReview
+                    | ExecutionNodeKind::LLMJudge
             )
         })
         .count() as u32
@@ -1220,17 +1242,38 @@ fn compute_condition_stats(results: &[&RunResult]) -> ConditionStats {
     }
 
     let n = results.len() as f64;
-    let n_scored = results.iter().filter(|r| r.status == RunStatus::Scored).count();
-    let n_api_errors = results.iter().filter(|r| r.status == RunStatus::ApiError).count();
-    let n_score_errors = results.iter().filter(|r| r.status == RunStatus::ScoreError).count();
+    let n_scored = results
+        .iter()
+        .filter(|r| r.status == RunStatus::Scored)
+        .count();
+    let n_api_errors = results
+        .iter()
+        .filter(|r| r.status == RunStatus::ApiError)
+        .count();
+    let n_score_errors = results
+        .iter()
+        .filter(|r| r.status == RunStatus::ScoreError)
+        .count();
 
     // Only compute mean quality over scored results (not failed ones)
-    let scored: Vec<f64> = results.iter().filter(|r| r.status == RunStatus::Scored).map(|r| r.quality_score).collect();
-    let mean_quality = if scored.is_empty() { 0.0 } else { scored.iter().sum::<f64>() / scored.len() as f64 };
+    let scored: Vec<f64> = results
+        .iter()
+        .filter(|r| r.status == RunStatus::Scored)
+        .map(|r| r.quality_score)
+        .collect();
+    let mean_quality = if scored.is_empty() {
+        0.0
+    } else {
+        scored.iter().sum::<f64>() / scored.len() as f64
+    };
     let variance = if scored.is_empty() {
         0.0
     } else {
-        scored.iter().map(|s| (s - mean_quality).powi(2)).sum::<f64>() / scored.len() as f64
+        scored
+            .iter()
+            .map(|s| (s - mean_quality).powi(2))
+            .sum::<f64>()
+            / scored.len() as f64
     };
     let stddev = variance.sqrt();
 
@@ -1257,10 +1300,7 @@ fn compute_condition_stats(results: &[&RunResult]) -> ConditionStats {
 fn generate_report(results: &[RunResult], tasks: &[TaskDef]) -> Vec<BucketReport> {
     let mut by_bucket: HashMap<String, Vec<&RunResult>> = HashMap::new();
     for r in results {
-        by_bucket
-            .entry(r.task_id.clone())
-            .or_default()
-            .push(r);
+        by_bucket.entry(r.task_id.clone()).or_default().push(r);
     }
 
     let mut reports = Vec::new();
@@ -1364,7 +1404,12 @@ fn print_condition(label: &str, stats: &ConditionStats) {
         if no_output > 0 {
             parts.push(format!("{} no_output", no_output));
         }
-        format!("  ⚠ {}/{} failed ({})", stats.n - stats.n_scored, stats.n, parts.join(", "))
+        format!(
+            "  ⚠ {}/{} failed ({})",
+            stats.n - stats.n_scored,
+            stats.n,
+            parts.join(", ")
+        )
     } else {
         format!("  ✓ all {}/{} scored", stats.n_scored, stats.n)
     };
@@ -1396,14 +1441,18 @@ async fn main() -> Result<()> {
     // Load eval suite
     let suite_content = std::fs::read_to_string(&cli.suite)
         .with_context(|| format!("failed to read {}", cli.suite.display()))?;
-    let mut suite: TaskSuite = serde_yaml::from_str(&suite_content)
-        .with_context(|| "failed to parse eval suite YAML")?;
+    let mut suite: TaskSuite =
+        serde_yaml::from_str(&suite_content).with_context(|| "failed to parse eval suite YAML")?;
 
     // Load fusion-router config
-    let fusion_config_path = std::env::var("FUSION_CONFIG")
-        .unwrap_or_else(|_| suite.config.fusion_config.clone());
-    let app_config = AppConfig::load(&fusion_config_path)
-        .with_context(|| format!("failed to load fusion-router config from {}", fusion_config_path))?;
+    let fusion_config_path =
+        std::env::var("FUSION_CONFIG").unwrap_or_else(|_| suite.config.fusion_config.clone());
+    let app_config = AppConfig::load(&fusion_config_path).with_context(|| {
+        format!(
+            "failed to load fusion-router config from {}",
+            fusion_config_path
+        )
+    })?;
 
     // Override ModelCatalog with free models (zen provider)
     // Prefix with "zen/" so the provider router routes to the zen transport
@@ -1420,11 +1469,9 @@ async fn main() -> Result<()> {
     };
 
     // Resolve repeat count
-    let repeats = cli.repeats.unwrap_or(if cli.dry_run {
-        1
-    } else {
-        suite.config.repeats
-    });
+    let repeats = cli
+        .repeats
+        .unwrap_or(if cli.dry_run { 1 } else { suite.config.repeats });
 
     // Resolve reuse references: copy prompt and ground_truth from the referenced task
     let task_map: HashMap<String, TaskDef> = suite
@@ -1523,14 +1570,8 @@ async fn main() -> Result<()> {
             judge: Box::new(SingleStrategy),
         }),
     );
-    strategies.insert(
-        StrategyKind::ReAct,
-        Box::new(ReActStrategy::default()),
-    );
-    strategies.insert(
-        StrategyKind::Fusion,
-        Box::new(FusionStrategy::new(vec![])),
-    );
+    strategies.insert(StrategyKind::ReAct, Box::new(ReActStrategy::default()));
+    strategies.insert(StrategyKind::Fusion, Box::new(FusionStrategy::new(vec![])));
 
     let executor = Arc::new(DefaultExecutor::new(provider_a.clone(), strategies));
 
@@ -1552,12 +1593,8 @@ async fn main() -> Result<()> {
 
         for _run_idx in 0..repeats {
             // Condition A: direct call
-            let result_a = run_condition_a(
-                provider_a.as_ref(),
-                task,
-                &suite.config.baseline_model,
-            )
-            .await;
+            let result_a =
+                run_condition_a(provider_a.as_ref(), task, &suite.config.baseline_model).await;
             all_results.push(result_a);
 
             // Condition B: routed-single
@@ -1591,7 +1628,10 @@ async fn main() -> Result<()> {
     print_report(&reports);
 
     // Write raw results to JSON
-    let output_dir = cli.suite.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let output_dir = cli
+        .suite
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
     let output_path = output_dir.join("results.json");
     let results_json = serde_json::to_string_pretty(&all_results)?;
     std::fs::write(&output_path, &results_json)?;
@@ -1605,4 +1645,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-

@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use crate::types::{EvidenceSnapshot, ExecutionRecord, NanoUSD};
+use async_trait::async_trait;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelPerformanceStats {
@@ -14,7 +14,10 @@ pub struct ModelPerformanceStats {
 pub trait EvidenceRepository: Send + Sync {
     async fn record(&self, entry: ExecutionRecord) -> anyhow::Result<()>;
     async fn snapshot(&self) -> anyhow::Result<EvidenceSnapshot>;
-    async fn get_model_stats(&self, window_hours: u32) -> anyhow::Result<Vec<ModelPerformanceStats>>;
+    async fn get_model_stats(
+        &self,
+        window_hours: u32,
+    ) -> anyhow::Result<Vec<ModelPerformanceStats>>;
     /// Cheap liveness probe for `/ready`. Default: healthy (no backing store).
     async fn ping(&self) -> bool {
         true
@@ -24,9 +27,7 @@ pub trait EvidenceRepository: Send + Sync {
 mod sqlite_repo;
 pub use sqlite_repo::SqliteEvidenceRepository;
 
+pub mod audit;
 pub mod metrics;
 pub mod stream_metrics;
-pub mod audit;
 pub mod tracing;
-
-

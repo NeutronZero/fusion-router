@@ -53,8 +53,12 @@ async fn session_invariant_checkpoint_idempotence() {
 
     let ctx = create_sample_ctx();
 
-    let snap1 = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx).await.unwrap();
-    let snap2 = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx).await.unwrap();
+    let snap1 = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx)
+        .await
+        .unwrap();
+    let snap2 = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx)
+        .await
+        .unwrap();
 
     assert_eq!(snap1.session_id, snap2.session_id);
     assert_eq!(snap1.state, snap2.state);
@@ -97,10 +101,14 @@ async fn session_invariant_resume_compatibility_check() {
     store.create_session(session).await.unwrap();
 
     let ctx = create_sample_ctx();
-    let _ = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx).await.unwrap();
+    let _ = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx)
+        .await
+        .unwrap();
 
     let valid_ver = semver::Version::parse("0.1.0").unwrap();
-    let restored = ResumeEngine::resume_session(&store, &session_id, &valid_ver).await.unwrap();
+    let restored = ResumeEngine::resume_session(&store, &session_id, &valid_ver)
+        .await
+        .unwrap();
     assert_eq!(restored.session_id, session_id);
 
     let invalid_ver = semver::Version::parse("9.9.9").unwrap();
@@ -111,7 +119,8 @@ async fn session_invariant_resume_compatibility_check() {
 #[tokio::test]
 async fn session_invariant_replay_side_effect_freedom() {
     let ctx = create_sample_ctx();
-    ctx.trace.record(ExecutionEvent::ExecutionStarted { timestamp_ms: 10 });
+    ctx.trace
+        .record(ExecutionEvent::ExecutionStarted { timestamp_ms: 10 });
     ctx.trace.record(ExecutionEvent::ExecutionFinished {
         final_state: ExecutionState::Succeeded,
         timestamp_ms: 20,

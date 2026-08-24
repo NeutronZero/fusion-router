@@ -2,17 +2,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use axum::{
-    extract::Request,
-    http::StatusCode,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use crate::config::{error::ReloadError, manager::{ConfigSnapshot, ConfigSubscriber}, AuthConfig};
+use crate::config::{
+    error::ReloadError,
+    manager::{ConfigSnapshot, ConfigSubscriber},
+    AuthConfig,
+};
 
 /// Authenticated client identity for downstream middleware (e.g. the rate
 /// limiter). Carries the SHA-256 of the presented API key — never the raw key.
@@ -132,13 +131,14 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// Surfaces gated behind the operator grant. Chat endpoints remain available
 /// to every valid key.
 fn requires_operator(path: &str) -> bool {
-    path == "/metrics"
-        || path.starts_with("/v1/operations")
-        || path.starts_with("/v1/executions")
+    path == "/metrics" || path.starts_with("/v1/operations") || path.starts_with("/v1/executions")
 }
 
 fn unauthorized() -> (StatusCode, String) {
-    (StatusCode::UNAUTHORIZED, json!({"error": "unauthorized"}).to_string())
+    (
+        StatusCode::UNAUTHORIZED,
+        json!({"error": "unauthorized"}).to_string(),
+    )
 }
 
 fn forbidden() -> (StatusCode, String) {
@@ -148,10 +148,7 @@ fn forbidden() -> (StatusCode, String) {
     )
 }
 
-pub async fn auth_middleware(
-    req: Request,
-    next: Next,
-) -> Result<Response, (StatusCode, String)> {
+pub async fn auth_middleware(req: Request, next: Next) -> Result<Response, (StatusCode, String)> {
     let Some(handle) = req.extensions().get::<AuthHandle>().cloned() else {
         // Fail closed: a router wiring this middleware without providing the
         // AuthHandle extension must not silently become unauthenticated.
@@ -214,7 +211,10 @@ pub struct AuthReloader {
 
 impl AuthReloader {
     pub fn new(handle: AuthHandle) -> Self {
-        Self { handle, staged: std::sync::Mutex::new(None) }
+        Self {
+            handle,
+            staged: std::sync::Mutex::new(None),
+        }
     }
 }
 
@@ -232,12 +232,10 @@ impl ConfigSubscriber for AuthReloader {
                 reason: "auth enabled but no valid api_keys entries".into(),
             });
         }
-        *self.staged.lock().unwrap_or_else(|e| e.into_inner()) = Some(
-            AuthSnapshot {
-                enabled: snapshot.enabled,
-                keys: snapshot.keys.clone(),
-            },
-        );
+        *self.staged.lock().unwrap_or_else(|e| e.into_inner()) = Some(AuthSnapshot {
+            enabled: snapshot.enabled,
+            keys: snapshot.keys.clone(),
+        });
         Ok(())
     }
 
@@ -268,7 +266,10 @@ mod tests {
 
     #[test]
     fn test_api_key_matches_any_configured_key() {
-        assert!(api_key_matches("sk-b", &["sk-a".into(), "sk-b".into(), "sk-c".into()]));
+        assert!(api_key_matches(
+            "sk-b",
+            &["sk-a".into(), "sk-b".into(), "sk-c".into()]
+        ));
     }
 
     #[test]
@@ -285,7 +286,10 @@ mod tests {
     #[test]
     fn test_api_key_matches_rejects_oversize_key() {
         let oversized = "x".repeat(MAX_API_KEY_BYTES + 1);
-        assert!(!api_key_matches(&oversized, std::slice::from_ref(&oversized)));
+        assert!(!api_key_matches(
+            &oversized,
+            std::slice::from_ref(&oversized)
+        ));
         let oversized_configured = "y".repeat(MAX_API_KEY_BYTES + 1);
         assert!(!api_key_matches("y", &[oversized_configured]));
     }
@@ -299,7 +303,10 @@ mod tests {
     fn test_client_identity_is_hashed() {
         let id = key_identity("sk-valid");
         assert!(id.starts_with("key:"), "identity must be prefixed: {id}");
-        assert!(!id.contains("sk-valid"), "identity must not leak the raw key: {id}");
+        assert!(
+            !id.contains("sk-valid"),
+            "identity must not leak the raw key: {id}"
+        );
         assert_eq!(id.len(), 4 + 64, "identity must be a SHA-256 hex digest");
         assert_eq!(key_identity("sk-valid"), key_identity("sk-valid"));
         assert_ne!(key_identity("sk-valid"), key_identity("sk-other"));
@@ -406,10 +413,18 @@ mod tests {
         });
 
         let client = reqwest::Client::new();
-        let res = client.get(format!("http://{addr}/health")).send().await.unwrap();
+        let res = client
+            .get(format!("http://{addr}/health"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(res.status(), reqwest::StatusCode::OK);
 
-        let res = client.get(format!("http://{addr}/metrics")).send().await.unwrap();
+        let res = client
+            .get(format!("http://{addr}/metrics"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(
             res.status(),
             reqwest::StatusCode::UNAUTHORIZED,
@@ -502,7 +517,11 @@ mod tests {
             .send()
             .await
             .unwrap();
-        assert_eq!(res.status(), reqwest::StatusCode::UNAUTHORIZED, "rotated-out key must die immediately");
+        assert_eq!(
+            res.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "rotated-out key must die immediately"
+        );
 
         let res = client
             .get(format!("http://{addr}/"))

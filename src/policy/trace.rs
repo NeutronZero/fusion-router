@@ -2,9 +2,9 @@
 //!
 //! Provenance tracing capturing policy match events and graph transformations.
 
+use crate::policy::ir::PolicyEffect;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::policy::ir::PolicyEffect;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PolicyMatchEvent {

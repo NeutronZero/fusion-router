@@ -66,12 +66,20 @@ fn bench_eviction(c: &mut Criterion) {
         b.to_async(&rt).iter(|| async {
             for i in 0..200 {
                 cache
-                    .put(&format!("key-{}", i), serde_json::json!(format!("val-{}", i)))
+                    .put(
+                        &format!("key-{}", i),
+                        serde_json::json!(format!("val-{}", i)),
+                    )
                     .await;
             }
         });
     });
 }
 
-criterion_group!(cache_benches, bench_cache_hits, bench_cache_concurrent, bench_eviction);
+criterion_group!(
+    cache_benches,
+    bench_cache_hits,
+    bench_cache_concurrent,
+    bench_eviction
+);
 criterion_main!(cache_benches);

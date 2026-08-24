@@ -1,16 +1,16 @@
+use crate::types::{ExecutionGraph, NanoUSD, Quota};
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use crate::types::{ExecutionGraph, NanoUSD, Quota};
 
+pub mod budget;
 pub mod cancelling_stream;
 pub mod guard;
-pub mod budget;
-pub mod stream_meter;
 pub mod kernel_adapter;
+pub mod stream_meter;
 
-pub use guard::ResourceGuard;
 pub use budget::BudgetEnvelope;
+pub use guard::ResourceGuard;
 
 #[async_trait]
 pub trait ResourceManager: Send + Sync {
@@ -71,7 +71,8 @@ impl ResourceManager for DefaultResourceManager {
         }
 
         self.used_cost.store(current_cost + cost, Ordering::Release);
-        self.used_tokens.store(current_tokens + tokens, Ordering::Release);
+        self.used_tokens
+            .store(current_tokens + tokens, Ordering::Release);
         true
     }
 

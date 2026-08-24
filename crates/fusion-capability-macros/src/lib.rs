@@ -26,7 +26,10 @@ impl syn::parse::Parse for CapabilityArgs {
                 "description" => description = Some(value.value()),
                 "version" => version = Some(value.value()),
                 other => {
-                    return Err(syn::Error::new_spanned(&key, format!("unknown capability attribute: {other}")));
+                    return Err(syn::Error::new_spanned(
+                        &key,
+                        format!("unknown capability attribute: {other}"),
+                    ));
                 }
             }
 
@@ -37,14 +40,16 @@ impl syn::parse::Parse for CapabilityArgs {
 
         Ok(CapabilityArgs {
             id: id.ok_or_else(|| input.error("missing required attribute: id"))?,
-            description: description.ok_or_else(|| input.error("missing required attribute: description"))?,
+            description: description
+                .ok_or_else(|| input.error("missing required attribute: description"))?,
             version: version.ok_or_else(|| input.error("missing required attribute: version"))?,
         })
     }
 }
 
 fn validate_semver(version: &str) -> Result<::semver::Version, String> {
-    ::semver::Version::parse(version).map_err(|e| format!("invalid semver version '{version}': {e}"))
+    ::semver::Version::parse(version)
+        .map_err(|e| format!("invalid semver version '{version}': {e}"))
 }
 
 #[proc_macro_attribute]
@@ -62,14 +67,19 @@ pub fn capability(attr: TokenStream, item: TokenStream) -> TokenStream {
     let version = &args.version;
 
     if let Err(e) = validate_semver(version) {
-        return syn::Error::new_spanned(&item_struct, e).to_compile_error().into();
+        return syn::Error::new_spanned(&item_struct, e)
+            .to_compile_error()
+            .into();
     }
 
     let permissions = match permission::parse_permission_attrs(&item_struct.attrs) {
         Ok(p) => p,
         Err(e) => return e.to_compile_error().into(),
     };
-    let permission_tokens: Vec<proc_macro2::TokenStream> = permissions.iter().map(|p| p.to_permission_token_stream()).collect();
+    let permission_tokens: Vec<proc_macro2::TokenStream> = permissions
+        .iter()
+        .map(|p| p.to_permission_token_stream())
+        .collect();
 
     let expanded = quote! {
         #item_struct

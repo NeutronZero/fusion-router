@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
 use crate::release::fixture::*;
 use crate::release::gate::GateError;
+use std::path::{Path, PathBuf};
 
 /// Low-level fixture I/O shared by all backends and test helpers.
 /// Backends use this for manifest loading + file traversal, then construct their own domain types.
@@ -28,9 +28,9 @@ impl FixtureLoader {
     pub fn find_files(&self, dir: &Path, ext: &str) -> Result<Vec<PathBuf>, GateError> {
         let mut results = Vec::new();
         if dir.is_dir() {
-            for entry in std::fs::read_dir(dir)
-                .map_err(|e| GateError::ExecutionFailed(format!("read dir {}: {e}", dir.display())))?
-            {
+            for entry in std::fs::read_dir(dir).map_err(|e| {
+                GateError::ExecutionFailed(format!("read dir {}: {e}", dir.display()))
+            })? {
                 let entry = entry.map_err(|e| GateError::ExecutionFailed(e.to_string()))?;
                 if entry.path().extension().is_some_and(|e| e == ext) {
                     results.push(entry.path());
@@ -52,10 +52,7 @@ pub fn load_fixture_manifest(loader: &FixtureLoader) -> Result<FixtureManifest, 
 
 /// Discover fixture entries preserving **manifest declaration order**.
 /// Only sorts when no manifest is given and directory scanning is used (future).
-pub fn discover_fixtures(
-    manifest: &FixtureManifest,
-    kind: FixtureKind,
-) -> Vec<FixtureEntry> {
+pub fn discover_fixtures(manifest: &FixtureManifest, kind: FixtureKind) -> Vec<FixtureEntry> {
     let entries = match kind {
         FixtureKind::Configs => &manifest.configs,
         FixtureKind::Snapshots => &manifest.snapshots,
@@ -64,21 +61,28 @@ pub fn discover_fixtures(
         FixtureKind::Providers => &manifest.providers,
         FixtureKind::Connectors => &manifest.connectors,
     };
-    entries.iter().filter_map(|entry| {
-        let version = semver::Version::parse(&entry.version).ok()?;
-        let expected = entry.expected.as_ref().and_then(|e| match e.outcome.as_str() {
-            "pass" => Some(ExpectedOutcome::Pass),
-            "warning" => Some(ExpectedOutcome::Warning),
-            "fail" => Some(ExpectedOutcome::Fail),
-            _ => None,
-        }).unwrap_or(ExpectedOutcome::Pass);
-        Some(FixtureEntry {
-            id: entry.id.clone(),
-            version,
-            path: PathBuf::from(&entry.path),
-            expected,
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let version = semver::Version::parse(&entry.version).ok()?;
+            let expected = entry
+                .expected
+                .as_ref()
+                .and_then(|e| match e.outcome.as_str() {
+                    "pass" => Some(ExpectedOutcome::Pass),
+                    "warning" => Some(ExpectedOutcome::Warning),
+                    "fail" => Some(ExpectedOutcome::Fail),
+                    _ => None,
+                })
+                .unwrap_or(ExpectedOutcome::Pass);
+            Some(FixtureEntry {
+                id: entry.id.clone(),
+                version,
+                path: PathBuf::from(&entry.path),
+                expected,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 #[cfg(test)]
@@ -87,7 +91,8 @@ mod tests {
 
     #[test]
     fn test_load_manifest_success() {
-        let dir = std::env::temp_dir().join(format!("fusion_m2_fixture_loader_{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("fusion_m2_fixture_loader_{}", uuid::Uuid::new_v4()));
         let _ = std::fs::create_dir_all(dir.join("tests/fixtures"));
         let yaml = r#"
 configs:
@@ -119,7 +124,9 @@ configs:
                     id: Some("v0.10".into()),
                     version: "0.10.0".into(),
                     path: "configs/v0.10".into(),
-                    expected: Some(ExpectedOutcomeConfig { outcome: "pass".into() }),
+                    expected: Some(ExpectedOutcomeConfig {
+                        outcome: "pass".into(),
+                    }),
                 },
                 ManifestEntry {
                     id: Some("v0.9".into()),
@@ -145,7 +152,9 @@ configs:
                 id: Some("v0.10".into()),
                 version: "0.10.0".into(),
                 path: "configs/v0.10".into(),
-                expected: Some(ExpectedOutcomeConfig { outcome: "unknown".into() }),
+                expected: Some(ExpectedOutcomeConfig {
+                    outcome: "unknown".into(),
+                }),
             }],
             ..Default::default()
         };
@@ -155,7 +164,8 @@ configs:
 
     #[test]
     fn test_fixture_loader_find_files() {
-        let dir = std::env::temp_dir().join(format!("fusion_m2_find_files_{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("fusion_m2_find_files_{}", uuid::Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("a.yaml"), "a").unwrap();
         std::fs::write(dir.join("b.yml"), "b").unwrap();

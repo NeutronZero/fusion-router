@@ -3,10 +3,10 @@ pub mod consumers;
 pub mod payload;
 pub mod projection;
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 pub use bus::{BroadcastEventBus, EventBus};
 pub use payload::ExecutionEvent;

@@ -48,25 +48,23 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use crate::config::{
-        AppConfig, AuthConfig, CorsConfig, LoggingConfig,
-        RateLimitingConfig, ResourceConfig, ServerConfig, StrategyConfig, ToolsConfig,
-    };
     use crate::config::manager::{ConfigSnapshot, ConfigSubscriber};
+    use crate::config::{
+        AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig, ResourceConfig,
+        ServerConfig, StrategyConfig, ToolsConfig,
+    };
     use crate::feature_gate::config_subscriber::FeatureGateSubscriber;
     use crate::feature_gate::{FeatureConfig, FeatureDefinition, FeatureFlag, Stability};
     use crate::types::ModelCatalog;
 
-    const TEST_DEFINITIONS: &[FeatureDefinition] = &[
-        FeatureDefinition {
-            id: FeatureFlag::Streaming,
-            introduced: "0.1.0",
-            removed: None,
-            stability: Stability::Stable,
-            default_enabled: true,
-            description: "Enable streaming responses",
-        },
-    ];
+    const TEST_DEFINITIONS: &[FeatureDefinition] = &[FeatureDefinition {
+        id: FeatureFlag::Streaming,
+        introduced: "0.1.0",
+        removed: None,
+        stability: Stability::Stable,
+        default_enabled: true,
+        description: "Enable streaming responses",
+    }];
 
     fn minimal_app_config() -> AppConfig {
         AppConfig {
@@ -155,7 +153,3 @@ mod tests {
         assert!(subscriber.pending.read().is_none());
     }
 }
-
-
-
-

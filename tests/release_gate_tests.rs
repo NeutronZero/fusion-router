@@ -221,10 +221,7 @@ fn test_feature_registry_integration() {
     assert!(registry.is_effectively_enabled(FeatureFlag::Streaming));
 
     let mut config = HashMap::new();
-    config.insert(
-        "streaming".to_string(),
-        FeatureConfig { enabled: false },
-    );
+    config.insert("streaming".to_string(), FeatureConfig { enabled: false });
     registry.apply_config(&config);
 
     assert!(!registry.is_enabled(FeatureFlag::Streaming));

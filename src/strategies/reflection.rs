@@ -1,10 +1,8 @@
-use super::{Parallelism, StreamingMode, Strategy, StrategyDescriptor};
+use super::{Parallelism, Strategy, StrategyDescriptor, StreamingMode};
 use crate::compiler::context::CompilationContext;
 use crate::compiler::diagnostics::CompilerDiagnostic;
 use crate::compiler::ir::{PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind, StrategyIR};
-use crate::types::{
-    ArtifactKind, RetryPolicy,
-};
+use crate::types::{ArtifactKind, RetryPolicy};
 
 pub struct ReflectionStrategy {
     pub max_reflection_cycles: u32,
@@ -35,14 +33,22 @@ impl Strategy for ReflectionStrategy {
         }
     }
 
-    fn lower(&self, ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
+    fn lower(
+        &self,
+        ir: &StrategyIR,
+        ctx: &CompilationContext,
+    ) -> Result<PrimitiveGraph, CompilerDiagnostic> {
         let max_cycles = match ir {
             StrategyIR::Reflection { max_cycles } => *max_cycles,
             _ => self.max_reflection_cycles,
         };
 
         let mut graph = PrimitiveGraph::new("reflection_graph");
-        let model = ctx.available_models.first().cloned().unwrap_or_else(|| "default".into());
+        let model = ctx
+            .available_models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "default".into());
 
         graph.add_node(PrimitiveNode {
             id: "worker_1".into(),
@@ -83,7 +89,6 @@ impl Strategy for ReflectionStrategy {
 
         Ok(graph)
     }
-
 }
 
 #[cfg(test)]
@@ -95,7 +100,9 @@ mod tests {
     fn test_reflection_lowering() {
         let strategy = ReflectionStrategy::default();
         let ctx = CompilationContext::new();
-        let graph = strategy.lower(&StrategyIR::Reflection { max_cycles: 3 }, &ctx).unwrap();
+        let graph = strategy
+            .lower(&StrategyIR::Reflection { max_cycles: 3 }, &ctx)
+            .unwrap();
         assert_eq!(graph.nodes.len(), 4);
     }
 }

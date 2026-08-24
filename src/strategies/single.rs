@@ -1,4 +1,4 @@
-use super::{Parallelism, StreamingMode, Strategy, StrategyDescriptor};
+use super::{Parallelism, Strategy, StrategyDescriptor, StreamingMode};
 use crate::compiler::context::CompilationContext;
 use crate::compiler::diagnostics::CompilerDiagnostic;
 use crate::compiler::ir::{PrimitiveGraph, PrimitiveNode, PrimitiveNodeKind, StrategyIR};
@@ -21,9 +21,17 @@ impl Strategy for SingleStrategy {
         }
     }
 
-    fn lower(&self, _ir: &StrategyIR, ctx: &CompilationContext) -> Result<PrimitiveGraph, CompilerDiagnostic> {
+    fn lower(
+        &self,
+        _ir: &StrategyIR,
+        ctx: &CompilationContext,
+    ) -> Result<PrimitiveGraph, CompilerDiagnostic> {
         let mut graph = PrimitiveGraph::new("single_graph");
-        let model = ctx.available_models.first().cloned().unwrap_or_else(|| "default".into());
+        let model = ctx
+            .available_models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "default".into());
         graph.add_node(PrimitiveNode {
             id: "node_1".into(),
             kind: PrimitiveNodeKind::LLMGenerate { model, role: None },
@@ -31,7 +39,6 @@ impl Strategy for SingleStrategy {
         });
         Ok(graph)
     }
-
 }
 
 #[cfg(test)]
@@ -46,6 +53,9 @@ mod tests {
         let ctx = CompilationContext::new();
         let graph = strategy.lower(&StrategyIR::Single, &ctx).unwrap();
         assert_eq!(graph.nodes.len(), 1);
-        assert!(matches!(graph.nodes[0].kind, PrimitiveNodeKind::LLMGenerate { .. }));
+        assert!(matches!(
+            graph.nodes[0].kind,
+            PrimitiveNodeKind::LLMGenerate { .. }
+        ));
     }
 }

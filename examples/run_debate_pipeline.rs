@@ -1,5 +1,5 @@
 use fusion_router::compiler::context::CompilationContext;
-use fusion_router::compiler::ir::{StrategyIR, DebateRole};
+use fusion_router::compiler::ir::{DebateRole, StrategyIR};
 use fusion_router::strategies::debate::DebateStrategy;
 use fusion_router::strategies::single::SingleStrategy;
 use fusion_router::strategies::Strategy;
@@ -35,11 +35,15 @@ fn main() {
     };
 
     let descriptor = debate_strategy.descriptor();
-    println!("Strategy Descriptor: name={}, parallelism={:?}, requires_barrier={}", 
-        descriptor.name, descriptor.parallelism, descriptor.requires_barrier);
+    println!(
+        "Strategy Descriptor: name={}, parallelism={:?}, requires_barrier={}",
+        descriptor.name, descriptor.parallelism, descriptor.requires_barrier
+    );
 
     println!("\n--- Compiling StrategyIR -> PrimitiveGraph ---");
-    let graph = debate_strategy.lower(&ir, &ctx).expect("successful debate lowering");
+    let graph = debate_strategy
+        .lower(&ir, &ctx)
+        .expect("successful debate lowering");
 
     println!("PrimitiveGraph Hash: 0x{:x}", graph.compute_hash());
     println!("Primitive Nodes Count: {}", graph.nodes.len());
