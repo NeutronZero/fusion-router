@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -62,7 +62,11 @@ impl RateLimiter {
     }
 
     pub fn start_cleanup(&self) {
-        if self.cleanup_started.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+        if self
+            .cleanup_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
             return;
         }
 
@@ -106,11 +110,14 @@ impl RateLimiter {
             return Err(429);
         }
         let cfg = self.config.load();
-        let mut bucket = self.buckets.entry(client_id.to_string()).or_insert_with(|| Bucket {
-            tokens: cfg.burst_size as f64,
-            last_refill: Instant::now(),
-            last_access: Instant::now(),
-        });
+        let mut bucket = self
+            .buckets
+            .entry(client_id.to_string())
+            .or_insert_with(|| Bucket {
+                tokens: cfg.burst_size as f64,
+                last_refill: Instant::now(),
+                last_access: Instant::now(),
+            });
 
         self.refill_tokens(&mut bucket);
         bucket.last_access = Instant::now();
@@ -133,7 +140,10 @@ pub struct RateLimitReloader {
 
 impl RateLimitReloader {
     pub fn new(limiter: Arc<RateLimiter>) -> Self {
-        Self { limiter, staged: std::sync::Mutex::new(None) }
+        Self {
+            limiter,
+            staged: std::sync::Mutex::new(None),
+        }
     }
 }
 
@@ -166,12 +176,12 @@ pub async fn rate_limit_middleware(
 ) -> Result<Response, (StatusCode, String)> {
     // Production wiring inserts Arc<RateLimiter>; accept the bare type too so
     // tests can insert either form.
-    let limiter: Option<Arc<RateLimiter>> = if let Some(l) = req.extensions().get::<Arc<RateLimiter>>() {
-        Some(l.clone())
-    } else if let Some(l) = req.extensions().get::<RateLimiter>() {
-        Some(Arc::new(l.clone()))
-    } else {
-        None
+    let limiter: Option<Arc<RateLimiter>> = match req.extensions().get::<Arc<RateLimiter>>() {
+        Some(l) => Some(l.clone()),
+        None => req
+            .extensions()
+            .get::<RateLimiter>()
+            .map(|l| Arc::new(l.clone())),
     };
 
     let limiter = match limiter {
@@ -222,24 +232,23 @@ mod tests {
     #[test]
     fn test_client_identity_prefers_connect_info_over_spoofed_xff() {
         let mut req = test_req();
-        req.headers_mut().insert(
-            "x-forwarded-for",
-            HeaderValue::from_static("203.0.113.9"),
-        );
+        req.headers_mut()
+            .insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
         req.extensions_mut()
             .insert(ConnectInfo("1.2.3.4:5555".parse::<SocketAddr>().unwrap()));
 
         let id = client_identity(&req, None);
-        assert_eq!(id, "peer:1.2.3.4", "x-forwarded-for must never key a bucket");
+        assert_eq!(
+            id, "peer:1.2.3.4",
+            "x-forwarded-for must never key a bucket"
+        );
     }
 
     #[test]
     fn test_client_identity_ignores_spoofed_xff_without_connect_info() {
         let mut req = test_req();
-        req.headers_mut().insert(
-            "x-forwarded-for",
-            HeaderValue::from_static("203.0.113.9"),
-        );
+        req.headers_mut()
+            .insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
         assert_eq!(client_identity(&req, None), "unknown");
     }
 
@@ -286,7 +295,9 @@ mod tests {
 
         // A brand-new client past the cap is denied (bucket cap enforced);
         // an existing client keeps its bucket.
-        assert!(limiter.check_rate(&format!("client-{}", MAX_BUCKETS + 1)).is_err());
+        assert!(limiter
+            .check_rate(&format!("client-{}", MAX_BUCKETS + 1))
+            .is_err());
         assert!(limiter.check_rate("client-0").is_ok());
     }
 
