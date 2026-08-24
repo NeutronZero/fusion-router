@@ -146,6 +146,15 @@ impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
                         .to_string(),
                 }
             }
+            // Compile-time affordability check (estimate vs remaining quota):
+            // a quota rejection is the caller's problem to retry later, not a
+            // server fault — surface as 429 instead of 500.
+            CompilerError::ValidationError { pass, .. } if pass == "budget_optimisation" => {
+                RouterError::ResourceExhausted {
+                    request_id: ctx.request_id,
+                    details: e.to_string(),
+                }
+            }
             _ => RouterError::StageFailure {
                 stage: PipelineStage::Compilation,
                 request_id: ctx.request_id,

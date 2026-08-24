@@ -157,7 +157,14 @@ pub(crate) async fn stream_completed_response(
         Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"))
     }));
 
-    Sse::new(sse).into_response()
+    let mut resp = Sse::new(sse).into_response();
+    // Fallback transport marker (native path sets "native"); keeps the
+    // x-fusion-stream-mode contract consistent for clients.
+    resp.headers_mut().insert(
+        "x-fusion-stream-mode",
+        axum::http::HeaderValue::from_static("simulated"),
+    );
+    resp
 }
 
 /// Result of the shared pipeline: either a completed response or an already-

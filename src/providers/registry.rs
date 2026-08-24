@@ -167,11 +167,26 @@ impl ChatProvider for ProviderRegistry {
         request: &ChatCompletionRequest,
     ) -> anyhow::Result<ChatCompletionResponse> {
         let targets = self.get_matching_targets(&request.model);
-        let target = targets
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No matching provider for model: {}", request.model))?;
-        let provider = target.get_or_init().await?;
-        provider.chat_completion(request).await
+        let mut last_err: Option<anyhow::Error> = None;
+        for target in &targets {
+            if !target.can_execute() {
+                tracing::warn!(provider = %target.name, "circuit open, skipping");
+                continue;
+            }
+            let provider = target.get_or_init().await?;
+            match provider.chat_completion(request).await {
+                Ok(resp) => {
+                    target.record_success();
+                    return Ok(resp);
+                }
+                Err(e) => {
+                    tracing::warn!(provider = %target.name, error = %e, "provider failed, trying next");
+                    target.record_failure();
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no available providers for model: {}", request.model)))
     }
 
     async fn chat_stream(
@@ -179,11 +194,26 @@ impl ChatProvider for ProviderRegistry {
         request: &ChatCompletionRequest,
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ChatStreamChunk>>> {
         let targets = self.get_matching_targets(&request.model);
-        let target = targets
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No matching provider for model: {}", request.model))?;
-        let provider = target.get_or_init().await?;
-        provider.chat_stream(request).await
+        let mut last_err: Option<anyhow::Error> = None;
+        for target in &targets {
+            if !target.can_execute() {
+                tracing::warn!(provider = %target.name, "circuit open, skipping");
+                continue;
+            }
+            let provider = target.get_or_init().await?;
+            match provider.chat_stream(request).await {
+                Ok(stream) => {
+                    target.record_success();
+                    return Ok(stream);
+                }
+                Err(e) => {
+                    tracing::warn!(provider = %target.name, error = %e, "provider stream failed, trying next");
+                    target.record_failure();
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no available providers for model: {}", request.model)))
     }
 }
 
