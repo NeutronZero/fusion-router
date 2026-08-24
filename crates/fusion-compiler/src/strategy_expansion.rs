@@ -422,7 +422,7 @@ mod tests {
 
         for kind in built_in {
             let node = make_node(kind.clone());
-            let sg = expanded_subgraph(&node).expect(&format!("Strategy {kind:?} must expand"));
+            let sg = expanded_subgraph(&node).unwrap_or_else(|| panic!("Strategy {kind:?} must expand"));
             assert!(!sg.nodes.is_empty(), "Expanded subgraph for {kind:?} must not be empty");
         }
 

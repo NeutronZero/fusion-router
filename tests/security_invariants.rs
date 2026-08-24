@@ -5,7 +5,7 @@
 //! (no execution occurs).
 
 use axum::routing::post;
-use fusion_router::compiler::{build_compiler, Compiler};
+use fusion_router::compiler::build_compiler;
 use fusion_router::events::BroadcastEventBus;
 use fusion_router::executor::DefaultExecutor;
 use fusion_router::policy::ast::PolicyParser;
@@ -87,7 +87,7 @@ fn small_quota() -> Quota {
 }
 
 /// Policy IR denying `shell.exec` (ADR-034 / Law 2).
-fn deny_shell_policy() -> fusion_router::policy::ir::PolicyIR {
+fn deny_shell_policy() -> fusion_router::policy::ast::PolicyAST {
     let json_raw = r#"{
         "version": "1.0",
         "declarations": [
@@ -102,21 +102,29 @@ fn deny_shell_policy() -> fusion_router::policy::ir::PolicyIR {
         ]
     }"#;
     let (ast, _) = PolicyParser::parse_json(json_raw).unwrap();
-    fusion_router::policy::ir::PolicyIR::from_ast(&ast).unwrap()
+    ast
 }
 
 async fn spawn_plane(
     quota: Quota,
-    policy: Option<fusion_router::policy::ir::PolicyIR>,
+    policy: Option<fusion_router::policy::ast::PolicyAST>,
 ) -> String {
     let event_bus = Arc::new(BroadcastEventBus::new(64));
     let executor = Arc::new(DefaultExecutor::new(Arc::new(EchoProvider), HashMap::new()));
-    let compiler: Arc<dyn Compiler> = Arc::new(build_compiler(
+    let registry = Arc::new(fusion_router::policy::PolicyRegistry::new());
+    if let Some(ast) = policy {
+        for decl in ast.declarations {
+            let json = serde_json::to_string(&decl).unwrap();
+            registry.apply_policy(decl.name.clone(), decl.name, json);
+        }
+    }
+    let plane = build_execution_plane(
+        event_bus,
+        executor,
         ModelCatalog::default(),
         Arc::new(DefaultResourceManager::new(quota)),
-        policy,
-    ));
-    let plane = build_execution_plane(event_bus, executor, compiler);
+        registry,
+    );
     let app = axum::Router::new()
         .route("/v1/executions", post(execute_workflow_handler))
         .with_state(plane);
@@ -131,12 +139,13 @@ async fn spawn_plane(
 
 async fn spawn_plane_with(executor: Arc<dyn fusion_router::executor::Executor>) -> String {
     let event_bus = Arc::new(BroadcastEventBus::new(64));
-    let compiler: Arc<dyn Compiler> = Arc::new(build_compiler(
+    let plane = build_execution_plane(
+        event_bus,
+        executor,
         ModelCatalog::default(),
         Arc::new(DefaultResourceManager::new(generous_quota())),
-        None,
-    ));
-    let plane = build_execution_plane(event_bus, executor, compiler);
+        Arc::new(fusion_router::policy::PolicyRegistry::new()),
+    );
     let app = axum::Router::new()
         .route("/v1/executions", post(execute_workflow_handler))
         .with_state(plane);
@@ -307,7 +316,10 @@ async fn law1_build_compiler_produces_mandatory_passes() {
     let compiler = build_compiler(
         ModelCatalog::default(),
         Arc::new(DefaultResourceManager::new(generous_quota())),
-        Some(deny_shell_policy()),
+        Some(
+            fusion_router::policy::ir::PolicyIR::from_ast(&deny_shell_policy())
+                .expect("policy AST must normalize"),
+        ),
     );
     assert!(!compiler.passes.is_empty(), "Law 1: pass list must never be empty");
     let names: Vec<&str> = compiler.passes.iter().map(|p| p.name()).collect();
@@ -413,7 +425,7 @@ use fusion_router::executor::{DefaultExecutor, Executor};
             &self,
             request: &ChatCompletionRequest,
         ) -> anyhow::Result<ChatCompletionResponse> {
-            let has_tool_result = request.messages.last().map_or(false, |m| m.role == "tool");
+            let has_tool_result = request.messages.last().is_some_and(|m| m.role == "tool");
             let native_tool_calls = if has_tool_result {
                 None
             } else {
@@ -555,3 +567,4 @@ use fusion_router::executor::{DefaultExecutor, Executor};
         "non-allowlisted calls must be surfaced as text with a reason"
     );
 }
+

@@ -9,7 +9,7 @@ use futures::stream::{self, BoxStream};
 use futures::StreamExt;
 use uuid::Uuid;
 
-use super::chat::process_request;
+use super::chat::{process_request, ChatOutcome};
 use super::state::AppState;
 use crate::types::*;
 
@@ -51,10 +51,16 @@ pub async fn anthropic_messages(
     // Anthropic-format SSE events.
     tracing::info!("processing anthropic request through full pipeline");
 
-    let result = process_request(&state, &request, request_id).await;
+    let result = process_request(&state, &request, request_id, false).await;
 
     match result {
-        Ok(response) => {
+        Ok(outcome) => {
+            // Native OpenAI-format streams are not re-emitted here; the
+            // Anthropic endpoint keeps its own completed-result transport.
+            let response = match outcome {
+                ChatOutcome::Completed(r) => r,
+                ChatOutcome::Stream(_) => unreachable!("native streaming disabled for anthropic"),
+            };
             tracing::info!(request_id = %request_id, status = "success", stream = is_stream);
             if is_stream {
                 // Phase F: SSE transport adapter for Anthropic format

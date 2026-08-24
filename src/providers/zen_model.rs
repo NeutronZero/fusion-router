@@ -78,8 +78,6 @@ impl Model for ZenModel {
             message_count = req.messages.len(),
             roles = ?req.messages.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(),
             total_chars = req.messages.iter().map(|m| m.content.len()).sum::<usize>(),
-            last_message_preview = req.messages.last().map(|m| m.content.chars().take(120).collect::<String>()).unwrap_or_default(),
-            first_message_preview = req.messages.first().map(|m| m.content.chars().take(80).collect::<String>()).unwrap_or_default(),
             "zen request"
         );
 
@@ -107,7 +105,7 @@ impl Model for ZenModel {
         tracing::debug!(
             response_keys = ?body.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()),
             choices_len = body["choices"].as_array().map(|a| a.len()).unwrap_or(0),
-            content_type = body["choices"].as_array().and_then(|a| a.first()).map(|c| format!("{:?}", c["message"]["content"])).unwrap_or_default(),
+            content_present = body["choices"].as_array().and_then(|a| a.first()).map(|c| !c["message"]["content"].is_null()).unwrap_or(false),
             "zen raw response"
         );
         let id = body["id"].as_str().unwrap_or("zen-id").to_string();
@@ -229,3 +227,4 @@ mod tests {
         assert_eq!(out.choices[0].message.content, "");
     }
 }
+

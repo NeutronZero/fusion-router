@@ -66,6 +66,146 @@ impl EvidenceRepository for NoopEvidence {
     }
 }
 
+/// Provider that emits genuine incremental SSE chunks upstream.
+struct StreamingMockProvider;
+
+#[async_trait::async_trait]
+impl ChatProvider for StreamingMockProvider {
+    fn name(&self) -> &str { "stream-mock" }
+
+    async fn chat_completion(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> anyhow::Result<fusion_router::types::ChatCompletionResponse> {
+        Ok(fusion_router::types::ChatCompletionResponse {
+            id: "stream-mock-id".to_string(),
+            object: "chat.completion".to_string(),
+            created: chrono::Utc::now().timestamp(),
+            model: request.model.clone(),
+            choices: vec![fusion_router::types::Choice {
+                index: 0,
+                message: fusion_router::types::ChatMessage {
+                    role: "assistant".to_string(),
+                    content: "Hello from stream!".to_string(),
+                },
+                finish_reason: "stop".to_string(),
+            }],
+            native_tool_calls: None,
+            usage: Some(fusion_router::types::Usage {
+                prompt_tokens: 1, completion_tokens: 4, total_tokens: 5,
+            }),
+        })
+    }
+
+    async fn chat_stream(
+        &self,
+        _request: &ChatCompletionRequest,
+    ) -> anyhow::Result<futures::stream::BoxStream<'static, anyhow::Result<fusion_router::types::ChatStreamChunk>>> {
+        use fusion_router::types::ChatStreamChunk;
+        let pieces = ["Hello ", "from ", "stream!"];
+        let s = futures::stream::unfold(0usize, move |i| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+            if i < pieces.len() {
+                Some((
+                    Ok(ChatStreamChunk {
+                        content: Some(pieces[i].to_string()),
+                        finish_reason: None,
+                        usage: None,
+                    }),
+                    i + 1,
+                ))
+            } else if i == pieces.len() {
+                Some((
+                    Ok(ChatStreamChunk {
+                        content: None,
+                        finish_reason: Some("stop".into()),
+                        usage: Some(fusion_router::types::Usage {
+                            prompt_tokens: 1, completion_tokens: 4, total_tokens: 5,
+                        }),
+                    }),
+                    i + 1,
+                ))
+            } else {
+                None
+            }
+        });
+        Ok(Box::pin(s))
+    }
+}
+
+/// Behavioral streaming check: stream=true on a single-node graph must hit the
+/// upstream incrementally (native mode), not re-chunk a completed response.
+#[tokio::test]
+async fn test_native_streaming_end_to_end() {
+    let target = fusion_router::providers::router::ProviderTarget::new(
+        "stream-mock".into(),
+        fusion_router::providers::circuit_breaker::CircuitBreaker::new(3, 2, 5),
+        Box::new(|| Arc::new(StreamingMockProvider) as Arc<dyn ChatProvider + Send + Sync>),
+    );
+    let registry = Arc::new(fusion_router::providers::registry::ProviderRegistry::new(target));
+
+    let provider = Arc::new(StreamingMockProvider);
+    let resource_manager = DefaultResourceManager::new(Quota {
+        max_daily_cost: NanoUSD::from_nanos(100_000_000_000),
+        max_daily_tokens: 100000,
+        max_concurrent: 10,
+        provider_limits: Default::default(),
+    });
+    let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
+    let config = AppConfig::load("config/default.yaml").unwrap_or_else(|_| test_config());
+
+    let state = fusion_router::server::handlers::AppState::new(
+        provider,
+        resource_manager,
+        evidence,
+        config.clone(),
+        PathBuf::from("config/default.yaml"),
+        Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()),
+    )
+    .with_provider_registry(registry);
+
+    let app = Router::new()
+        .route("/v1/chat/completions", post(fusion_router::server::handlers::chat_completions))
+        .layer(TraceLayer::new_for_http())
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+    let client = reqwest::Client::new();
+    let started = std::time::Instant::now();
+    let resp = client
+        .post(format!("http://{addr}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("x-fusion-stream-mode").and_then(|v| v.to_str().ok()),
+        Some("native"),
+        "single-node graph must stream natively"
+    );
+    let body = resp.text().await.unwrap();
+    // Three upstream chunks must arrive as separate SSE events (plus usage and DONE)
+    assert!(body.contains("Hello"), "first chunk content missing");
+    assert!(body.contains("stream!"), "last content chunk missing");
+    assert!(body.contains("[DONE]"), "SSE terminator missing");
+    let data_events = body.matches("data:").count();
+    assert!(data_events >= 5, "expected >=5 SSE events (3 chunks + usage + DONE), got {data_events}");
+    // Upstream sleeps 15ms x 4 => total must reflect real streaming, not instant replay
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= std::time::Duration::from_millis(45),
+        "native stream should take at least chunk pacing time, took {elapsed:?}"
+    );
+}
 
 #[tokio::test]
 async fn test_chat_completion_endpoint() {
@@ -80,7 +220,7 @@ async fn test_chat_completion_endpoint() {
     let config = AppConfig::load("config/default.yaml").unwrap_or_else(|_| {
         AppConfig {
             unsafe_dev: false,
-            server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 8080, shutdown_timeout_secs: 30, cors: Default::default() },
+            server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 8080, shutdown_timeout_secs: 30, request_timeout_secs: 300, cors: Default::default() },
             resources: fusion_router::config::ResourceConfig {
                 max_daily_cost: fusion_router::types::NanoUSD::from_nanos(100_000_000_000),
                 max_daily_tokens: 100000,
@@ -137,6 +277,88 @@ async fn test_chat_completion_endpoint() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["object"], "chat.completion");
     assert!(body["choices"][0]["message"]["content"].as_str().unwrap().contains("Hello from mock"));
+}
+
+/// Behavioral Law 2/5 check: a policy created at runtime through the admin
+/// API must deny compilation of matching chat requests — no restart, no
+/// audit-only downgrade.
+#[tokio::test]
+async fn test_runtime_deny_policy_blocks_chat_completions() {
+    use fusion_router::operations::policy_admin::PolicyAdmin;
+    use fusion_router::policy::PolicyDeclaration;
+    use fusion_router::telemetry::audit::AuditLog;
+
+    let provider = Arc::new(MockProvider);
+    let resource_manager = DefaultResourceManager::new(Quota {
+        max_daily_cost: NanoUSD::from_nanos(100_000_000_000),
+        max_daily_tokens: 100000,
+        max_concurrent: 10,
+        provider_limits: Default::default(),
+    });
+    let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
+    let config = AppConfig::load("config/default.yaml")
+        .unwrap_or_else(|_| test_config());
+
+    let state = fusion_router::server::handlers::AppState::new(
+        provider,
+        resource_manager,
+        evidence,
+        config.clone(),
+        PathBuf::from("config/default.yaml"),
+        Arc::new(fusion_router::scheduler::connector_resolver::ConnectorResolver::new()),
+    );
+    let admin = PolicyAdmin::new(state.policy_registry.clone(), Arc::new(AuditLog::new(100)));
+
+    let app = Router::new()
+        .route("/v1/chat/completions", post(fusion_router::server::handlers::chat_completions))
+        .layer(TraceLayer::new_for_http())
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{addr}/v1/chat/completions");
+    let payload = serde_json::json!({
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "Hello"}]
+    });
+
+    // Baseline: no policies → success.
+    let resp = client.post(&url).json(&payload).send().await.unwrap();
+    assert_eq!(resp.status(), 200, "request must succeed before any policy exists");
+
+    // Operator creates a wildcard deny at runtime.
+    admin
+        .create_policy(PolicyDeclaration {
+            name: "deny-everything".into(),
+            priority: 100,
+            match_target: "*".into(),
+            effect: "deny".into(),
+            conditions: Default::default(),
+            annotations: Default::default(),
+        })
+        .expect("deny policy must be accepted");
+
+    // Same request must now be rejected with the policy denial surfaced.
+    let resp = client.post(&url).json(&payload).send().await.unwrap();
+    let status = resp.status();
+    assert!(
+        status.is_client_error() || status.is_server_error(),
+        "denied request must not succeed, got {status}"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let content = body["choices"][0]["message"]["content"].as_str().unwrap_or_default();
+    assert!(
+        content.contains("deny-everything") || content.contains("policy"),
+        "error must cite the denying rule, got: {content}"
+    );
+
+    // Removing the policy restores service without a restart.
+    admin.delete_policy("deny-everything").unwrap();
+    let resp = client.post(&url).json(&payload).send().await.unwrap();
+    assert_eq!(resp.status(), 200, "service must recover after policy removal");
 }
 
 #[tokio::test]
@@ -291,11 +513,11 @@ impl ChatProvider for MidMockProvider {
 fn test_config() -> AppConfig {
     AppConfig {
         unsafe_dev: false,
-        server: ServerConfig { host: "0.0.0.0".into(), port: 8080, shutdown_timeout_secs: 30, cors: CorsConfig::default() },
+        server: ServerConfig { host: "0.0.0.0".into(), port: 8080, shutdown_timeout_secs: 30, request_timeout_secs: 300, cors: CorsConfig::default() },
         resources: ResourceConfig { max_daily_cost: fusion_router::types::NanoUSD::from_nanos(100_000_000_000), max_daily_tokens: 100000, max_concurrent: 10, max_concurrent_nodes: 16, provider_limits: Default::default() },
         policies: vec![], providers: Default::default(),
         strategies: StrategyConfig { consensus_count: 3 }, tools: ToolsConfig::default(),
-        auth: AuthConfig { enabled: true, api_keys: vec!["test-key".into()] },
+        auth: AuthConfig { enabled: true, api_keys: vec!["test-key:operator".into(), "chat-key".into()] },
         rate_limiting: RateLimitingConfig::default(),
         logging: LoggingConfig::default(),
         model_catalog: Default::default(),
@@ -325,7 +547,7 @@ async fn test_middleware_stack_rejects_unauthenticated() {
         .layer(axum::Extension(rate_limiter))
         .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
         .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
-        .layer(axum::Extension(config.auth))
+        .layer(axum::Extension(fusion_router::middleware::auth::AuthHandle::from_config(&config.auth)))
         .layer(fusion_router::middleware::cors::cors_layer_from_config(&config.server.cors))
         .with_state(state);
 
@@ -372,7 +594,7 @@ async fn test_middleware_request_id_header() {
         .layer(axum::Extension(rate_limiter))
         .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
         .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
-        .layer(axum::Extension(config.auth))
+        .layer(axum::Extension(fusion_router::middleware::auth::AuthHandle::from_config(&config.auth)))
         .layer(fusion_router::middleware::cors::cors_layer_from_config(&config.server.cors))
         .with_state(state);
 
@@ -434,7 +656,7 @@ async fn test_health_ready_endpoints() {
         .layer(axum::Extension(rate_limiter))
         .layer(axum::middleware::from_fn(middleware::request_id::request_id_middleware))
         .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
-        .layer(axum::Extension(config.auth))
+        .layer(axum::Extension(fusion_router::middleware::auth::AuthHandle::from_config(&config.auth)))
         .layer(fusion_router::middleware::cors::cors_layer_from_config(&config.server.cors))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -506,14 +728,13 @@ async fn test_executions_and_operations_auth_enforcement() {
 
     let event_bus = Arc::new(BroadcastEventBus::new(64));
     let executor = Arc::new(DefaultExecutor::new(provider, HashMap::new()));
-    let plane_compiler: Arc<dyn fusion_router::compiler::Compiler> = Arc::new(
-        fusion_router::compiler::build_compiler(
-            config.model_catalog.clone(),
-            state.resource_manager.clone(),
-            None,
-        ),
+    let exec_plane = build_execution_plane(
+        event_bus,
+        executor,
+        config.model_catalog.clone(),
+        state.resource_manager.clone(),
+        state.policy_registry.clone(),
     );
-    let exec_plane = build_execution_plane(event_bus, executor, plane_compiler);
     let execution_routes = Router::new()
         .route("/v1/executions", post(execute_workflow_handler))
         .with_state(exec_plane);
@@ -524,7 +745,7 @@ async fn test_executions_and_operations_auth_enforcement() {
         .merge(operations_routes)
         .merge(execution_routes)
         .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
-        .layer(axum::Extension(config.auth));
+        .layer(axum::Extension(fusion_router::middleware::auth::AuthHandle::from_config(&config.auth)));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -561,7 +782,7 @@ async fn test_executions_and_operations_auth_enforcement() {
         .unwrap();
     assert_ne!(res.status(), reqwest::StatusCode::UNAUTHORIZED);
 
-    // 4. Valid API key GET /v1/operations/registry -> 200 OK
+    // 4. Valid operator key GET /v1/operations/registry -> 200 OK
     let res = client
         .get(format!("http://{}/v1/operations/registry", addr))
         .header("x-api-key", "test-key")
@@ -569,4 +790,17 @@ async fn test_executions_and_operations_auth_enforcement() {
         .await
         .unwrap();
     assert_eq!(res.status(), reqwest::StatusCode::OK);
+
+    // 5. A chat-scoped key is authenticated but forbidden on operator routes.
+    let res = client
+        .get(format!("http://{}/v1/operations/registry", addr))
+        .header("x-api-key", "chat-key")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+
+
+

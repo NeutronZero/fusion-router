@@ -1,12 +1,22 @@
 use async_trait::async_trait;
 
 mod intent_planner;
-pub mod resolver;
-pub mod workflow;
 
 pub use intent_planner::IntentPlanner;
 
 use crate::types::{EvidenceSnapshot, Policy, Requirements, WorkflowIR};
+
+/// Failure raised by planning. Surfaced to clients as a retryable 503.
+#[derive(Debug)]
+pub struct PlannerFailure(pub String);
+
+impl std::fmt::Display for PlannerFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "planning failed: {}", self.0)
+    }
+}
+
+impl std::error::Error for PlannerFailure {}
 
 #[async_trait]
 pub trait Planner: Send + Sync {
@@ -15,7 +25,7 @@ pub trait Planner: Send + Sync {
         requirements: &Requirements,
         policies: &[Policy],
         evidence: Option<&EvidenceSnapshot>,
-    ) -> WorkflowIR;
+    ) -> Result<WorkflowIR, PlannerFailure>;
 
     async fn plan_with_policy_version(
         &self,
@@ -23,7 +33,7 @@ pub trait Planner: Send + Sync {
         policies: &[Policy],
         evidence: Option<&EvidenceSnapshot>,
         _policy_version: u64,
-    ) -> WorkflowIR {
+    ) -> Result<WorkflowIR, PlannerFailure> {
         self.plan(requirements, policies, evidence).await
     }
 }
@@ -46,3 +56,4 @@ impl std::str::FromStr for PlannerMode {
         })
     }
 }
+

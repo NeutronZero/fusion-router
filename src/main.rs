@@ -15,7 +15,6 @@ mod scheduler;
 mod executor;
 mod strategies;
 mod providers;
-mod models;
 mod transport;
 mod resource;
 mod telemetry;
@@ -26,9 +25,7 @@ mod capability;
 mod policy;
 mod session;
 mod lifecycle;
-mod trigger;
 mod connectors;
-mod workflow;
 mod tools;
 mod security;
 mod cache;
@@ -136,20 +133,37 @@ async fn main() {
 
     let default_provider_name = config.providers.keys().next().cloned().unwrap_or_else(|| "default".to_string());
     let default_cfg = config.providers.get(&default_provider_name).cloned().unwrap_or_default();
-    let default_key = factory::resolve_api_key(&default_cfg, &default_provider_name, unsafe_dev)
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, provider = %default_provider_name, "API key resolution unconfigured");
+    let default_key = factory::resolve_api_key(&default_cfg, &default_provider_name, unsafe_dev).unwrap_or_else(|e| {
+        if unsafe_dev {
+            tracing::warn!(error = %e, provider = %default_provider_name, "API key resolution unconfigured (dev mode)");
             String::new()
-        });
+        } else {
+            eprintln!(
+                "refusing to start: provider '{default_provider_name}' has no resolvable API key ({e}). \
+                 Configure the key or pass --unsafe-dev for local development."
+            );
+            std::process::exit(1);
+        }
+    });
     let default_target = factory::create_provider_target("default", &default_cfg, default_key);
     let provider_registry = Arc::new(ProviderRegistry::new(default_target));
 
     for (name, cfg) in &config.providers {
-        let api_key = factory::resolve_api_key(cfg, name, unsafe_dev)
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, provider = %name, "API key resolution unconfigured");
-                String::new()
-            });
+        let api_key = match factory::resolve_api_key(cfg, name, unsafe_dev) {
+            Ok(k) => k,
+            Err(e) => {
+                if unsafe_dev {
+                    tracing::warn!(error = %e, provider = %name, "API key resolution unconfigured (dev mode)");
+                    String::new()
+                } else {
+                    eprintln!(
+                        "refusing to start: provider '{name}' has no resolvable API key ({e}). \
+                         Configure the key or pass --unsafe-dev for local development."
+                    );
+                    std::process::exit(1);
+                }
+            }
+        };
         let target = factory::create_provider_target(name, cfg, api_key);
         provider_registry.register_target(vec![name.clone() + "/"], target);
     }
@@ -160,6 +174,7 @@ async fn main() {
     let resource_manager = resource::DefaultResourceManager::new(config.to_quota());
 
     let evidence_repo = SqliteEvidenceRepository::new("fusion_telemetry.db")
+        .map(|repo| repo.with_snapshot_ttl(std::time::Duration::from_secs(30)))
         .unwrap_or_else(|e| {
             tracing::warn!(error = %e, "failed to open telemetry db, using no-op in-memory db");
             SqliteEvidenceRepository::new(":memory:").unwrap_or_else(|e2| {
@@ -167,6 +182,7 @@ async fn main() {
                 std::process::exit(1);
             })
         });
+    evidence_repo.spawn_retention(7);
 
     let host = config.server.host.clone();
     let port = config.server.port;
@@ -184,18 +200,14 @@ async fn main() {
         config.clone(),
         PathBuf::from(&config_path),
         connector_resolver.clone(),
-    );
+    )
+    .with_provider_registry(provider_registry.clone());
 
     // Law 5 / ADR-034: the execution plane compiles through the same
     // `build_compiler` pipeline as the chat path, with a budget pass reading
     // the shared resource manager instance (no empty pass list, no bypass).
-    let exec_plane_compiler: Arc<dyn crate::compiler::Compiler> = Arc::new(
-        crate::compiler::build_compiler(
-            config.model_catalog.clone(),
-            state.resource_manager.clone(),
-            None,
-        ),
-    );
+    // The compiler is built per execution with the live policy snapshot so
+    // runtime-created deny/approval rules are enforced immediately.
 
     state.config_manager.register_subscriber(Box::new(provider_registry.clone()));
     state.config_manager.register_subscriber(Box::new(
@@ -285,7 +297,9 @@ async fn main() {
     let exec_plane = crate::server::execution::build_execution_plane(
         event_bus,
         state.executor.clone(),
-        exec_plane_compiler,
+        state.model_catalog.clone(),
+        state.resource_manager.clone(),
+        state.policy_registry.clone(),
     );
     let execution_routes = axum::Router::new()
         .route("/v1/executions", axum::routing::post(crate::server::execution::execute_workflow_handler))
@@ -306,18 +320,44 @@ async fn main() {
     // ADR-035: the rate limiter sits INSIDE the auth layer so it keys on the
     // authenticated identity (set via ClientIdentity) rather than spoofable
     // headers; unauthenticated traffic falls back to the TCP peer address.
+    let mut rate_limiter_arc: Option<Arc<middleware::rate_limit::RateLimiter>> = None;
     if rate_limiting_enabled {
-        let limiter = middleware::rate_limit::RateLimiter::new(rate_limiting_config);
+        let limiter = Arc::new(middleware::rate_limit::RateLimiter::new(rate_limiting_config));
         limiter.start_cleanup();
+        rate_limiter_arc = Some(limiter.clone());
         app = app
             .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
             .layer(axum::Extension(limiter));
     }
 
+    // Auth is live-reloadable: key rotation applies on SIGHUP without restart.
+    let auth_handle = middleware::auth::AuthHandle::from_config(&auth_config);
+    state.config_manager.register_subscriber(Box::new(
+        middleware::auth::AuthReloader::new(auth_handle.clone()),
+    ));
+    if let Some(limiter) = rate_limiter_arc.clone() {
+        state.config_manager.register_subscriber(Box::new(
+            middleware::rate_limit::RateLimitReloader::new(limiter),
+        ));
+    }
+    tracing::info!(
+        operator_keys = auth_handle.load().keys.values().filter(|g| g.operator).count(),
+        total_keys = auth_handle.load().keys.len(),
+        "auth configured (chat keys implicit; ':operator' suffix grants operator scope)"
+    );
+
     let app = app
         .layer(axum::middleware::from_fn(middleware::auth::auth_middleware))
-        .layer(axum::Extension(auth_config))
+        .layer(axum::Extension(auth_handle))
         .layer(crate::middleware::cors::cors_layer_from_config(&cors_config));
+
+    // Server-wide envelope: bounded concurrent requests and a hard
+    // per-request timeout (also caps runaway streaming responses).
+    let request_timeout = std::time::Duration::from_secs(config.server.request_timeout_secs.max(1));
+    let max_inflight = (config.resources.max_concurrent as usize).max(1);
+    let app = app
+        .layer(tower_http::timeout::TimeoutLayer::new(request_timeout))
+        .layer(tower::limit::ConcurrencyLimitLayer::new(max_inflight));
 
     let addr = match format!("{}:{}", host, port).parse::<std::net::SocketAddr>() {
         Ok(addr) => addr,
@@ -402,6 +442,8 @@ async fn shutdown_signal() {
 
     tracing::info!("shutdown signal received, gracefully shutting down");
 }
+
+
 
 
 

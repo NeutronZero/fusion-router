@@ -3,8 +3,8 @@ use fusion_ir::{WorkflowBuilder, WorkflowMetadata, WorkflowNodeKind};
 use fusion_router::ir::adapter::{uuid_for, workflow_to_types};
 use fusion_router::types::IRNodeKind;
 
-/// Phase B conformance: validates that the compilation boundary preserves all
-/// semantic invariants defined in implementation_plan(1) Phase B.
+// Phase B conformance: validates that the compilation boundary preserves all
+// semantic invariants defined in implementation_plan(1) Phase B.
 
 /// Build a WorkflowIR containing all 9 contract kinds with full metadata.
 fn build_full_ir() -> fusion_ir::WorkflowIR {
@@ -30,7 +30,7 @@ fn build_full_ir() -> fusion_ir::WorkflowIR {
 
     for (id, kind, cap) in &kinds {
         builder = builder
-            .add_node(*id, *kind, *cap)
+            .add_node(id, *kind, *cap)
             .expect("add_node should succeed");
     }
 
@@ -119,7 +119,7 @@ fn invariant_semantic_capabilities_preserved() {
             }
             None => {
                 assert!(
-                    converted.config.get("capability").is_none(),
+                    !converted.config.contains_key("capability"),
                     "node {} should not have capability in config",
                     node.id()
                 );

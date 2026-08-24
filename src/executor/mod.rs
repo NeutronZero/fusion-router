@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 
-pub mod capability_executor;
 mod fusion_bridge;
 mod node_exec;
 pub use node_exec::DefaultExecutor;
@@ -15,3 +14,4 @@ pub trait Executor: Send + Sync {
         ctx: &NodeExecContext,
     ) -> NodeExecutionResult;
 }
+

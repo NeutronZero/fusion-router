@@ -1044,27 +1044,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fusion-api-internal"
-version = "0.14.5"
-dependencies = [
- "async-trait",
- "chrono",
- "fusion-core",
- "fusion-kernel",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "fusion-api-public"
-version = "0.14.5"
-dependencies = [
- "fusion-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "fusion-capability-macros"
 version = "0.14.5"
 dependencies = [
@@ -1094,11 +1073,8 @@ name = "fusion-compiler"
 version = "0.14.5"
 dependencies = [
  "async-trait",
- "fusion-api-internal",
  "fusion-core",
- "fusion-ir",
  "fusion-kernel",
- "fusion-runtime",
  "fusion-types",
  "serde",
  "serde_json",
@@ -1116,23 +1092,6 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "uuid",
-]
-
-[[package]]
-name = "fusion-infrastructure"
-version = "0.14.5"
-dependencies = [
- "chrono",
- "fusion-api-internal",
- "fusion-core",
- "fusion-kernel",
- "parking_lot",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1164,25 +1123,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "fusion-placement"
-version = "0.14.5"
-dependencies = [
- "chrono",
- "fusion-core",
- "fusion-ir",
- "fusion-kernel",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "fusion-planner"
 version = "0.14.5"
 dependencies = [
  "async-trait",
- "fusion-api-internal",
  "fusion-core",
  "fusion-ir",
  "fusion-kernel",
@@ -1235,22 +1179,17 @@ dependencies = [
  "dotenv",
  "fasteval",
  "flate2",
- "fusion-api-internal",
  "fusion-capability-sdk",
  "fusion-compiler",
  "fusion-core",
- "fusion-infrastructure",
  "fusion-ir",
  "fusion-kernel",
- "fusion-placement",
  "fusion-planner",
  "fusion-plugin-api",
  "fusion-plugin-echo",
  "fusion-runtime",
  "fusion-scheduler",
- "fusion-security",
  "fusion-types",
- "fusion-worker-protocol",
  "futures",
  "http 0.2.12",
  "libloading",
@@ -1277,7 +1216,7 @@ dependencies = [
  "tokio-util",
  "toml 0.8.23",
  "tonic",
- "tower 0.4.13",
+ "tower 0.5.3",
  "tower-http",
  "tracing",
  "tracing-opentelemetry",
@@ -1310,28 +1249,13 @@ version = "0.14.5"
 dependencies = [
  "async-trait",
  "chrono",
- "fusion-api-internal",
  "fusion-core",
- "fusion-kernel",
- "fusion-placement",
  "fusion-types",
  "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "fusion-security"
-version = "0.14.5"
-dependencies = [
- "base64 0.22.1",
- "fusion-core",
- "ring",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1344,27 +1268,6 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "uuid",
-]
-
-[[package]]
-name = "fusion-worker"
-version = "0.14.5"
-dependencies = [
- "fusion-core",
- "fusion-placement",
- "fusion-worker-protocol",
- "serde",
-]
-
-[[package]]
-name = "fusion-worker-protocol"
-version = "0.14.5"
-dependencies = [
- "chrono",
- "fusion-core",
- "fusion-placement",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2792,20 +2695,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ring"
-version = "0.17.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
-dependencies = [
- "cc",
- "cfg-if",
- "getrandom 0.2.17",
- "libc",
- "untrusted",
- "windows-sys 0.52.0",
-]
-
-[[package]]
 name = "rusqlite"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3582,6 +3471,7 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper 1.0.2",
  "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -3599,6 +3489,7 @@ dependencies = [
  "http-body 1.1.0",
  "http-body-util",
  "pin-project-lite",
+ "tokio",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -3772,12 +3663,6 @@ name = "unsafe-libyaml"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
-
-[[package]]
-name = "untrusted"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"

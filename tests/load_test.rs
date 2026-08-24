@@ -72,7 +72,7 @@ fn build_app(quota: &Quota) -> Router {
     let evidence: Arc<dyn EvidenceRepository + Send + Sync> = Arc::new(NoopEvidence);
     let config = AppConfig {
         unsafe_dev: false,
-        server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 0, shutdown_timeout_secs: 30, cors: Default::default() },
+        server: fusion_router::config::ServerConfig { host: "0.0.0.0".to_string(), port: 0, shutdown_timeout_secs: 30, request_timeout_secs: 300, cors: Default::default() },
         resources: fusion_router::config::ResourceConfig {
             max_daily_cost: quota.max_daily_cost,
             max_daily_tokens: quota.max_daily_tokens,
@@ -763,3 +763,6 @@ async fn test_budget_no_race_on_concurrent_reserve() {
         successes
     );
 }
+
+
+

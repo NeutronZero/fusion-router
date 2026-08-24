@@ -38,6 +38,7 @@ fn build_large_ir(node_count: usize) -> WorkflowIR {
         edges,
         metadata: IRMetadata {
             policy_applied: vec![],
+            policy_version: 0,
             estimated_cost: NanoUSD::from_micros((node_count * 10) as u64).unwrap_or(NanoUSD::ZERO),
             estimated_tokens: node_count as u64 * 100,
         },

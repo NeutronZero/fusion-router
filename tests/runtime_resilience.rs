@@ -1,9 +1,9 @@
-//! Runtime Resilience Operational Validation Suite (v0.14.4)
+//! Runtime Resilience Operational Validation Suite
 //!
-//! Exercises Invariant 12 single-worker lease exclusivity under crash recovery & partition scenarios.
+//! Exercises Invariant 12 single-worker lease exclusivity under crash recovery,
+//! using the lease manager preserved in `fusion_scheduler::leases`.
 
-use fusion_placement::ExecutionLeaseManager;
-use fusion_worker_protocol::{HeartbeatMessage, WorkerRegistryStore};
+use fusion_scheduler::leases::ExecutionLeaseManager;
 
 #[test]
 fn test_resilience_worker_crash_and_lease_failover() {
@@ -23,18 +23,18 @@ fn test_resilience_worker_crash_and_lease_failover() {
 }
 
 #[test]
-fn test_resilience_heartbeat_timeout_detection() {
-    let registry = WorkerRegistryStore::new();
+fn test_resilience_lease_renewal_and_revoked_failover_epoch_monotonicity() {
+    let lease_manager = ExecutionLeaseManager::new();
 
-    let heartbeat = HeartbeatMessage {
-        worker_id: "worker_1".into(),
-        epoch: 10,
-        cpu_utilization_pct: 45.0,
-        memory_available_mb: 16000,
-        active_executions: 3,
-        timestamp_ms: 10000,
-    };
+    let lease = lease_manager.grant_lease("exec_901", "node_ttl", "worker_a", 50_000).expect("grant");
+    assert_eq!(lease.epoch, 1);
+    assert!(lease_manager.renew_lease(&lease.lease_key), "live lease must renew");
+    assert!(!lease.is_expired(lease.granted_at_ms));
+    assert!(lease.is_expired(lease.granted_at_ms + 50_000), "TTL elapsed => expired");
 
-    // Heartbeat before registration returns false
-    assert!(!registry.heartbeat(heartbeat));
+    // Epoch must be monotonic per (exec,node) across crash/failover.
+    assert!(lease_manager.revoke_lease(&lease.lease_key), "crash => revoke");
+    let again = lease_manager.grant_lease("exec_901", "node_ttl", "worker_b", 50_000)
+        .expect("revoked lease allows new owner");
+    assert!(again.epoch > lease.epoch, "epoch must increase across owners");
 }

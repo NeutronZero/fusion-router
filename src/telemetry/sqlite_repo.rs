@@ -9,6 +9,8 @@ use crate::types::{EvidenceSnapshot, ExecutionRecord};
 
 pub struct SqliteEvidenceRepository {
     conn: Arc<Mutex<Connection>>,
+    snapshot_cache: Arc<tokio::sync::Mutex<Option<(std::time::Instant, EvidenceSnapshot)>>>,
+    snapshot_ttl: std::time::Duration,
 }
 
 impl SqliteEvidenceRepository {
@@ -34,12 +36,64 @@ pub fn new(path: &str) -> anyhow::Result<Self> {
         info!("SQLite evidence repository initialized at path: {}", path);
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            snapshot_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            snapshot_ttl: std::time::Duration::ZERO,
         })
+    }
+
+    /// Caches `snapshot()` results for the given TTL. The per-request evidence
+    /// read otherwise degrades into full-table aggregates on every chat call.
+    pub fn with_snapshot_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.snapshot_ttl = ttl;
+        self
+    }
+
+    /// Spawns an hourly background job deleting records older than
+    /// `max_age_days`. Without it the evidence table grows unboundedly and
+    /// every aggregate scan slows down with history.
+    pub fn spawn_retention(&self, max_age_days: u64) {
+        let conn = self.conn.clone();
+        let cutoff_base = (max_age_days.max(1) as i64) * 24 * 3600;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                let conn = conn.clone();
+                let res = tokio::task::spawn_blocking(move || {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    let cutoff = now.saturating_sub(cutoff_base);
+                    let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+                    conn.execute(
+                        "DELETE FROM execution_records WHERE timestamp < ?1",
+                        params![cutoff],
+                    )
+                })
+                .await;
+                match res {
+                    Ok(Ok(n)) if n > 0 => tracing::info!(deleted = n, "evidence retention pruned old records"),
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => tracing::warn!(error = %e, "evidence retention failed"),
+                    Err(e) => tracing::warn!(error = %e, "evidence retention task panicked"),
+                }
+            }
+        });
     }
 }
 
 #[async_trait]
 impl EvidenceRepository for SqliteEvidenceRepository {
+    async fn ping(&self) -> bool {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.query_row("SELECT 1", [], |_row| Ok(())).is_ok()
+        })
+        .await
+        .unwrap_or(false)
+    }
+
     async fn record(&self, entry: ExecutionRecord) -> anyhow::Result<()> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
@@ -68,7 +122,82 @@ impl EvidenceRepository for SqliteEvidenceRepository {
     }
 
     async fn snapshot(&self) -> anyhow::Result<EvidenceSnapshot> {
+        if !self.snapshot_ttl.is_zero() {
+            let cache = self.snapshot_cache.lock().await;
+            if let Some((at, snap)) = cache.as_ref() {
+                if at.elapsed() < self.snapshot_ttl {
+                    return Ok(snap.clone());
+                }
+            }
+            drop(cache);
+        }
+
         let conn = self.conn.clone();
+        let fresh = self.snapshot_uncached(&conn).await?;
+
+        if !self.snapshot_ttl.is_zero() {
+            let mut cache = self.snapshot_cache.lock().await;
+            *cache = Some((std::time::Instant::now(), fresh.clone()));
+        }
+        Ok(fresh)
+    }
+    async fn get_model_stats(&self, window_hours: u32) -> anyhow::Result<Vec<ModelPerformanceStats>> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+            let cutoff = if window_hours == 0 {
+                0i64
+            } else {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                now - (window_hours as i64 * 3600)
+            };
+
+            let mut stmt = conn.prepare(
+                "SELECT model,
+                        COUNT(*) as total_requests,
+                        SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_count,
+                        AVG(latency_ms) as avg_latency,
+                        CAST(AVG(cost) AS INTEGER) as avg_cost
+                 FROM execution_records
+                 WHERE timestamp >= ?1
+                 GROUP BY model",
+            )?;
+
+            let rows = stmt.query_map([cutoff], |row| {
+                let model: String = row.get(0)?;
+                let total_requests: i64 = row.get(1)?;
+                let success_count: i64 = row.get(2)?;
+                let avg_latency_ms: f64 = row.get::<_, Option<f64>>(3)?.unwrap_or(0.0);
+                let avg_cost = crate::types::NanoUSD::from_nanos(row.get::<_, Option<i64>>(4)?.unwrap_or(0).max(0) as u64);
+
+                Ok(ModelPerformanceStats {
+                    model,
+                    total_requests: total_requests as u64,
+                    success_count: success_count as u64,
+                    avg_latency_ms,
+                    avg_cost,
+                })
+            })?;
+
+            let mut stats = Vec::new();
+            for r in rows {
+                stats.push(r?);
+            }
+            Ok(stats)
+        })
+        .await?
+    }
+}
+
+impl SqliteEvidenceRepository {
+    async fn snapshot_uncached(
+        &self,
+        conn: &Arc<Mutex<Connection>>,
+    ) -> anyhow::Result<EvidenceSnapshot> {
+        let conn = conn.clone();
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
             let tx = conn.unchecked_transaction()?;
@@ -138,55 +267,6 @@ impl EvidenceRepository for SqliteEvidenceRepository {
         .await?
     }
 
-    async fn get_model_stats(&self, window_hours: u32) -> anyhow::Result<Vec<ModelPerformanceStats>> {
-        let conn = self.conn.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
-            let cutoff = if window_hours == 0 {
-                0i64
-            } else {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
-                now - (window_hours as i64 * 3600)
-            };
-
-            let mut stmt = conn.prepare(
-                "SELECT model,
-                        COUNT(*) as total_requests,
-                        SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_count,
-                        AVG(latency_ms) as avg_latency,
-                        CAST(AVG(cost) AS INTEGER) as avg_cost
-                 FROM execution_records
-                 WHERE timestamp >= ?1
-                 GROUP BY model",
-            )?;
-
-            let rows = stmt.query_map([cutoff], |row| {
-                let model: String = row.get(0)?;
-                let total_requests: i64 = row.get(1)?;
-                let success_count: i64 = row.get(2)?;
-                let avg_latency_ms: f64 = row.get::<_, Option<f64>>(3)?.unwrap_or(0.0);
-                let avg_cost = crate::types::NanoUSD::from_nanos(row.get::<_, Option<i64>>(4)?.unwrap_or(0).max(0) as u64);
-
-                Ok(ModelPerformanceStats {
-                    model,
-                    total_requests: total_requests as u64,
-                    success_count: success_count as u64,
-                    avg_latency_ms,
-                    avg_cost,
-                })
-            })?;
-
-            let mut stats = Vec::new();
-            for r in rows {
-                stats.push(r?);
-            }
-            Ok(stats)
-        })
-        .await?
-    }
 }
 
 #[cfg(test)]

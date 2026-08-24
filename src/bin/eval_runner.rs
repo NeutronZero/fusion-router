@@ -405,10 +405,10 @@ os.chdir(os.environ.get('EVAL_WORKDIR', '.'))
                 let stdout = child
                     .stdout
                     .as_mut()
-                    .and_then(|o| {
+                    .map(|o| {
                         let mut buf = String::new();
                         o.read_to_string(&mut buf).ok();
-                        Some(buf)
+                        buf
                     })
                     .unwrap_or_default();
                 break (stdout, status.success());
@@ -907,7 +907,7 @@ async fn run_condition_b(
     };
 
     // Let planner generate the IR (picks model, strategy structure)
-    let mut ir = planner.plan(&requirements, &[], None).await;
+    let mut ir = planner.plan(&requirements, &[], None).await.expect("planning");
 
     // Force all nodes to Single strategy (condition B = routing only, no multi-call)
     for node in &mut ir.nodes {
@@ -1048,7 +1048,7 @@ async fn run_condition_c(
     };
 
     // Full pipeline: planner picks model AND strategy
-    let ir = planner.plan(&requirements, &[], None).await;
+    let ir = planner.plan(&requirements, &[], None).await.expect("planning");
 
     // Compile (strategy expansion happens here)
     let mut graph = match compiler.compile(ir).await {
@@ -1605,3 +1605,4 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
+

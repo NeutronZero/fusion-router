@@ -5,6 +5,33 @@ use crate::telemetry::audit::{AuditLog, AuditEntry};
 use crate::operations::OperationError;
 use fusion_planner::PolicySnapshot;
 
+const VALID_EFFECTS: [&str; 3] = ["deny", "approval", "allow"];
+
+/// Fail-closed validation at the administrative boundary.
+fn validate_declaration(decl: &PolicyDeclaration) -> Result<(), OperationError> {
+    if decl.name.trim().is_empty() {
+        return Err(OperationError::Policy("policy name must not be empty".into()));
+    }
+    if decl.match_target.trim().is_empty() {
+        return Err(OperationError::Policy("policy match_target must not be empty".into()));
+    }
+    if !VALID_EFFECTS.contains(&decl.effect.as_str()) {
+        return Err(OperationError::Policy(format!(
+            "invalid effect '{}' (expected one of: deny, approval, allow)",
+            decl.effect
+        )));
+    }
+    Ok(())
+}
+
+fn parse_declaration(name: &str, id: &str, rule_json: &str) -> Result<PolicyDeclaration, OperationError> {
+    serde_json::from_str(rule_json).map_err(|e| {
+        OperationError::Policy(format!(
+            "stored policy '{name}' (id {id}) is corrupt: {e}"
+        ))
+    })
+}
+
 /// Thin administrative facade over the authoritative `PolicyRegistry`.
 ///
 /// All CRUD operations delegate to the registry, which maintains versioned
@@ -41,69 +68,64 @@ impl PolicyAdmin {
     }
 
     /// Lists all active policies as `PolicyDeclaration` values.
+    ///
+    /// Entries are deserialized from their stored declarations — the listed
+    /// effects/priorities/conditions are exactly what was created.
     pub fn list_policies(&self) -> Result<Vec<PolicyDeclaration>, OperationError> {
         let snap = self.registry.current_snapshot();
-        Ok(snap.policies.into_iter().map(|p| PolicyDeclaration {
-            name: p.name,
-            priority: 0,
-            match_target: p.rule.clone(),
-            effect: "allow".into(),
-            conditions: Default::default(),
-            annotations: Default::default(),
-        }).collect())
+        snap.policies
+            .iter()
+            .map(|p| parse_declaration(p.name.as_str(), p.id.as_str(), &p.rule))
+            .collect()
     }
 
     /// Gets a policy by name.
     pub fn get_policy(&self, name: &str) -> Result<Option<PolicyDeclaration>, OperationError> {
         let snap = self.registry.current_snapshot();
-        Ok(snap.policies.iter().find(|p| p.name == name).map(|p| PolicyDeclaration {
-            name: p.name.clone(),
-            priority: 0,
-            match_target: p.rule.clone(),
-            effect: "allow".into(),
-            conditions: Default::default(),
-            annotations: Default::default(),
-        }))
+        match snap.policies.iter().find(|p| p.name == name) {
+            Some(p) => Ok(Some(parse_declaration(&p.name, &p.id, &p.rule)?)),
+            None => Ok(None),
+        }
     }
 
-    /// Creates a new policy. Rejects duplicates by name.
+    /// Creates a new policy. Rejects duplicates by name and invalid effects.
     pub fn create_policy(&self, decl: PolicyDeclaration) -> Result<(), OperationError> {
+        validate_declaration(&decl)?;
         if self.registry.has_policy(&decl.name) {
             return Err(OperationError::Policy(format!("Policy '{}' already exists", decl.name)));
         }
-        self.registry.apply_policy(
-            decl.name.clone(),
-            decl.name.clone(),
-            decl.match_target.clone(),
-        );
-        self.audit_log.record(AuditEntry {
-            timestamp: chrono::Utc::now().timestamp(),
-            request_id: String::new(),
-            user_id: None,
-            action: format!("policy.create:{}", decl.name),
-            result: "ok".into(),
-            details: serde_json::json!(decl),
-        });
-        Ok(())
+        self.store(decl, "create")
     }
 
-    /// Updates an existing policy by name.
+    /// Updates an existing policy by name. Rejects invalid effects.
+    /// Policy names are immutable identifiers; delete and recreate to rename.
     pub fn update_policy(&self, name: &str, decl: PolicyDeclaration) -> Result<(), OperationError> {
+        validate_declaration(&decl)?;
         if !self.registry.has_policy(name) {
             return Err(OperationError::Policy(format!("Policy '{}' not found", name)));
         }
-        self.registry.apply_policy(
-            name.to_string(),
-            decl.name.clone(),
-            decl.match_target.clone(),
-        );
+        if decl.name != name {
+            return Err(OperationError::Policy(
+                "policy name is immutable; delete and recreate to rename".into(),
+            ));
+        }
+        self.store(decl, "update").map(|_| ())
+    }
+
+    fn store(&self, decl: PolicyDeclaration, action: &str) -> Result<(), OperationError> {
+        let rule_json = serde_json::to_string(&decl)
+            .map_err(|e| OperationError::Policy(format!("failed to encode policy: {e}")))?;
+        let audited_name = decl.name.clone();
+        let audited_decl = serde_json::json!(decl);
+        self.registry
+            .apply_policy(audited_name.clone(), audited_name.clone(), rule_json);
         self.audit_log.record(AuditEntry {
             timestamp: chrono::Utc::now().timestamp(),
             request_id: String::new(),
             user_id: None,
-            action: format!("policy.update:{}", name),
+            action: format!("policy.{action}:{audited_name}"),
             result: "ok".into(),
-            details: serde_json::json!(decl),
+            details: audited_decl,
         });
         Ok(())
     }
@@ -188,10 +210,10 @@ mod tests {
     fn test_update_policy() {
         let admin = test_admin();
         admin.create_policy(test_decl("original")).unwrap();
-        admin.update_policy("original", test_decl("updated")).unwrap();
+        admin.update_policy("original", test_decl("original")).unwrap();
         let snap = admin.current_snapshot();
-        assert_eq!(snap.policies.len(), 1);
-        assert_eq!(snap.policies[0].name, "updated");
+        assert_eq!(snap.policies.len(), 1, "update must replace, not duplicate");
+        assert_eq!(snap.policies[0].name, "original");
     }
 
     #[test]
@@ -220,5 +242,49 @@ mod tests {
         let snap = admin.current_snapshot();
         assert_eq!(snap.version, 2);
         assert_eq!(snap.policies.len(), 1);
+    }
+
+    #[test]
+    fn created_deny_policy_round_trips_with_real_effect() {
+        let admin = test_admin();
+        admin.create_policy(test_decl("deny-shell")).unwrap();
+        let listed = admin.list_policies().unwrap();
+        assert_eq!(listed[0].effect, "deny", "effect must survive storage");
+        assert_eq!(listed[0].match_target, "shell.exec");
+        assert_eq!(admin.get_policy("deny-shell").unwrap().unwrap().effect, "deny");
+    }
+
+    #[test]
+    fn create_rejects_invalid_effect_fail_closed() {
+        let admin = test_admin();
+        let mut decl = test_decl("bad");
+        decl.effect = "Deny".into();
+        assert!(admin.create_policy(decl).is_err(), "case mismatch must be rejected");
+        let mut decl2 = test_decl("bad2");
+        decl2.effect = "block".into();
+        assert!(admin.create_policy(decl2).is_err());
+        assert_eq!(admin.current_snapshot().policies.len(), 0, "nothing stored");
+    }
+
+    #[test]
+    fn update_stores_new_declaration_content() {
+        let admin = test_admin();
+        admin.create_policy(test_decl("p")).unwrap();
+        let mut updated = test_decl("p");
+        updated.effect = "approval".into();
+        updated.priority = 42;
+        admin.update_policy("p", updated).unwrap();
+        let got = admin.get_policy("p").unwrap().unwrap();
+        assert_eq!(got.effect, "approval");
+        assert_eq!(got.priority, 42);
+    }
+
+    #[test]
+    fn registry_policy_ir_sees_admin_created_deny() {
+        let admin = test_admin();
+        admin.create_policy(test_decl("deny-shell")).unwrap();
+        // The registry is the same instance the chat path reads from.
+        let ir = admin.registry.policy_ir().unwrap().expect("IR present");
+        assert_eq!(ir.rules[0].effect, crate::policy::ir::PolicyEffect::Deny);
     }
 }

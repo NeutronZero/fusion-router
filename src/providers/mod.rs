@@ -16,7 +16,6 @@ pub mod circuit_breaking_provider;
 pub mod registry;
 pub mod factory;
 pub mod provider_with_headers;
-pub mod capability_catalog;
 
 #[allow(unused_imports)]
 pub use registry::ProviderRegistry;
@@ -467,3 +466,4 @@ mod tests {
         assert!(super::native_tool_calls_from(&empty, "message", -1).is_none());
     }
 }
+

@@ -61,7 +61,7 @@ impl IntentPlanner {
                         ]);
                     }
                     ExecutionIntent::Constrained { max_cost } => {
-                        if max_cost.as_ref().map_or(false, |c| c.as_nanos() >= 20_000_000) {
+                        if max_cost.as_ref().is_some_and(|c| c.as_nanos() >= 20_000_000) {
                             capabilities.extend(["CodeGeneration".into(), "CodeGeneration".into(), "CodeReview".into()]);
                         } else {
                             capabilities.push("CodeGeneration".into());

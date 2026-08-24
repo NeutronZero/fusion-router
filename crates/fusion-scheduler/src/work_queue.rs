@@ -16,6 +16,8 @@ pub struct WorkQueue {
     total_incoming: HashMap<uuid::Uuid, usize>,
     satisfied_incoming: HashMap<uuid::Uuid, usize>,
     activated_edges: HashSet<(uuid::Uuid, uuid::Uuid)>,
+    /// Configurable dispatch cap; defaults to the historical 16.
+    max_concurrent_nodes: usize,
 }
 
 impl WorkQueue {
@@ -70,7 +72,14 @@ impl WorkQueue {
             total_incoming,
             satisfied_incoming: HashMap::new(),
             activated_edges: HashSet::new(),
+            max_concurrent_nodes: 16,
         }
+    }
+
+    /// Overrides the per-dispatch concurrency cap (dispatch loop truncation).
+    pub fn with_max_concurrent_nodes(mut self, n: usize) -> Self {
+        self.max_concurrent_nodes = n.max(1);
+        self
     }
 
     fn try_activate_downstream(&mut self, from: uuid::Uuid) {
@@ -106,8 +115,7 @@ impl WorkQueue {
             }
         }
 
-        let max_concurrent_nodes: usize = 16;
-        let available = max_concurrent_nodes.saturating_sub(self.in_progress.len());
+        let available = self.max_concurrent_nodes.saturating_sub(self.in_progress.len());
         if result.len() > available {
             result.truncate(available);
         }
@@ -384,3 +392,4 @@ mod tests {
         assert!(!queue.has_loop_back_edge(n1));
     }
 }
+

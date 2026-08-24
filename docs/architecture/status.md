@@ -1,7 +1,7 @@
 # FusionRouter Architecture Status
 
 > **Purpose:** Single entry point for contributors to understand the current project state.
-> **Last updated:** 2026-08-15
+> **Last updated:** 2026-08-24
 
 ---
 
@@ -43,6 +43,38 @@ The following 11 invariants are **release-blocking gates** (see [Release Gate Sp
 | C-CAP | Capability Federation & Registry Mirroring |
 | R-METER | Real-Time Metering & Resource Budgeting |
 | SEC-REL | Fail-Closed Policy Enforcement & Replay Attestation |
+
+---
+
+## 2026-08-24 Hardening & De-phantom Pass
+
+Enforcement, streaming, and operational-honesty changes (all behaviorally tested):
+
+- **Runtime policy enforcement is wired.** The compiler's `policy` pass is now attached per
+  request from the live `PolicyRegistry` snapshot (previously every production call site passed
+  `None`, and the chat pipeline downgraded policies to audit-only). Deny rules created via the
+  admin API block compilation with **403 `PolicyDenied`** citing the rule; malformed registry
+  entries fail closed.
+- **Native upstream streaming** for single-node graphs: chunks flow through `MeteredStream`
+  (mid-stream budget-breach termination; client disconnect releases the reservation and books
+  actual usage). Orchestrated graphs keep the re-chunked SSE transport (`x-fusion-stream-mode`
+  header distinguishes them).
+- **Live reload**: SIGHUP now hot-applies API keys/scopes and rate-limit settings in addition to
+  providers/connectors. Keys support an `operator` scope tier required for `/v1/operations/*`,
+  `/v1/executions`, and `/metrics`.
+- **Phantom subsystems removed.** Crates deleted: `fusion-worker`, `fusion-worker-protocol`,
+  `fusion-api-public`, `fusion-api-internal` (hardcoded replay engine), `fusion-infrastructure`,
+  `fusion-placement` (constant-score placement), `fusion-security`. Preserved pieces:
+  AES-GCM `SecretManager` → `src/security/secrets.rs`; `ExecutionLeaseManager` →
+  `fusion_scheduler::leases`. Dead monolith modules removed (ERI/ABI stack, trigger engine,
+  package loader, capability resolver, sandbox-adjacent orphans); ~10k LOC net reduction.
+- **Operational fixes**: planner failures return retryable 503 (no panic); `/ready` performs a
+  real DB ping + provider check; evidence snapshot cached (30s TTL) with a 7-day retention job;
+  server-wide request timeout (300s default) and concurrency envelope enforce
+  `resources.max_concurrent`; release builds refuse to boot when a provider key is unresolvable.
+
+ADR-006 and ADR-040 remain historical records; their reference implementations never existed as
+specified and were removed rather than half-wired.
 
 ---
 

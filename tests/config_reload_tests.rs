@@ -66,7 +66,7 @@ fn empty_config() -> AppConfig {
         server: ServerConfig {
             host: "0.0.0.0".into(),
             port: 8080,
-            shutdown_timeout_secs: 30,
+            shutdown_timeout_secs: 30,            request_timeout_secs: 300,
             cors: CorsConfig::default(),
         },
         resources: ResourceConfig {
@@ -414,3 +414,7 @@ async fn test_connector_invalid_type_rejected() {
         other => panic!("expected ReloadError::ConnectorError, got {other:?}"),
     }
 }
+
+
+
+

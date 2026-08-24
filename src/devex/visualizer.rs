@@ -1,4 +1,4 @@
-use crate::planner::resolver::capability::CapabilityGraph;
+use fusion_kernel::capability::graph::CapabilityGraph;
 
 pub struct GraphVisualizer;
 
@@ -69,7 +69,7 @@ impl GraphVisualizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::resolver::capability::CapabilityGraph;
+    use fusion_kernel::capability::graph::CapabilityGraph;
     use fusion_plugin_api::{CapabilityContract, CapabilityId};
     use serde_json::json;
 
@@ -115,3 +115,4 @@ mod tests {
         assert!(mermaid.contains("cap_a[cap.a]"));
     }
 }
+

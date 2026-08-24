@@ -148,6 +148,7 @@ pub enum PlatformError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ModelCatalog {
     pub code: String,
     pub debug: String,
@@ -159,20 +160,6 @@ pub struct ModelCatalog {
     pub cheap: String,
 }
 
-impl Default for ModelCatalog {
-    fn default() -> Self {
-        Self {
-            code: String::new(),
-            debug: String::new(),
-            architecture: String::new(),
-            general: String::new(),
-            creative: String::new(),
-            analysis: String::new(),
-            fast: String::new(),
-            cheap: String::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ModelRequirements {

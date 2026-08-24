@@ -98,6 +98,18 @@ impl PolicyRegistry {
         self.policies.read().len()
     }
 
+    /// Builds the compiler-facing `PolicyIR` from the current snapshot.
+    ///
+    /// `Ok(None)` when no policies are active (no policy pass is appended).
+    /// Fail-closed: a malformed stored rule is an error, not a skip.
+    pub fn policy_ir(&self) -> Result<Option<crate::policy::ir::PolicyIR>, String> {
+        let snap = self.current_snapshot();
+        if snap.policies.is_empty() {
+            return Ok(None);
+        }
+        crate::policy::ir::PolicyIR::from_policy_snapshot(&snap).map(Some)
+    }
+
     /// Checks if a policy with the given id exists.
     pub fn has_policy(&self, id: &str) -> bool {
         self.policies.read().iter().any(|p| p.id == id)
@@ -179,5 +191,40 @@ mod tests {
         assert!(!reg.has_policy("p1"));
         reg.apply_policy("p1".into(), "test".into(), "rule".into());
         assert!(reg.has_policy("p1"));
+    }
+
+    #[test]
+    fn policy_ir_is_none_when_no_policies() {
+        let reg = PolicyRegistry::new();
+        assert!(reg.policy_ir().unwrap().is_none());
+    }
+
+    #[test]
+    fn policy_ir_carries_deny_from_stored_declaration() {
+        let reg = PolicyRegistry::new();
+        let decl = crate::policy::ast::PolicyDeclaration {
+            name: "deny-shell".into(),
+            priority: 7,
+            match_target: "shell.exec".into(),
+            effect: "deny".into(),
+            conditions: Default::default(),
+            annotations: Default::default(),
+        };
+        reg.apply_policy(
+            "deny-shell".into(),
+            "deny-shell".into(),
+            serde_json::to_string(&decl).unwrap(),
+        );
+        let ir = reg.policy_ir().unwrap().expect("IR for non-empty registry");
+        assert_eq!(ir.rules.len(), 1);
+        assert_eq!(ir.rules[0].effect, crate::policy::ir::PolicyEffect::Deny);
+        assert_eq!(ir.rules[0].target_pattern, "shell.exec");
+    }
+
+    #[test]
+    fn policy_ir_fails_closed_on_corrupt_rule() {
+        let reg = PolicyRegistry::new();
+        reg.apply_policy("x".into(), "x".into(), "garbage".into());
+        assert!(reg.policy_ir().is_err(), "corrupt rules must fail closed");
     }
 }

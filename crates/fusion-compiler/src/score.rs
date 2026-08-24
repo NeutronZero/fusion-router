@@ -121,15 +121,11 @@ impl CapabilityScorer for StaticCapabilityScorer {
 
 /// Static health table; unknown providers score `1.0` (opt-in healthy
 /// hypothesis) — inject a table to model outages deterministically.
+#[derive(Default)]
 pub struct StaticHealthScorer {
     table: HashMap<String, f64>,
 }
 
-impl Default for StaticHealthScorer {
-    fn default() -> Self {
-        Self { table: HashMap::new() }
-    }
-}
 
 impl StaticHealthScorer {
     pub fn new(table: HashMap<String, f64>) -> Self {
@@ -180,15 +176,11 @@ impl LatencyScorer for StaticLatencyScorer {
 /// Static policy scorer: deny-listed providers score `0.0`, everything else
 /// scores `1.0`. This is a *soft report-side* score — the hard deny gate is
 /// `PolicyCompilerPass`.
+#[derive(Default)]
 pub struct StaticPolicyScorer {
     deny: HashSet<String>,
 }
 
-impl Default for StaticPolicyScorer {
-    fn default() -> Self {
-        Self { deny: HashSet::new() }
-    }
-}
 
 impl StaticPolicyScorer {
     pub fn deny(providers: &[&str]) -> Self {

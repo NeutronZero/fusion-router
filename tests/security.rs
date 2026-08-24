@@ -17,10 +17,7 @@ async fn test_api_key_bruteforce() {
     let app = Router::new()
         .route("/", get(|| async { "ok" }))
         .layer(axum::middleware::from_fn(auth_middleware))
-        .layer(axum::Extension(AuthConfig {
-            enabled: true,
-            api_keys: vec!["valid-key".into()],
-        }));
+        .layer(axum::Extension(fusion_router::middleware::auth::AuthHandle::from_config(&AuthConfig { enabled: true, api_keys: vec!["valid-key".into()], })));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -71,19 +68,18 @@ async fn test_v1_executions_auth_enforcement() {
 
     let event_bus = Arc::new(BroadcastEventBus::new(64));
     let executor = Arc::new(DefaultExecutor::new(Arc::new(DummyProvider), HashMap::new()));
-    let plane_compiler: Arc<dyn fusion_router::compiler::Compiler> = Arc::new(
-        fusion_router::compiler::build_compiler(
-            fusion_router::types::ModelCatalog::default(),
-            Arc::new(DefaultResourceManager::new(fusion_router::types::Quota {
-                max_daily_cost: fusion_router::types::NanoUSD::from_nanos(1_000_000_000_000),
-                max_daily_tokens: 1_000_000_000,
-                max_concurrent: 100,
-                provider_limits: Default::default(),
-            })),
-            None,
-        ),
+    let exec_plane = build_execution_plane(
+        event_bus,
+        executor,
+        fusion_router::types::ModelCatalog::default(),
+        Arc::new(DefaultResourceManager::new(fusion_router::types::Quota {
+            max_daily_cost: fusion_router::types::NanoUSD::from_nanos(1_000_000_000_000),
+            max_daily_tokens: 1_000_000_000,
+            max_concurrent: 100,
+            provider_limits: Default::default(),
+        })),
+        Arc::new(fusion_router::policy::PolicyRegistry::new()),
     );
-    let exec_plane = build_execution_plane(event_bus, executor, plane_compiler);
     let execution_routes = Router::new()
         .route("/v1/executions", post(execute_workflow_handler))
         .with_state(exec_plane);
@@ -91,10 +87,7 @@ async fn test_v1_executions_auth_enforcement() {
     let app = Router::new()
         .merge(execution_routes)
         .layer(axum::middleware::from_fn(auth_middleware))
-        .layer(axum::Extension(AuthConfig {
-            enabled: true,
-            api_keys: vec!["valid-key".into()],
-        }));
+        .layer(axum::Extension(fusion_router::middleware::auth::AuthHandle::from_config(&AuthConfig { enabled: true, api_keys: vec!["valid-key".into()], })));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -178,10 +171,7 @@ async fn test_v1_operations_auth_enforcement() {
     let app = Router::new()
         .merge(operations_routes)
         .layer(axum::middleware::from_fn(auth_middleware))
-        .layer(axum::Extension(AuthConfig {
-            enabled: true,
-            api_keys: vec!["valid-key".into()],
-        }));
+        .layer(axum::Extension(fusion_router::middleware::auth::AuthHandle::from_config(&AuthConfig { enabled: true, api_keys: vec!["operator-key:operator".into(), "chat-only-key".into()] })));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -214,14 +204,23 @@ async fn test_v1_operations_auth_enforcement() {
         );
     }
 
-    // Authenticated request to /v1/operations/registry -> Passes auth (200 OK)
+    // Authenticated operator request -> 200 OK
     let res = client
         .get(format!("http://{}/v1/operations/registry", addr))
-        .header("x-api-key", "valid-key")
+        .header("x-api-key", "operator-key")
         .send()
         .await
         .unwrap();
     assert_eq!(res.status(), reqwest::StatusCode::OK);
+
+    // A chat-scoped key must NOT reach the operations surface (scope tiering).
+    let res = client
+        .get(format!("http://{}/v1/operations/registry", addr))
+        .header("x-api-key", "chat-only-key")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -329,3 +328,4 @@ async fn test_oversized_payload() {
         .unwrap();
     assert_eq!(res.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
 }
+

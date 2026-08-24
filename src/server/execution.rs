@@ -32,23 +32,34 @@ pub struct ExecuteWorkflowRequest {
 /// Orchestrates a single workflow execution end-to-end.
 pub struct ExecutionPlane {
     bus: Arc<BroadcastEventBus>,
-    compiler: Arc<dyn Compiler>,
+    /// Builds a compiler per execution with the live policy snapshot attached,
+    /// so deny/approval rules created at runtime are enforced immediately.
+    compiler_factory: CompilerFactory,
+    policy_registry: Arc<crate::policy::PolicyRegistry>,
     scheduler: Arc<dyn Scheduler>,
     executor: Arc<dyn Executor>,
     lifecycle: Arc<LifecycleManager>,
 }
 
+/// Factory producing the mandatory pass pipeline, optionally with the policy
+/// pass appended (Law 2 / Law 5: deny ⇒ compile error).
+pub type CompilerFactory = Arc<
+    dyn Fn(Option<crate::policy::ir::PolicyIR>) -> Arc<dyn Compiler> + Send + Sync,
+>;
+
 impl ExecutionPlane {
     pub fn new(
         bus: Arc<BroadcastEventBus>,
-        compiler: Arc<dyn Compiler>,
+        compiler_factory: CompilerFactory,
+        policy_registry: Arc<crate::policy::PolicyRegistry>,
         scheduler: Arc<dyn Scheduler>,
         executor: Arc<dyn Executor>,
         lifecycle: Arc<LifecycleManager>,
     ) -> Self {
         Self {
             bus,
-            compiler,
+            compiler_factory,
+            policy_registry,
             scheduler,
             executor,
             lifecycle,
@@ -132,8 +143,11 @@ impl ExecutionPlane {
         )
         .await;
 
-        let graph = self
-            .compiler
+        let policy_ir = self.policy_registry.policy_ir().map_err(|e| {
+            format!("policy configuration rejected: {e}")
+        })?;
+        let compiler = (self.compiler_factory)(policy_ir);
+        let graph = compiler
             .compile(request.workflow.clone())
             .await
             .map_err(|e| format!("compilation failed: {e}"))?;
@@ -251,7 +265,7 @@ impl ExecutionPlane {
             .await;
 
             match instance.node_states.get(&node.id) {
-                Some(NodeState::Succeeded { .. }) => {
+                Some(NodeState::Succeeded) => {
                     let output = instance.outputs.get(&node.id).cloned().unwrap_or(json!({}));
                     self.emit(
                         &mut seq,
@@ -308,18 +322,29 @@ impl ExecutionPlane {
 
 /// Returns the production execution plane with an in-memory session store.
 ///
-/// Law 5 / ADR-034: the plane must receive a compiler built by
-/// `build_compiler` — the same mandatory pass pipeline as every other
-/// execution endpoint. An empty pass list is never accepted here.
+/// Law 5 / ADR-034: the plane compiles through a `build_compiler` factory —
+/// the same mandatory pass pipeline as every other execution endpoint, with
+/// the live policy snapshot attached per execution. An empty pass list is
+/// never accepted here.
 pub fn build_execution_plane(
     bus: Arc<BroadcastEventBus>,
     executor: Arc<dyn Executor>,
-    compiler: Arc<dyn Compiler>,
+    model_catalog: crate::types::ModelCatalog,
+    resource_manager: Arc<dyn crate::resource::ResourceManager>,
+    policy_registry: Arc<crate::policy::PolicyRegistry>,
 ) -> Arc<ExecutionPlane> {
     let lifecycle = Arc::new(LifecycleManager::new(Arc::new(InMemorySessionStore::new())));
+    let compiler_factory: CompilerFactory = Arc::new(move |policy_ir| {
+        Arc::new(crate::compiler::build_compiler(
+            model_catalog.clone(),
+            resource_manager.clone(),
+            policy_ir,
+        ))
+    });
     Arc::new(ExecutionPlane::new(
         bus,
-        compiler,
+        compiler_factory,
+        policy_registry,
         Arc::new(DefaultScheduler::new(4)),
         executor,
         lifecycle,
@@ -420,21 +445,15 @@ mod tests {
         }
     }
 
-    /// Law 5: test planes compile through the same `build_compiler` factory.
-    fn test_plane_compiler() -> Arc<dyn Compiler> {
-        Arc::new(crate::compiler::build_compiler(
-            crate::types::ModelCatalog::default(),
-            Arc::new(crate::resource::DefaultResourceManager::new(
-                crate::types::Quota {
-                    max_daily_cost: crate::types::NanoUSD::from_nanos(1_000_000_000_000),
-                    max_daily_tokens: 1_000_000_000,
-                    max_concurrent: 100,
-                    provider_limits: std::collections::HashMap::new(),
-                },
-            )),
-            None,
-        ))
+    fn quota_for_tests() -> crate::types::Quota {
+        crate::types::Quota {
+            max_daily_cost: crate::types::NanoUSD::from_nanos(1_000_000_000_000),
+            max_daily_tokens: 1_000_000_000,
+            max_concurrent: 100,
+            provider_limits: std::collections::HashMap::new(),
+        }
     }
+
 
     #[tokio::test]
     async fn test_execute_workflow_success_emits_events_and_outputs() {
@@ -443,7 +462,7 @@ mod tests {
             Arc::new(EchoProvider),
             HashMap::new(),
         ));
-        let plane = build_execution_plane(bus.clone(), executor, test_plane_compiler());
+        let plane = build_execution_plane(bus.clone(), executor, crate::types::ModelCatalog::default(), Arc::new(crate::resource::DefaultResourceManager::new(quota_for_tests())), Arc::new(crate::policy::PolicyRegistry::new()));
         let mut bus_rx = bus.subscribe();
 
         let request = ExecuteWorkflowRequest {
@@ -493,7 +512,7 @@ mod tests {
             Arc::new(FailingProvider),
             HashMap::new(),
         ));
-        let plane = build_execution_plane(bus, executor, test_plane_compiler());
+        let plane = build_execution_plane(bus, executor, crate::types::ModelCatalog::default(), Arc::new(crate::resource::DefaultResourceManager::new(quota_for_tests())), Arc::new(crate::policy::PolicyRegistry::new()));
 
         let request = ExecuteWorkflowRequest {
             trigger_name: "api-test".into(),
@@ -517,7 +536,7 @@ mod tests {
             Arc::new(EchoProvider),
             HashMap::new(),
         ));
-        let plane = build_execution_plane(bus, executor, test_plane_compiler());
+        let plane = build_execution_plane(bus, executor, crate::types::ModelCatalog::default(), Arc::new(crate::resource::DefaultResourceManager::new(quota_for_tests())), Arc::new(crate::policy::PolicyRegistry::new()));
         let app = axum::Router::new()
             .route("/v1/executions", post(execute_workflow_handler))
             .with_state(plane);
@@ -623,3 +642,6 @@ mod tests {
         );
     }
 }
+
+
+

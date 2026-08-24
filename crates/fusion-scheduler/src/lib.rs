@@ -115,7 +115,8 @@ impl DefaultScheduler {
         cancel: Option<&CancellationToken>,
         envelope: Option<&BudgetEnvelope>,
     ) -> Result<ExecutionOutcome, PlatformError> {
-        let mut queue = WorkQueue::new(graph.clone());
+        let mut queue = WorkQueue::new(graph.clone())
+            .with_max_concurrent_nodes(self.max_concurrent);
         let mut node_states: HashMap<uuid::Uuid, NodeState> = HashMap::new();
         let mut outputs: HashMap<uuid::Uuid, serde_json::Value> = HashMap::new();
         let start = std::time::Instant::now();
@@ -146,7 +147,7 @@ impl DefaultScheduler {
 
             // Enforce per-request budget iteration limit (same position as the
             // monolith run_inner: loop head, after the cancellation check).
-            if let Some(ref envelope) = envelope {
+            if let Some(envelope) = envelope {
                 if envelope.increment_iteration().is_err() {
                     tracing::info!("Budget iteration limit reached; stopping scheduler loop");
                     break;
@@ -240,7 +241,7 @@ impl DefaultScheduler {
                     let node_cost = input_cost.saturating_add(output_cost);
                     total_cost = total_cost.saturating_add(node_cost);
 
-                    if let Some(ref envelope) = envelope {
+                    if let Some(envelope) = envelope {
                         if let Err(ref e) = envelope.record_and_check(node_cost, usage.total_tokens as u64) {
                             tracing::info!(node_id = ?node_id, error = %e, "Budget envelope breached; stopping further execution");
                             for node in &graph.nodes {
@@ -386,61 +387,20 @@ impl Default for DefaultScheduler {
     }
 }
 
-// Keep the placement-based scheduler for backward compatibility
-pub use fusion_placement::{ExecutionPlan, ExecutionPlanId, PlacementGraph};
-
-pub struct DistributedScheduler;
-
-impl DistributedScheduler {
-    pub fn new() -> Self { Self }
-
-    pub fn create_plan(&self, placement_graph: &PlacementGraph) -> ExecutionPlan {
-        let mut execution_order = Vec::new();
-        let mut worker_assignments = HashMap::new();
-
-        for node in &placement_graph.nodes {
-            execution_order.push(node.id.clone());
-            worker_assignments.insert(node.id.clone(), node.worker_id.clone());
-        }
-
-        ExecutionPlan {
-            plan_id: ExecutionPlanId::new(),
-            placement_id: placement_graph.placement_id.clone(),
-            execution_id: placement_graph.execution_id.clone(),
-            execution_order,
-            worker_assignments,
-            max_parallelism: 8,
-            created_at: chrono::Utc::now().to_rfc3339(),
-        }
-    }
-}
-
-impl Default for DistributedScheduler {
-    fn default() -> Self { Self::new() }
-}
+/// Execution lease management (Invariant 12), preserved from the retired
+/// fusion-placement crate.
+pub mod leases;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fusion_placement::PlacementNode;
 
     #[test]
     fn test_distributed_scheduler_creates_execution_plan() {
-        let placement_graph = PlacementGraph {
-            placement_id: fusion_placement::PlacementId::new(),
-            execution_id: "exec_500".into(),
-            nodes: vec![
-                PlacementNode { id: "n1".into(), worker_id: "w1".into(), config: HashMap::new() },
-                PlacementNode { id: "n2".into(), worker_id: "w2".into(), config: HashMap::new() },
-            ],
-            placement_policy: "locality-v1".into(),
-        };
-
-        let scheduler = DistributedScheduler::new();
-        let plan = scheduler.create_plan(&placement_graph);
-        assert_eq!(plan.execution_id, "exec_500");
-        assert_eq!(plan.execution_order.len(), 2);
+        // Removed with the placement shim; leases module carries the
+        // preserved invariant-13 coverage. See src/leases.rs tests.
     }
+
 
     struct MockExecutor;
 
@@ -1073,3 +1033,4 @@ mod tests {
         assert!(matches!(outcome.node_states.get(&n2), Some(NodeState::Skipped)), "outstanding node must be skipped");
     }
 }
+

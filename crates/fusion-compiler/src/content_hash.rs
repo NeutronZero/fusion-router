@@ -25,7 +25,7 @@ pub fn compute_workflow_content_hash(ir: &WorkflowIR) -> u64 {
 
     mix_u64(&mut h, ir.plan_id.as_u128() as u64);
     mix_u64(&mut h, (ir.plan_id.as_u128() >> 64) as u64);
-    mix_u64(&mut h, ir.metadata.policy_version as u64);
+    mix_u64(&mut h, ir.metadata.policy_version);
     mix_u64(&mut h, ir.nodes.len() as u64);
 
     let mut nodes: Vec<_> = ir.nodes.iter().collect();

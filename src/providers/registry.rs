@@ -69,6 +69,15 @@ impl ProviderRegistry {
         self.capabilities.read().get(name).cloned()
     }
 
+    pub fn get_pricing(&self, name: &str) -> Option<super::ModelPricing> {
+        self.pricing.read().get(name).cloned()
+    }
+
+    /// Number of registered provider targets (default included).
+    pub fn target_count(&self) -> usize {
+        self.targets.read().len()
+    }
+
     pub fn update_capabilities(&self, name: &str, caps: super::ModelCapabilities) {
         let mut map = self.capabilities.write();
         if map.contains_key(name) {

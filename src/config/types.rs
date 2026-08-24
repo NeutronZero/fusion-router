@@ -41,8 +41,16 @@ pub struct ServerConfig {
     pub port: u16,
     #[serde(default = "default_shutdown_timeout")]
     pub shutdown_timeout_secs: u64,
+    /// Server-wide per-request ceiling. Streaming responses that exceed it
+    /// are cut; non-streaming requests fail with 504. Default 300s.
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
     #[serde(default)]
     pub cors: CorsConfig,
+}
+
+fn default_request_timeout_secs() -> u64 {
+    300
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -341,3 +349,6 @@ impl Default for ToolsConfig {
         }
     }
 }
+
+
+

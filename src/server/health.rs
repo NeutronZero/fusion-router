@@ -10,15 +10,24 @@ pub async fn health_handler() -> Json<Value> {
 pub async fn ready_handler(
     State(state): State<AppState>,
 ) -> (StatusCode, Json<Value>) {
+    // Real readiness signals only — no hardcoded "ok" placeholders.
+    let db_ok = state.evidence_repository.ping().await;
+    let providers_configured = state
+        .provider_registry
+        .as_ref()
+        .map(|r| r.target_count() > 0)
+        .unwrap_or(true);
+
     let checks = json!({
-        "database": "ok",
-        "plugins": "ok",
-        "providers": "ok",
+        "database": if db_ok { "ok" } else { "unavailable" },
+        "providers": if providers_configured { "ok" } else { "none-configured" },
     });
 
-    let _ = state; // placeholder for future real checks
-
-    (StatusCode::OK, Json(json!({"status": "ok", "checks": checks})))
+    if db_ok && providers_configured {
+        (StatusCode::OK, Json(json!({"status": "ok", "checks": checks})))
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"status": "unavailable", "checks": checks})))
+    }
 }
 
 #[cfg(test)]
@@ -37,6 +46,7 @@ mod tests {
                 host: "0.0.0.0".into(),
                 port: 0,
                 shutdown_timeout_secs: 30,
+                request_timeout_secs: 300,
                 cors: CorsConfig::default(),
             },
             resources: ResourceConfig {
@@ -81,3 +91,7 @@ mod tests {
         assert_eq!(res["status"], "ok");
     }
 }
+
+
+
+

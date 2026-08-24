@@ -112,7 +112,7 @@ pub struct StreamMeterReport {
 
 fn estimate_tokens(s: &str) -> u64 {
     let char_count = s.chars().count() as u64;
-    (char_count + 3) / 4
+    char_count.div_ceil(4)
 }
 
 #[cfg(test)]

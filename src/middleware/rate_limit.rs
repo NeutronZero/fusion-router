@@ -23,7 +23,7 @@ pub const MAX_BUCKETS: usize = 100_000;
 #[derive(Clone)]
 pub struct RateLimiter {
     buckets: Arc<DashMap<String, Bucket>>,
-    config: RateLimitingConfig,
+    config: Arc<arc_swap::ArcSwap<RateLimitingConfig>>,
     cleanup_started: Arc<AtomicBool>,
 }
 
@@ -56,7 +56,7 @@ impl RateLimiter {
     pub fn new(config: RateLimitingConfig) -> Self {
         Self {
             buckets: Arc::new(DashMap::new()),
-            config,
+            config: Arc::new(arc_swap::ArcSwap::from_pointee(config)),
             cleanup_started: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -67,7 +67,7 @@ impl RateLimiter {
         }
 
         let buckets = self.buckets.clone();
-        let interval_secs = self.config.cleanup_interval_secs.max(1);
+        let interval_secs = self.config.load().cleanup_interval_secs.max(1);
         let interval = Duration::from_secs(interval_secs);
         tokio::spawn(async move {
             loop {
@@ -86,11 +86,17 @@ impl RateLimiter {
     }
 
     fn refill_tokens(&self, bucket: &mut Bucket) {
+        let cfg = self.config.load();
         let now = Instant::now();
         let elapsed = now.duration_since(bucket.last_refill).as_secs_f64();
-        let rate = self.config.requests_per_minute as f64 / 60.0;
-        bucket.tokens = (bucket.tokens + elapsed * rate).min(self.config.burst_size as f64);
+        let rate = cfg.requests_per_minute as f64 / 60.0;
+        bucket.tokens = (bucket.tokens + elapsed * rate).min(cfg.burst_size as f64);
         bucket.last_refill = now;
+    }
+
+    /// Hot-applies new limiter settings (rpm/burst) without touching buckets.
+    pub fn update_config(&self, config: RateLimitingConfig) {
+        self.config.store(Arc::new(config));
     }
 
     pub fn check_rate(&self, client_id: &str) -> Result<(), u64> {
@@ -99,8 +105,9 @@ impl RateLimiter {
             // without bound (M2 / ADR-035). Cleanup reclaims stale buckets.
             return Err(429);
         }
+        let cfg = self.config.load();
         let mut bucket = self.buckets.entry(client_id.to_string()).or_insert_with(|| Bucket {
-            tokens: self.config.burst_size as f64,
+            tokens: cfg.burst_size as f64,
             last_refill: Instant::now(),
             last_access: Instant::now(),
         });
@@ -112,8 +119,43 @@ impl RateLimiter {
             bucket.tokens -= 1.0;
             Ok(())
         } else {
-            let retry_after = (1.0 / (self.config.requests_per_minute as f64 / 60.0)).ceil() as u64;
+            let retry_after = (1.0 / (cfg.requests_per_minute as f64 / 60.0)).ceil() as u64;
             Err(retry_after)
+        }
+    }
+}
+
+/// Reload subscriber hot-applying rate-limit settings.
+pub struct RateLimitReloader {
+    pub limiter: Arc<RateLimiter>,
+    staged: std::sync::Mutex<Option<RateLimitingConfig>>,
+}
+
+impl RateLimitReloader {
+    pub fn new(limiter: Arc<RateLimiter>) -> Self {
+        Self { limiter, staged: std::sync::Mutex::new(None) }
+    }
+}
+
+impl crate::config::manager::ConfigSubscriber for RateLimitReloader {
+    fn priority(&self) -> u8 {
+        2
+    }
+
+    fn prepare(
+        &self,
+        _old: &crate::config::manager::ConfigSnapshot,
+        new: &crate::config::manager::ConfigSnapshot,
+    ) -> Result<(), crate::config::error::ReloadError> {
+        *self.staged.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(new.config.rate_limiting.clone());
+        Ok(())
+    }
+
+    fn commit(&self, _generation: u64) {
+        if let Some(cfg) = self.staged.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.limiter.update_config(cfg);
+            tracing::info!("rate limiting settings hot-applied");
         }
     }
 }
@@ -129,7 +171,14 @@ pub async fn rate_limit_middleware(
 
     let limiter = match config {
         Some(l) => l,
-        None => return Ok(next.run(req).await),
+        // Fail closed (ADR-035): a router wiring this middleware without the
+        // limiter extension is a wiring bug, not an invitation.
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error": "rate limiting unavailable"}).to_string(),
+            ))
+        }
     };
 
     let path = req.uri().path();

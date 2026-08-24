@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use parking_lot::RwLock;
 
-use crate::compiler::DefaultCompiler;
 use crate::config::manager::ConfigManager;
 use crate::config::AppConfig;
 use crate::context::assembler::DefaultContextAssembler;
@@ -26,7 +25,6 @@ use crate::telemetry::EvidenceRepository;
 use crate::tools::builtin::{CalculatorTool, FileReadTool, SearchTool};
 use crate::tools::{HTTPRequestTool, ShellCommandTool, ToolRegistry};
 use crate::types::*;
-use crate::workflow::WorkflowRegistry;
 use crate::capability::CapabilityRegistry;
 
 #[derive(Clone)]
@@ -34,18 +32,21 @@ pub struct AppState {
     pub context_assembler: Arc<DefaultContextAssembler>,
     pub requirements_extractor: Arc<DefaultRequirementsExtractor>,
     pub planner: Arc<dyn Planner + Send + Sync>,
-    pub compiler: Arc<DefaultCompiler>,
     pub scheduler: Arc<DefaultScheduler>,
     pub executor: Arc<DefaultExecutor>,
     pub resource_manager: Arc<DefaultResourceManager>,
     pub evidence_repository: Arc<dyn EvidenceRepository + Send + Sync>,
     pub provider: Arc<dyn ChatProvider + Send + Sync>,
     pub config_manager: Arc<ConfigManager>,
-    pub workflow_registry: Arc<WorkflowRegistry>,
     pub tool_registry: Arc<ToolRegistry>,
     pub connector_resolver: Arc<ConnectorResolver>,
     pub policy_registry: Arc<crate::policy::PolicyRegistry>,
     pub capability_registry: Arc<dyn CapabilityRegistry>,
+    /// Model catalog used to rebuild the compiler per request so the policy
+    /// pass always reflects the live registry snapshot.
+    pub model_catalog: crate::types::ModelCatalog,
+    /// Concrete provider registry enabling native upstream streaming.
+    pub provider_registry: Option<Arc<crate::providers::registry::ProviderRegistry>>,
     planner_capability_snapshot: Arc<RwLock<fusion_kernel::CapabilityCatalog>>,
 }
 
@@ -61,21 +62,11 @@ impl AppState {
         let context_assembler = Arc::new(DefaultContextAssembler::new());
         let requirements_extractor = Arc::new(DefaultRequirementsExtractor);
 
-        let mut workflow_registry = WorkflowRegistry::new();
-        let _ = workflow_registry.load_dir("workflows");
-        let workflow_registry = Arc::new(workflow_registry);
-
         let intent_planner = crate::planner::IntentPlanner::new(config.model_catalog.clone());
         let planner_capability_snapshot = intent_planner.capability_snapshot.clone();
         let planner: Arc<dyn Planner + Send + Sync> = Arc::new(intent_planner);
 
         let resource_manager = Arc::new(resource_manager);
-
-        let compiler = Arc::new(crate::compiler::build_compiler(
-            config.model_catalog.clone(),
-            resource_manager.clone(),
-            None,
-        ));
 
         let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
         strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
@@ -142,34 +133,61 @@ impl AppState {
         );
 
         let scheduler = Arc::new(DefaultScheduler::new(
-            config.resources.max_concurrent_nodes as usize,
+            (config.resources.max_concurrent_nodes as usize).max(1),
         ));
 
-        let config_manager = Arc::new(ConfigManager::new(config_path, config, vec![]));
+        let config_manager = Arc::new(ConfigManager::new(config_path, config.clone(), vec![]));
         let policy_registry = Arc::new(crate::policy::PolicyRegistry::new());
 
         Self {
             context_assembler,
             requirements_extractor,
             planner,
-            compiler,
             scheduler,
             executor,
             resource_manager,
             evidence_repository,
             provider,
             config_manager,
-            workflow_registry,
             tool_registry,
             connector_resolver,
             policy_registry,
             capability_registry: Arc::new(crate::capability::InMemoryCapabilityRegistry::new()),
+            model_catalog: config.model_catalog.clone(),
+            provider_registry: None,
             planner_capability_snapshot,
         }
     }
 
+    /// Builds a compiler whose pass pipeline includes the live policy snapshot.
+    ///
+    /// `Some(ir)` appends the policy pass (deny ⇒ compile error, approval ⇒
+    /// gate insertion); `None` (no active policies) yields the mandatory base
+    /// passes only. Built per request so registry mutations take effect
+    /// immediately without a restart.
+    pub fn compiler_with_policies(
+        &self,
+        policy_ir: Option<crate::policy::ir::PolicyIR>,
+    ) -> Arc<dyn crate::compiler::Compiler + Send + Sync> {
+        Arc::new(crate::compiler::build_compiler(
+            self.model_catalog.clone(),
+            self.resource_manager.clone(),
+            policy_ir,
+        ))
+    }
+
     pub fn with_policy_registry(mut self, policy_registry: Arc<crate::policy::PolicyRegistry>) -> Self {
         self.policy_registry = policy_registry;
+        self
+    }
+
+    /// Attaches the concrete provider registry, enabling native upstream
+    /// streaming for eligible single-node graphs.
+    pub fn with_provider_registry(
+        mut self,
+        registry: Arc<crate::providers::registry::ProviderRegistry>,
+    ) -> Self {
+        self.provider_registry = Some(registry);
         self
     }
 
@@ -183,3 +201,5 @@ impl AppState {
         self
     }
 }
+
+

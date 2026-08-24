@@ -7,6 +7,7 @@ use crate::types::{
     WorkflowIR,
 };
 use crate::capability::CapabilityRegistry;
+use crate::planner::PlannerFailure;
 use std::sync::Arc;
 use parking_lot::RwLock;
 
@@ -140,7 +141,7 @@ impl Planner for IntentPlanner {
         requirements: &Requirements,
         policies: &[Policy],
         evidence: Option<&EvidenceSnapshot>,
-    ) -> WorkflowIR {
+    ) -> Result<WorkflowIR, PlannerFailure> {
         self.plan_with_policy_version(requirements, policies, evidence, 0).await
     }
 
@@ -150,17 +151,19 @@ impl Planner for IntentPlanner {
         policies: &[Policy],
         evidence: Option<&EvidenceSnapshot>,
         policy_version: u64,
-    ) -> WorkflowIR {
+    ) -> Result<WorkflowIR, PlannerFailure> {
 
-        let intent = requirements.execution_intent.clone().unwrap_or_else(|| {
+        let intent = requirements.execution_intent.clone().unwrap_or({
             match requirements.complexity {
                 ComplexityLevel::Critical => ExecutionIntent::Quality,
                 ComplexityLevel::High => ExecutionIntent::Balanced,
                 ComplexityLevel::Medium | ComplexityLevel::Low => ExecutionIntent::Speed,
             }
         });
+        // A planner failure is a service-capacity problem, not a panic:
+        // surface it as a retryable 503 instead of dropping the connection.
         self.plan_from_crates(&intent, requirements, policies, policy_version, evidence)
-            .unwrap_or_else(|e| panic!("Planning failure in fusion-planner for intent {:?}: {}", intent, e))
+            .map_err(PlannerFailure)
     }
 }
 
@@ -200,7 +203,7 @@ mod tests {
     #[tokio::test]
     async fn test_planning_is_snapshot_driven() {
         let planner = make_planner();
-        let ir = planner.plan(&make_reqs(Some(ExecutionIntent::Balanced)), &[], None).await;
+        let ir = planner.plan(&make_reqs(Some(ExecutionIntent::Balanced)), &[], None).await.unwrap();
         assert!(ir.nodes.iter().all(|n| n.model.is_some()));
         assert!(ir.metadata.policy_applied.contains(&"planner:synthesized".to_string()));
     }
@@ -209,7 +212,7 @@ mod tests {
     async fn test_quality_plan_node_kinds() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 5);
         assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
         assert_eq!(ir.nodes[0].strategy, StrategyKind::Single);
@@ -219,7 +222,7 @@ mod tests {
     async fn test_speed_plan_single_node() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Speed));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 1);
         assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
         assert_eq!(ir.nodes[0].strategy, StrategyKind::Single);
@@ -235,7 +238,7 @@ mod tests {
     async fn test_balanced_plan_three_nodes() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Balanced));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 3);
         assert_eq!(ir.nodes[0].kind, IRNodeKind::Generate);
         assert!(ir
@@ -249,7 +252,7 @@ mod tests {
     async fn test_exhaustive_plan_six_nodes() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 6);
         assert!(ir
             .metadata
@@ -263,7 +266,7 @@ mod tests {
     async fn test_exhaustive_plan_ends_with_consensus_judge() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         let last = ir.nodes.last().unwrap();
         assert_eq!(last.kind, IRNodeKind::Generate);
         assert_eq!(last.strategy, StrategyKind::Single);
@@ -278,7 +281,7 @@ mod tests {
             max_tokens: None,
             min_confidence: None,
         }));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 1);
     }
 
@@ -291,7 +294,7 @@ mod tests {
             max_tokens: None,
             min_confidence: None,
         }));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 3);
     }
 
@@ -304,7 +307,7 @@ mod tests {
             max_tokens: None,
             min_confidence: None,
         }));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 1);
     }
 
@@ -317,7 +320,7 @@ mod tests {
             max_tokens: None,
             min_confidence: None,
         }));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 3);
     }
 
@@ -326,7 +329,7 @@ mod tests {
         let planner = make_planner();
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::Critical;
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 5);
     }
 
@@ -335,7 +338,7 @@ mod tests {
         let planner = make_planner();
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::High;
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 3);
     }
 
@@ -344,7 +347,7 @@ mod tests {
         let planner = make_planner();
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::Medium;
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 1);
     }
 
@@ -353,14 +356,14 @@ mod tests {
         let planner = make_planner();
         let mut reqs = make_reqs(None);
         reqs.complexity = ComplexityLevel::Low;
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert_eq!(ir.nodes.len(), 1);
     }
 
     #[tokio::test]
     async fn test_planner_selects_model_inside_contract() {
         let planner = make_planner();
-        let ir = planner.plan(&make_reqs(None), &[], None).await;
+        let ir = planner.plan(&make_reqs(None), &[], None).await.unwrap();
         assert!(ir.nodes.iter().all(|node| node.model.is_some()));
     }
 
@@ -368,9 +371,9 @@ mod tests {
     async fn test_each_intent_produces_distinct_plan_ids() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
-        let ir1 = planner.plan(&reqs, &[], None).await;
+        let ir1 = planner.plan(&reqs, &[], None).await.unwrap();
         let reqs = make_reqs(Some(ExecutionIntent::Speed));
-        let ir2 = planner.plan(&reqs, &[], None).await;
+        let ir2 = planner.plan(&reqs, &[], None).await.unwrap();
         assert_ne!(ir1.plan_id, ir2.plan_id);
     }
 
@@ -378,7 +381,7 @@ mod tests {
     async fn test_plan_nodes_have_unique_ids() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         let mut ids: Vec<_> = ir.nodes.iter().map(|n| n.id).collect();
         ids.sort();
         ids.dedup();
@@ -389,7 +392,7 @@ mod tests {
     async fn test_speed_plan_has_no_edges() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Speed));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert!(
             ir.edges.is_empty(),
             "Speed plan should have no edges (single node)"
@@ -400,7 +403,7 @@ mod tests {
     async fn test_quality_plan_has_edges() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert!(!ir.edges.is_empty(), "multi-stage plan must have edges");
     }
 
@@ -408,7 +411,7 @@ mod tests {
     async fn test_balanced_plan_has_edges() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Balanced));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert!(!ir.edges.is_empty(), "multi-stage plan must have edges");
     }
 
@@ -416,7 +419,7 @@ mod tests {
     async fn test_exhaustive_plan_has_edges() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Exhaustive));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         assert!(!ir.edges.is_empty(), "multi-stage plan must have edges");
     }
 
@@ -424,7 +427,7 @@ mod tests {
     async fn test_edges_reference_valid_node_ids() {
         let planner = make_planner();
         let reqs = make_reqs(Some(ExecutionIntent::Quality));
-        let ir = planner.plan(&reqs, &[], None).await;
+        let ir = planner.plan(&reqs, &[], None).await.unwrap();
         let node_ids: std::collections::HashSet<_> = ir.nodes.iter().map(|n| n.id).collect();
         for edge in &ir.edges {
             assert!(
@@ -440,3 +443,5 @@ mod tests {
         }
     }
 }
+
+

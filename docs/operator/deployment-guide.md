@@ -56,6 +56,8 @@ The defaults are **fail-closed** (ADR-035, v0.13.1): a default install refuses t
 | Server host | `127.0.0.1` |
 | Server port | `8080` |
 | Shutdown timeout | 30 seconds |
+| Request timeout | 300 seconds (`server.request_timeout_secs`) — also caps runaway streaming responses |
+| Concurrency envelope | `resources.max_concurrent` in-flight requests server-wide (503 beyond) |
 | Log format | `text` (or `json`) |
 | Log level | `info` |
 | Authentication | enabled (requires at least one `api_keys` entry) |
@@ -65,9 +67,44 @@ The defaults are **fail-closed** (ADR-035, v0.13.1): a default install refuses t
 | HTTP tool | disabled (`enable_http_tool: false`) |
 | Semantic cache | enabled (default feature) |
 
+In release builds a provider whose API key cannot be resolved **refuses to boot**; the empty-key
+startup path exists only under `--unsafe-dev`.
+
 ### `--unsafe-dev` (development only)
 
 Release builds reject insecure combinations at startup: auth disabled, rate limiting disabled, wildcard CORS (`*`), non-empty shell allowlist, or the HTTP tool enabled — each fails `validate()` unless the server is started with `--unsafe-dev` (which logs a prominent warning and is never appropriate for a network-exposed deployment).
+
+## API keys & scopes
+
+Every entry in `auth.api_keys` is valid for the chat surface
+(`/v1/chat/completions`, `/v1/messages`). Append `:operator` to grant the
+**operator scope**, additionally required for:
+
+- `/v1/operations/*` (policies, dashboard, inspector, attestations)
+- `/v1/executions`
+- `/metrics`
+
+```yaml
+auth:
+  enabled: true
+  api_keys:
+    - "sk-chat-client"          # chat only
+    - "sk-ops-team:operator"    # chat + operator surfaces
+```
+
+Keys are compared in constant time; entries with unknown scope suffixes are rejected at load.
+
+## Live reload (SIGHUP)
+
+Sending SIGHUP hot-applies — no restart:
+
+- **API keys & scopes** (rotated-out keys are rejected on the next request)
+- **Rate-limit settings** (rpm/burst; existing buckets keep their state)
+- Provider registry and connector set
+
+Tool allowlists and scheduler concurrency still require a restart. The reload log lists what was applied.
+
+Tool allowlists and scheduler concurrency still require a restart. The reload log lists what was applied.
 
 ## Running the Server
 
@@ -94,7 +131,9 @@ The server handles `SIGTERM` (Unix) and `Ctrl+C` (all platforms). Outstanding re
 | Endpoint | Method | Description |
 |---|---|---|
 | `/health` | GET | Liveness probe — always returns `{"status": "ok"}` |
-| `/ready` | GET | Readiness probe — returns `{"status": "ok", "checks": {...}}` after validating database, plugins, and providers |
+| `/ready` | GET | Readiness probe — pings the telemetry database and verifies providers are configured; returns 503 with per-check status when unhealthy |
+
+`/metrics` requires an **operator-scoped key** (see API keys & scopes above).
 
 These can be used as container probes (see Dockerfile below) or load balancer health checks.
 

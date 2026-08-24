@@ -283,32 +283,11 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelCatalog {
-    pub code: String,
-    pub debug: String,
-    pub architecture: String,
-    pub general: String,
-    pub creative: String,
-    pub analysis: String,
-    pub fast: String,
-    pub cheap: String,
-}
+/// Canonical `ModelCatalog` lives in `fusion-core` and is re-exported here so
+/// the execution layer has a single definition (previously two independent,
+/// drift-prone copies).
+pub use fusion_core::ModelCatalog;
 
-impl Default for ModelCatalog {
-    fn default() -> Self {
-        Self {
-            code: String::new(),
-            debug: String::new(),
-            architecture: String::new(),
-            general: String::new(),
-            creative: String::new(),
-            analysis: String::new(),
-            fast: String::new(),
-            cheap: String::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Intent {

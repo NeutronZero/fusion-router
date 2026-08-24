@@ -114,7 +114,14 @@ pub struct PlanningStep {
 #[async_trait]
 impl PipelineStep<(Requirements, Option<EvidenceSnapshot>), WorkflowIR> for PlanningStep {
     async fn execute(&self, (reqs, evidence): (Requirements, Option<EvidenceSnapshot>), ctx: &mut PipelineContext) -> Result<WorkflowIR, RouterError> {
-        let ir = self.planner.plan_with_policy_version(&reqs, &self.policies, evidence.as_ref(), self.policy_version).await;
+        let ir = self
+            .planner
+            .plan_with_policy_version(&reqs, &self.policies, evidence.as_ref(), self.policy_version)
+            .await
+            .map_err(|e| RouterError::CapacityExceeded {
+                request_id: ctx.request_id,
+                details: e.to_string(),
+            })?;
         ctx.ir = Some(ir.clone());
         Ok(ir)
     }
@@ -127,12 +134,23 @@ pub struct CompilationStep {
 #[async_trait]
 impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
     async fn execute(&self, ir: WorkflowIR, ctx: &mut PipelineContext) -> Result<ExecutionGraph, RouterError> {
-        let mut graph = self.compiler.compile(ir).await.map_err(|e| {
-            RouterError::StageFailure {
+        let mut graph = self.compiler.compile(ir).await.map_err(|e| match &e {
+            CompilerError::ValidationError { pass, message, .. } if pass == "policy" => {
+                RouterError::PolicyDenied {
+                    request_id: ctx.request_id,
+                    rule_id: message
+                        .split("Policy rule '")
+                        .nth(1)
+                        .and_then(|rest| rest.split('\'').next())
+                        .unwrap_or("policy")
+                        .to_string(),
+                }
+            }
+            _ => RouterError::StageFailure {
                 stage: PipelineStage::Compilation,
                 request_id: ctx.request_id,
                 message: e.to_string(),
-            }
+            },
         })?;
 
         for node in &mut graph.nodes {
@@ -459,8 +477,9 @@ mod tests {
         let graph = step.execute(consensus_ir(), &mut ctx).await.unwrap();
 
         assert!(
-            graph.nodes[0].config.get("tool_allowlist").is_none(),
+            !graph.nodes[0].config.contains_key("tool_allowlist"),
             "no tools requested => no allowlist advertised (fail closed)"
         );
     }
 }
+

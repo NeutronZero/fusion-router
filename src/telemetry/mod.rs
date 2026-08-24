@@ -15,6 +15,10 @@ pub trait EvidenceRepository: Send + Sync {
     async fn record(&self, entry: ExecutionRecord) -> anyhow::Result<()>;
     async fn snapshot(&self) -> anyhow::Result<EvidenceSnapshot>;
     async fn get_model_stats(&self, window_hours: u32) -> anyhow::Result<Vec<ModelPerformanceStats>>;
+    /// Cheap liveness probe for `/ready`. Default: healthy (no backing store).
+    async fn ping(&self) -> bool {
+        true
+    }
 }
 
 mod sqlite_repo;
@@ -22,9 +26,7 @@ pub use sqlite_repo::SqliteEvidenceRepository;
 
 pub mod metrics;
 pub mod stream_metrics;
-pub mod connector_metrics;
 pub mod audit;
 pub mod tracing;
-pub mod calibration;
-pub mod unified_diagnostics;
+
 

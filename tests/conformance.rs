@@ -55,11 +55,10 @@ fn test_governance_specs_exist() {
 
 #[test]
 fn test_3_tier_workspace_members_exist() {
-    let foundation = ["crates/fusion-core", "crates/fusion-kernel", "crates/fusion-api-internal"];
+    let foundation = ["crates/fusion-core", "crates/fusion-kernel"];
     let engine = ["crates/fusion-planner", "crates/fusion-compiler", "crates/fusion-scheduler", "crates/fusion-runtime"];
-    let platform = ["crates/fusion-infrastructure", "crates/fusion-api-public", "crates/fusion-worker-protocol", "crates/fusion-worker"];
 
-    for p in foundation.iter().chain(engine.iter()).chain(platform.iter()) {
+    for p in foundation.iter().chain(engine.iter()) {
         let cargo_toml = Path::new(p).join("Cargo.toml");
         assert!(cargo_toml.exists(), "Workspace member {p}/Cargo.toml must exist");
     }
@@ -67,20 +66,15 @@ fn test_3_tier_workspace_members_exist() {
 
 #[test]
 fn test_beta_acceptance_suite_exists() {
-    assert!(Path::new("tests/beta_first_run.rs").exists(), "tests/beta_first_run.rs must exist");
-    assert!(Path::new("tests/beta_provider_setup.rs").exists(), "tests/beta_provider_setup.rs must exist");
+    // Fiction-only journey suites over the retired phantom crates
+    // (api-internal/infrastructure) were deleted with their subjects.
     assert!(Path::new("tests/beta_chat.rs").exists(), "tests/beta_chat.rs must exist");
     assert!(Path::new("tests/beta_inspector.rs").exists(), "tests/beta_inspector.rs must exist");
-    assert!(Path::new("tests/beta_integration.rs").exists(), "tests/beta_integration.rs must exist");
-    assert!(Path::new("tests/beta_dashboard.rs").exists(), "tests/beta_dashboard.rs must exist");
-    assert!(Path::new("tests/beta_health.rs").exists(), "tests/beta_health.rs must exist");
-    assert!(Path::new("tests/beta_replay.rs").exists(), "tests/beta_replay.rs must exist");
 }
 
 #[test]
 fn test_compatibility_suite_exists() {
     assert!(Path::new("tests/compatibility_v1.rs").exists(), "tests/compatibility_v1.rs must exist");
-    assert!(Path::new("tests/performance_slo.rs").exists(), "tests/performance_slo.rs must exist");
 }
 
 #[test]

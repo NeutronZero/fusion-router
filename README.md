@@ -76,7 +76,7 @@ docker run --env-file .env -p 8080:8080 fusion-router
 | `crates/fusion-scheduler` | Concurrent DAG scheduling |
 | `crates/fusion-runtime` | Node execution, tools, subgraphs |
 | `crates/fusion-core` / `fusion-kernel` | Errors, NanoUSD, resource contracts |
-| `crates/fusion-placement` / `fusion-worker*` | Distributed runtime direction (v0.15) |
+| `crates/fusion-scheduler::leases` | Execution lease manager (preserved Invariant 12 logic) |
 | `src/` | Host binary: HTTP, providers, policy registry, bridges |
 | `tests/` | E2E golden, contract wiring, security, release gates |
 | `docs/` | ADRs, architecture, debt register, roadmaps |
@@ -93,11 +93,15 @@ strategy_lowering
 dead_node_elimination
 model_resolution
 budget_optimisation
-[+ policy]                 # deny = compile error (Law 2)
+[+ policy]                 # attached per-request from the live PolicyRegistry snapshot;
+                           # deny = compile error → client gets 403 PolicyDenied (Law 2)
 → lower_to_graph           # attaches strategy subgraphs; sets content hash
 ```
 
-Streaming and non-streaming chat requests share this pipeline; SSE is a transport adapter over the completed result (Gate 08).
+Streaming requests take the native upstream path for single-node graphs (chunks flow through
+`MeteredStream`: mid-stream budget breach terminates the stream, client disconnect releases the
+reservation). Orchestrated multi-node graphs fall back to re-chunking the completed result
+(`x-fusion-stream-mode` header reports which transport served the request).
 
 ---
 

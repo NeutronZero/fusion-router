@@ -65,6 +65,12 @@ pub enum RouterError {
         request_id: Uuid,
         message: String,
     },
+    /// A policy rule deliberately denied compilation of this request.
+    /// Client-visible by design: access decisions must be explainable.
+    PolicyDenied {
+        request_id: Uuid,
+        rule_id: String,
+    },
 }
 
 impl fmt::Display for RouterError {
@@ -91,6 +97,9 @@ impl fmt::Display for RouterError {
             Self::Internal { request_id, message } => {
                 write!(f, "[{}] Internal error: {}", request_id, message)
             }
+            Self::PolicyDenied { request_id, rule_id } => {
+                write!(f, "[{}] Denied by policy rule '{}'", request_id, rule_id)
+            }
         }
     }
 }
@@ -107,6 +116,7 @@ impl RouterError {
             Self::BudgetExceeded { request_id, .. } => *request_id,
             Self::MaxIterationsExceeded { request_id, .. } => *request_id,
             Self::Internal { request_id, .. } => *request_id,
+            Self::PolicyDenied { request_id, .. } => *request_id,
         }
     }
 
@@ -119,6 +129,7 @@ impl RouterError {
             Self::BudgetExceeded { stage, .. } => Some(*stage),
             Self::MaxIterationsExceeded { stage, .. } => Some(*stage),
             Self::Internal { .. } => None,
+            Self::PolicyDenied { .. } => Some(PipelineStage::Compilation),
         }
     }
 
@@ -131,6 +142,7 @@ impl RouterError {
             Self::BudgetExceeded { .. } => axum::http::StatusCode::TOO_MANY_REQUESTS,
             Self::MaxIterationsExceeded { .. } => axum::http::StatusCode::TOO_MANY_REQUESTS,
             Self::Internal { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Self::PolicyDenied { .. } => axum::http::StatusCode::FORBIDDEN,
         }
     }
 
@@ -152,6 +164,9 @@ impl RouterError {
                 "workflow exceeded its iteration limit".to_string()
             }
             Self::Internal { .. } => "internal error".to_string(),
+            Self::PolicyDenied { rule_id, .. } => {
+                format!("request denied by policy rule '{rule_id}'")
+            }
         }
     }
 }

@@ -633,13 +633,13 @@ impl CompilerEngine {
             Some(0.0)
         };
 
-        let total_score = compute_total_score(
-            capability_score, WEIGHT_CAPABILITY,
-            budget_score, WEIGHT_BUDGET,
-            latency_score, WEIGHT_LATENCY,
-            health_score, WEIGHT_HEALTH,
-            policy_score, WEIGHT_POLICY,
-        );
+        let total_score = compute_total_score(&[
+            (capability_score, WEIGHT_CAPABILITY),
+            (budget_score, WEIGHT_BUDGET),
+            (latency_score, WEIGHT_LATENCY),
+            (health_score, WEIGHT_HEALTH),
+            (policy_score, WEIGHT_POLICY),
+        ]);
 
         ExplainRouteScore {
             provider_name: provider_name.to_string(),
@@ -905,27 +905,17 @@ impl CompilerPass for PolicyCompilerPass {
 // Scoring
 // ---------------------------------------------------------------------------
 
-fn compute_total_score(
-    cap: Option<f64>, w_cap: f64,
-    bud: Option<f64>, w_bud: f64,
-    lat: Option<f64>, w_lat: f64,
-    hea: Option<f64>, w_hea: f64,
-    pol: Option<f64>, w_pol: f64,
-) -> f64 {
-    let pairs: &[(Option<f64>, f64)] = &[
-        (cap, w_cap), (bud, w_bud), (lat, w_lat), (hea, w_hea), (pol, w_pol),
-    ];
-
-    let total_weight: f64 = pairs.iter()
-        .filter_map(|(score, weight)| score.map(|_| weight))
+fn compute_total_score(scored_metrics: &[(Option<f64>, f64)]) -> f64 {
+    let total_weight: f64 = scored_metrics.iter()
+        .filter_map(|(score, weight)| score.map(|_| *weight))
         .sum();
 
     if total_weight == 0.0 {
         return 0.0;
     }
 
-    let weighted_sum: f64 = pairs.iter()
-        .filter_map(|(score, weight)| score.map(|s| s * weight))
+    let weighted_sum: f64 = scored_metrics.iter()
+        .filter_map(|(score, weight)| score.map(|s| s * *weight))
         .sum();
 
     weighted_sum / total_weight
@@ -1140,10 +1130,7 @@ mod tests {
         let report = engine.compile("Code Generation", &ir).await.expect("Compile");
         assert_eq!(report.passes_executed.len(), 5);
         assert_eq!(report.pass_diffs.len(), 5);
-        // Verify per-pass timing is non-negative
-        for diff in &report.pass_diffs {
-            assert!(diff.duration_ms >= 0, "pass {} duration must be >= 0", diff.pass_name);
-        }
+        // duration_ms is unsigned; non-negativity is guaranteed by the type
     }
 
     #[tokio::test]
@@ -1161,13 +1148,13 @@ mod tests {
 
     #[test]
     fn test_total_score_zero_when_all_none() {
-        let total = compute_total_score(None, 0.3, None, 0.25, None, 0.2, None, 0.15, None, 0.1);
+        let total = compute_total_score(&[(None, 0.3), (None, 0.25), (None, 0.2), (None, 0.15), (None, 0.1)]);
         assert_eq!(total, 0.0);
     }
 
     #[test]
     fn test_total_score_renormalizes_weights() {
-        let total = compute_total_score(Some(0.8), 0.3, Some(0.6), 0.2, None, 0.2, None, 0.15, None, 0.1);
+        let total = compute_total_score(&[(Some(0.8), 0.3), (Some(0.6), 0.2), (None, 0.2), (None, 0.15), (None, 0.1)]);
         assert!((total - 0.72).abs() < 1e-10);
     }
 

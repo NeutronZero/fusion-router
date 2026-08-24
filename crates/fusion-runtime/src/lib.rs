@@ -34,8 +34,6 @@ pub struct ChatMessage {
     pub content: String,
 }
 
-/// A tool call emitted by a provider. Reuses `fusion_types::ToolCall`.
-
 /// Response from a chat provider.
 #[derive(Debug, Clone)]
 pub struct ChatResponse {
@@ -92,6 +90,12 @@ pub struct SpyProvider {
     response_prefix: String,
 }
 
+impl Default for SpyProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpyProvider {
     pub fn new() -> Self {
         Self {
@@ -122,8 +126,6 @@ impl ChatProvider for SpyProvider {
     }
 }
 
-/// Provider-backed executor that satisfies the scheduler's `Executor` trait.
-/// Routes each node's model string to the chat provider.
 // ---------------------------------------------------------------------------
 // Tools (Phase 4.5) — fail-closed by default
 // ---------------------------------------------------------------------------
@@ -504,7 +506,7 @@ impl ProviderExecutor {
                 let entry = serde_json::json!({
                     "name": call.name,
                     "arguments": call.arguments,
-                    "executed": !outcome.is_err(),
+                    "executed": outcome.is_ok(),
                     "error": outcome.is_err(),
                     "result": outcome.unwrap_or_else(|e| serde_json::json!({ "error": e })),
                 });
@@ -886,6 +888,7 @@ mod tests {
                         total_tokens: 15,
                     }),
                     tool_calls: vec![],
+                    tool_results: Vec::new(),
                 })
             }
         }
@@ -976,6 +979,7 @@ mod tests {
                         content: "fallback answer".into(),
                         usage: Some(Usage { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }),
                         tool_calls: vec![],
+                        tool_results: Vec::new(),
                     })
                 } else {
                     Err("primary down".into())
@@ -1154,6 +1158,7 @@ mod tests {
                         name: "echo".into(),
                         arguments: serde_json::json!({ "text": "hi" }),
                     }],
+                    tool_results: Vec::new(),
                 });
             }
             Ok(ChatResponse {
@@ -1164,6 +1169,7 @@ mod tests {
                     total_tokens: 15,
                 }),
                 tool_calls: vec![],
+                tool_results: Vec::new(),
             })
         }
     }
@@ -1220,9 +1226,18 @@ mod tests {
         let node = tool_node(HashMap::new());
         let result = executor.execute_node(&node, &NodeExecContext::default()).await;
         assert!(
-            matches!(&result.state, NodeState::Failed(msg) if msg.contains("allowlist")),
-            "tool outside allowlist must fail closed, got {:?}",
+            matches!(&result.state, NodeState::Succeeded),
+            "deny must not abort the node, got {:?}",
             result.state
+        );
+        let output = result.output.expect("succeeded node must carry output");
+        let entry = &output["tool_calls"][0];
+        assert_eq!(entry["executed"], serde_json::json!(false), "tool must not execute");
+        assert_eq!(entry["error"], serde_json::json!(true));
+        assert!(
+            entry["reason"].as_str().unwrap().contains("allowlist"),
+            "reason must cite the allowlist, got {}",
+            entry["reason"]
         );
     }
 
@@ -1236,9 +1251,18 @@ mod tests {
         )]));
         let result = executor.execute_node(&node, &NodeExecContext::default()).await;
         assert!(
-            matches!(&result.state, NodeState::Failed(msg) if msg.contains("not registered")),
-            "unregistered tool must fail closed, got {:?}",
+            matches!(&result.state, NodeState::Succeeded),
+            "unregistered-tool deny must not abort the node, got {:?}",
             result.state
+        );
+        let output = result.output.expect("succeeded node must carry output");
+        let entry = &output["tool_calls"][0];
+        assert_eq!(entry["executed"], serde_json::json!(false), "tool must not execute");
+        assert_eq!(entry["error"], serde_json::json!(true));
+        assert!(
+            entry["reason"].as_str().unwrap().contains("not registered"),
+            "reason must cite registration failure, got {}",
+            entry["reason"]
         );
     }
 
@@ -1280,6 +1304,7 @@ mod tests {
                         name: "echo".into(),
                         arguments: serde_json::json!({}),
                     }],
+                    tool_results: Vec::new(),
                 })
             }
         }
@@ -1425,6 +1450,7 @@ mod tests {
                 content: format!("mock response for model {}", request.model),
                 usage: Some(Usage { prompt_tokens: 50, completion_tokens: 25, total_tokens: 75 }),
                 tool_calls: vec![],
+                tool_results: Vec::new(),
             })
         }
     }

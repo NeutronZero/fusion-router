@@ -105,6 +105,7 @@ mod tests {
                 host: "0.0.0.0".into(),
                 port: 8080,
                 shutdown_timeout_secs: 30,
+                request_timeout_secs: 300,
                 cors: crate::config::CorsConfig::default(),
             },
             resources: crate::config::ResourceConfig {
@@ -200,3 +201,8 @@ mod tests {
         assert_eq!(names[0], "http");
     }
 }
+
+
+
+
+

@@ -6,7 +6,6 @@ pub mod crates_adapter;
 pub mod connector_health;
 pub mod connector_resolver;
 pub mod connector_subscriber;
-pub mod distributed;
 
 #[async_trait]
 pub trait Scheduler: Send + Sync {
@@ -27,3 +26,4 @@ pub trait Scheduler: Send + Sync {
         self.run(instance, executor).await
     }
 }
+

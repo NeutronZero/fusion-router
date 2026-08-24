@@ -37,6 +37,7 @@ mod tests {
                 host: "0.0.0.0".into(),
                 port: 0,
                 shutdown_timeout_secs: 30,
+                request_timeout_secs: 300,
                 cors: CorsConfig::default(),
             },
             resources: ResourceConfig {
@@ -154,3 +155,7 @@ mod tests {
         assert_eq!(anthropic_resp.usage.output_tokens, 8);
     }
 }
+
+
+
+

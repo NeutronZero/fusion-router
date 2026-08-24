@@ -156,6 +156,7 @@ mod tests {
                 host: "0.0.0.0".into(),
                 port: 8080,
                 shutdown_timeout_secs: 30,
+                request_timeout_secs: 300,
                 cors: CorsConfig::default(),
             },
             resources: ResourceConfig {
@@ -434,3 +435,8 @@ resources:
         let _ = std::fs::remove_file(&path);
     }
 }
+
+
+
+
+

@@ -51,19 +51,19 @@ async fn test_intent_planner_host_shim_delegation_parity() {
     };
 
     // Quality Intent Parity
-    let monolith_quality = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Quality)), &[], None).await;
+    let monolith_quality = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Quality)), &[], None).await.expect("quality plan");
     let crate_quality = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Quality)).expect("crate quality plan");
     assert_eq!(monolith_quality.nodes.len(), 5);
     assert_eq!(crate_quality.nodes().len(), 5);
 
     // Speed Intent Parity
-    let monolith_speed = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Speed)), &[], None).await;
+    let monolith_speed = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Speed)), &[], None).await.expect("speed plan");
     let crate_speed = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Speed)).expect("crate speed plan");
     assert_eq!(monolith_speed.nodes.len(), 1);
     assert_eq!(crate_speed.nodes().len(), 1);
 
     // Balanced Intent Parity
-    let monolith_balanced = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Balanced)), &[], None).await;
+    let monolith_balanced = monolith_planner.plan(&make_monolith_reqs(Some(MonolithExecutionIntent::Balanced)), &[], None).await.expect("balanced plan");
     let crate_balanced = crate_planner.plan(&make_crate_req(CrateExecutionIntent::Balanced)).expect("crate balanced plan");
     assert_eq!(monolith_balanced.nodes.len(), 3);
     assert_eq!(crate_balanced.nodes().len(), 3);
@@ -257,3 +257,4 @@ fn test_capability_system_support_behavior() {
     assert!(system.supports("ToolUse"));
     assert!(system.supports("Reasoning"));
 }
+
