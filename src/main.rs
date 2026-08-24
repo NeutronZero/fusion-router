@@ -290,6 +290,9 @@ async fn main() {
         .route("/v1/operations/metrics", axum::routing::get(crate::operations::handlers::metrics_handler))
         .route("/v1/operations/policies", axum::routing::get(crate::operations::handlers::policies_list_handler))
         .route("/v1/operations/policies", axum::routing::post(crate::operations::handlers::policies_create_handler))
+        .route("/v1/operations/policies/:name", axum::routing::get(crate::operations::handlers::policies_get_handler))
+        .route("/v1/operations/policies/:name", axum::routing::put(crate::operations::handlers::policies_update_handler))
+        .route("/v1/operations/policies/:name", axum::routing::delete(crate::operations::handlers::policies_delete_handler))
         .route("/v1/operations/attestations", axum::routing::get(crate::operations::handlers::attestations_handler))
         .with_state(ops_state);
 
@@ -353,11 +356,23 @@ async fn main() {
 
     // Server-wide envelope: bounded concurrent requests and a hard
     // per-request timeout (also caps runaway streaming responses).
+    //
+    // The concurrency cap uses a tokio Semaphore inside axum middleware:
+    // tower 0.5's ConcurrencyLimitLayer reports 503 on every request when
+    // layered over axum 0.7 (inner-service readiness skew), so it is avoided.
     let request_timeout = std::time::Duration::from_secs(config.server.request_timeout_secs.max(1));
-    let max_inflight = (config.resources.max_concurrent as usize).max(1);
+    let max_inflight = Arc::new(tokio::sync::Semaphore::new(
+        (config.resources.max_concurrent as usize).max(1),
+    ));
     let app = app
         .layer(tower_http::timeout::TimeoutLayer::new(request_timeout))
-        .layer(tower::limit::ConcurrencyLimitLayer::new(max_inflight));
+        .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let sem = max_inflight.clone();
+            async move {
+                let _permit = sem.acquire_owned().await;
+                Ok::<_, std::convert::Infallible>(next.run(req).await)
+            }
+        }));
 
     let addr = match format!("{}:{}", host, port).parse::<std::net::SocketAddr>() {
         Ok(addr) => addr,

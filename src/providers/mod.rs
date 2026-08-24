@@ -275,19 +275,27 @@ impl ChatProvider for Provider {
                     while let Some(pos) = buf.find("\n\n") {
                         let raw = buf[..pos].trim().to_string();
                         buf.drain(..=pos + 1);
-                        if raw.is_empty() {
-                            continue;
+                        // Per the SSE spec only `data:` lines carry payload;
+                        // comments (`:`) and other fields (`event:`, `id:`,
+                        // `retry:`) are ignored — some upstreams emit
+                        // keep-alive comments between chunks.
+                        let mut payloads: Vec<String> = Vec::new();
+                        for line in raw.lines() {
+                            if let Some(rest) = line.strip_prefix("data:") {
+                                let data = rest.strip_prefix(' ').unwrap_or(rest);
+                                if !data.trim().is_empty() && data != "[DONE]" {
+                                    payloads.push(data.to_string());
+                                }
+                            }
                         }
-                        let data = raw.strip_prefix("data: ").unwrap_or(&raw);
-                        if data.trim().is_empty() || data == "[DONE]" {
-                            continue;
-                        }
-                        match ChatStreamChunk::from_sse_data(data) {
-                            Ok(Some(chunk)) => chunks.push(Ok(chunk)),
-                            Ok(None) => {}
-                            Err(e) => {
-                                tracing::warn!(raw = %raw, "SSE parse error");
-                                chunks.push(Err(e))
+                        for data in payloads {
+                            match ChatStreamChunk::from_sse_data(&data) {
+                                Ok(Some(chunk)) => chunks.push(Ok(chunk)),
+                                Ok(None) => {}
+                                Err(e) => {
+                                    tracing::warn!(raw = %data, "SSE parse error");
+                                    chunks.push(Err(e))
+                                }
                             }
                         }
                     }

@@ -113,6 +113,38 @@ pub async fn policies_create_handler(
     }
 }
 
+pub async fn policies_get_handler(
+    State(state): State<OperationsState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match state.policy_admin.get_policy(&name) {
+        Ok(Some(decl)) => json_value(decl),
+        Ok(None) => Err((StatusCode::NOT_FOUND, Json(json!({"error": format!("policy '{name}' not found")})))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
+    }
+}
+
+pub async fn policies_update_handler(
+    State(state): State<OperationsState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(decl): Json<crate::policy::PolicyDeclaration>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match state.policy_admin.update_policy(&name, decl) {
+        Ok(()) => Ok(Json(json!({"status": "updated"}))),
+        Err(e) => Err((StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()})))),
+    }
+}
+
+pub async fn policies_delete_handler(
+    State(state): State<OperationsState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match state.policy_admin.delete_policy(&name) {
+        Ok(()) => Ok(Json(json!({"status": "deleted"}))),
+        Err(e) => Err((StatusCode::NOT_FOUND, Json(json!({"error": e.to_string()})))),
+    }
+}
+
 pub async fn attestations_handler(
     State(state): State<OperationsState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {

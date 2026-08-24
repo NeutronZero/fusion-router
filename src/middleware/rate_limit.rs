@@ -164,12 +164,17 @@ pub async fn rate_limit_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, String)> {
-    let config = req
-        .extensions()
-        .get::<RateLimiter>()
-        .cloned();
+    // Production wiring inserts Arc<RateLimiter>; accept the bare type too so
+    // tests can insert either form.
+    let limiter: Option<Arc<RateLimiter>> = if let Some(l) = req.extensions().get::<Arc<RateLimiter>>() {
+        Some(l.clone())
+    } else if let Some(l) = req.extensions().get::<RateLimiter>() {
+        Some(Arc::new(l.clone()))
+    } else {
+        None
+    };
 
-    let limiter = match config {
+    let limiter = match limiter {
         Some(l) => l,
         // Fail closed (ADR-035): a router wiring this middleware without the
         // limiter extension is a wiring bug, not an invitation.

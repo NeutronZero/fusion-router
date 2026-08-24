@@ -9,10 +9,13 @@ use crate::policy::diagnostics::PolicyDiagnostic;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyDeclaration {
     pub name: String,
+    #[serde(default)]
     pub priority: u32,
     pub match_target: String,
     pub effect: String, // "deny", "approval", "allow"
+    #[serde(default)]
     pub conditions: HashMap<String, serde_json::Value>,
+    #[serde(default)]
     pub annotations: HashMap<String, serde_json::Value>,
 }
 

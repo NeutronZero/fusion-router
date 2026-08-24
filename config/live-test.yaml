@@ -1,0 +1,66 @@
+server:
+  host: "127.0.0.1"
+  port: 18080
+  shutdown_timeout_secs: 30
+  request_timeout_secs: 120
+  cors:
+    allowed_origins: []
+    allowed_methods: [GET, POST, OPTIONS]
+    allowed_headers: [content-type, x-api-key, x-request-id]
+
+resources:
+  max_daily_cost: 1.0
+  max_daily_tokens: 200000
+  max_concurrent: 5
+  max_concurrent_nodes: 8
+  provider_limits:
+    zen:
+      max_daily_cost: 0.5
+      max_rpm: 30
+      max_tpm: 100000
+
+strategies:
+  consensus_count: 3
+
+providers:
+  zen:
+    transport: "zen"
+    base_url: "https://opencode.ai/zen/v1"
+    api_key_env: "OPENCODEZEN_API_KEY"
+    failure_threshold: 5
+    cooldown_secs: 30
+
+auth:
+  enabled: true
+  api_keys:
+    - "sk-live-chat"
+    - "sk-live-ops:operator"
+
+rate_limiting:
+  enabled: true
+  requests_per_minute: 120
+  burst_size: 20
+  cleanup_interval_secs: 300
+
+logging:
+  format: "text"
+  level: "info"
+
+tools:
+  allowed_shell_commands: []
+  shell_timeout_secs: 10
+  allowed_read_directories: ["."]
+  enable_http_tool: false
+  allow_auto_exec: false
+  allow_unrestricted_args: false
+
+model_catalog:
+  code: "zen/laguna-s-2.1-free"
+  debug: "zen/laguna-s-2.1-free"
+  architecture: "zen/laguna-s-2.1-free"
+  general: "zen/laguna-s-2.1-free"
+  creative: "zen/nemotron-3-ultra-free"
+  analysis: "zen/laguna-s-2.1-free"
+  fast: "zen/nemotron-3.5-lightning-free"
+  cheap: "zen/x-preview-f-free"
+
