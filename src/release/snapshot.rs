@@ -2,7 +2,7 @@
 //!
 //! A v2 snapshot records the exact inputs (`WorkflowIR`), a scripted provider
 //! cassette, and the event trace the pipeline produced when it was recorded.
-//! Verification recompiles and re-executes against the cassette — no network —
+//! Verification recompiles and re-executes against the cassette â€” no network â€”
 //! then diffs normalized traces. Volatile fields (timings, token counts, cost)
 //! are stripped before comparison; identity fields (event sequence, node ids,
 //! models) must match exactly.
@@ -41,7 +41,7 @@ pub struct SnapshotPayloadV2 {
 
 /// Provider that replays a recorded response cassette in strict order
 /// (ADR-042). A model mismatch or an exhausted cassette is a verification
-/// failure — both indicate contract drift between record and replay.
+/// failure â€” both indicate contract drift between record and replay.
 pub struct CassetteProvider {
     cassette: Mutex<VecDeque<CassetteEntry>>,
 }
@@ -154,7 +154,7 @@ pub fn build_replay_harness(
         executor,
         model_catalog,
         Arc::new(crate::resource::DefaultResourceManager::new(quota)),
-        Arc::new(crate::policy::PolicyRegistry::new()),
+        Arc::new(crate::policy::PolicyRegistry::offline_default()),
     );
     ReplayHarness { bus, plane }
 }

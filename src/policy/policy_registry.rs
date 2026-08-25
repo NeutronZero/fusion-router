@@ -33,6 +33,14 @@ impl PolicyRegistry {
         }
     }
 
+    /// Fixed empty registry for OFFLINE verification contexts only (release
+    /// gates, replay harness, examples). Production serving must share the
+    /// AppState singleton (Invariant 17 / Convergence Gate 06); never wire
+    /// this into a live server path.
+    pub fn offline_default() -> Self {
+        Self::new()
+    }
+
     /// Returns the current (latest) policy snapshot.
     pub fn current_snapshot(&self) -> PolicySnapshot {
         let ver = *self.version.read();

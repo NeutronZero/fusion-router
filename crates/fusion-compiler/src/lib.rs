@@ -345,6 +345,34 @@ fn three_color_cycle_detect(edges: &[(uuid::Uuid, uuid::Uuid)]) -> Result<(), uu
 // Lowering: WorkflowIR → ExecutionGraph
 // ---------------------------------------------------------------------------
 
+/// Canonical byte-stable serialization of an ExecutionGraph (Invariant 3 /
+/// Convergence Gate 11). Identical input IR always yields byte-identical
+/// output here: object keys are recursively sorted (immune to both HashMap
+/// iteration order and a transitive `preserve_order` serde_json feature),
+/// and all identifiers/hashes in the graph are derived from the IR content
+/// rather than entropy sources.
+pub fn canonical_json(graph: &ExecutionGraph) -> String {
+    fn canonicalize(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                let mut out = serde_json::Map::new();
+                for key in keys {
+                    out.insert(key.clone(), canonicalize(&map[key]));
+                }
+                serde_json::Value::Object(out)
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(canonicalize).collect())
+            }
+            other => other.clone(),
+        }
+    }
+    let value = serde_json::to_value(graph).expect("ExecutionGraph always serializes");
+    serde_json::to_string(&canonicalize(&value)).expect("canonical value always serializes")
+}
+
 pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {
     lower_to_graph_with_compilers(ir, &std::collections::HashMap::new())
 }
