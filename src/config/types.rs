@@ -233,6 +233,12 @@ pub struct ProviderConfig {
     pub api_key_env: Option<String>,
     /// Direct API key or `"{env:VAR_NAME}"` syntax. Takes precedence over `api_key_env`.
     pub api_key: Option<String>,
+    /// AES-256-GCM ciphertext (base64, produced by `SecretManager::encrypt`)
+    /// decrypted at startup with `FUSION_MASTER_KEY`. Used only when
+    /// `api_key`/`api_key_env` are unset; startup fails closed if the master
+    /// key is missing or the ciphertext does not decrypt.
+    #[serde(default)]
+    pub api_key_encrypted: Option<String>,
     /// Custom headers sent with every request to this provider.
     #[serde(default)]
     pub headers: HashMap<String, String>,
@@ -304,6 +310,7 @@ impl Default for ProviderConfig {
             base_url: None,
             api_key_env: None,
             api_key: None,
+            api_key_encrypted: None,
             headers: HashMap::new(),
             models: HashMap::new(),
             blacklist: Vec::new(),
@@ -351,6 +358,24 @@ pub struct ToolsConfig {
     pub allow_auto_exec: bool,
     #[serde(default = "default_allow_unrestricted_args")]
     pub allow_unrestricted_args: bool,
+    /// Shell path-argument policy (ADR-041): `stage` copies validated files
+    /// into a host-controlled staging dir and rewrites argv to the staged
+    /// copy, closing the validate-vs-open TOCTOU window; `direct` passes the
+    /// original path (legacy behavior, warned on in release profile).
+    #[serde(default = "default_shell_path_mode")]
+    pub shell_path_mode: String,
+    /// Upper bound for staged snapshot copies (ADR-041). Larger inputs fail
+    /// closed instead of being streamed to the child.
+    #[serde(default = "default_max_staged_input_bytes")]
+    pub max_staged_input_bytes: usize,
+}
+
+pub fn default_shell_path_mode() -> String {
+    "stage".to_string()
+}
+
+pub fn default_max_staged_input_bytes() -> usize {
+    64 * 1024 * 1024
 }
 
 impl Default for ToolsConfig {
@@ -362,6 +387,8 @@ impl Default for ToolsConfig {
             enable_http_tool: default_enable_http_tool(),
             allow_auto_exec: default_allow_auto_exec(),
             allow_unrestricted_args: default_allow_unrestricted_args(),
+            shell_path_mode: default_shell_path_mode(),
+            max_staged_input_bytes: default_max_staged_input_bytes(),
         }
     }
 }

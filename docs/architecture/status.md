@@ -96,7 +96,10 @@ Full listing: [`docs/adr/`](../adr/)
 
 ## Open ADRs
 
-None currently. All 38 ADRs are ratified.
+None currently open in Proposed state. ADR-041 (TOCTOU-safe shell path policy)
+and ADR-042 (replay re-execution harness) were designed and implemented on
+2026-08-25; both carry Implementation Status sections. Formal ratification
+follows the standard ADR process on next architecture review.
 
 ---
 

@@ -1,0 +1,98 @@
+{"format_version":1,"payload_hash":"ed8422232ab1b688f7dd5c289b6d3194ecb9e11b92b9290a6331a66782324856","producer_version":"corpus-gen/0.14.5","schema_version":2,"version":"0.14.5"}
+{
+  "schema_version": 2,
+  "workflow_ir": {
+    "plan_id": "38797baf-c9d9-4cc3-82fd-f5e0ba6a35cb",
+    "nodes": [
+      {
+        "id": "2aeb0e33-fa5f-40c4-b998-1e9636436c7a",
+        "kind": "Generate",
+        "strategy": "Single",
+        "model": "corpus-echo",
+        "config": {}
+      }
+    ],
+    "edges": [],
+    "metadata": {
+      "policy_applied": [],
+      "policy_version": 0,
+      "estimated_cost": 100000000,
+      "estimated_tokens": 100
+    }
+  },
+  "provider_cassette": [
+    {
+      "model": "corpus-echo",
+      "response": {
+        "id": "cassette-1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "corpus-echo",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "scripted response"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 4,
+          "total_tokens": 12
+        },
+        "native_tool_calls": null
+      }
+    }
+  ],
+  "expected_events": [
+    {
+      "type": "workflow_started",
+      "data": {
+        "intent": "Replay",
+        "input_tokens": 0
+      }
+    },
+    {
+      "type": "workflow_compiled",
+      "data": {
+        "node_count": 1,
+        "edge_count": 0,
+        "primitive_graph_hash": 16308453871076671689
+      }
+    },
+    {
+      "type": "node_scheduled",
+      "data": {
+        "node_id": "2aeb0e33-fa5f-40c4-b998-1e9636436c7a",
+        "node_kind": "LLMGenerate",
+        "dependencies": []
+      }
+    },
+    {
+      "type": "node_started",
+      "data": {
+        "node_id": "2aeb0e33-fa5f-40c4-b998-1e9636436c7a",
+        "target_model": "corpus-echo"
+      }
+    },
+    {
+      "type": "node_finished",
+      "data": {
+        "node_id": "2aeb0e33-fa5f-40c4-b998-1e9636436c7a",
+        "duration_ms": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "type": "workflow_completed",
+      "data": {
+        "total_duration_ms": 2,
+        "total_cost": 56000
+      }
+    }
+  ]
+}

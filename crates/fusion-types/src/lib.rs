@@ -373,23 +373,38 @@ impl BudgetEnvelope {
         }
     }
 
+    /// Records spend and enforces both budget ceilings.
+    ///
+    /// Ordering (review finding S6): the check happens BEFORE the spend is
+    /// committed. On violation, both counters are rolled back to their prior
+    /// values so a rejected record leaves no permanent overspend. The error
+    /// still reports the prospective total for diagnostics. Under concurrent
+    /// records a transient over-read is possible (another thread may observe
+    /// the reservation before rollback) — that fails closed rather than open.
     pub fn record_and_check(&self, cost: NanoUSD, tokens: u64) -> Result<(), BudgetExceededError> {
         let prev_cost = self.spent_cost.fetch_add(cost.as_nanos(), Ordering::SeqCst);
         let new_cost = NanoUSD::from_nanos(prev_cost + cost.as_nanos());
         let prev_tokens = self.spent_tokens.fetch_add(tokens, Ordering::SeqCst);
         let new_tokens = prev_tokens + tokens;
 
-        if new_cost > self.max_cost {
-            return Err(BudgetExceededError::Cost {
+        let violation = if new_cost > self.max_cost {
+            Some(BudgetExceededError::Cost {
                 spent: new_cost.as_nanos(),
                 max: self.max_cost.as_nanos(),
-            });
-        }
-        if new_tokens > self.max_tokens {
-            return Err(BudgetExceededError::Tokens {
+            })
+        } else if new_tokens > self.max_tokens {
+            Some(BudgetExceededError::Tokens {
                 spent: new_tokens,
                 max: self.max_tokens,
-            });
+            })
+        } else {
+            None
+        };
+
+        if let Some(err) = violation {
+            self.spent_cost.fetch_sub(cost.as_nanos(), Ordering::SeqCst);
+            self.spent_tokens.fetch_sub(tokens, Ordering::SeqCst);
+            return Err(err);
         }
         Ok(())
     }
@@ -603,11 +618,23 @@ mod tests {
     }
 
     #[test]
-    fn test_budget_failure_still_accumulates() {
+    fn test_budget_failure_rolls_back_spend() {
         let env = BudgetEnvelope::new(NanoUSD::from_nanos(100), 50, 5);
         assert!(env.record_and_check(NanoUSD::from_nanos(60), 30).is_ok());
-        let _ = env.record_and_check(NanoUSD::from_nanos(60), 30);
-        assert_eq!(env.spent_cost().as_nanos(), 120);
-        assert_eq!(env.spent_tokens(), 60);
+        let err = env.record_and_check(NanoUSD::from_nanos(60), 30);
+        assert!(err.is_err());
+        assert_eq!(
+            err.unwrap_err(),
+            BudgetExceededError::Cost {
+                spent: 120,
+                max: 100
+            }
+        );
+        assert_eq!(env.spent_cost().as_nanos(), 60);
+        assert_eq!(env.spent_tokens(), 30);
+        let ok = env.record_and_check(NanoUSD::from_nanos(40), 20);
+        assert!(ok.is_ok(), "rolled-back spend must free budget again");
+        assert_eq!(env.spent_cost().as_nanos(), 100);
+        assert_eq!(env.spent_tokens(), 50);
     }
 }

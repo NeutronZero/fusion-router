@@ -1,0 +1,154 @@
+{"format_version":1,"payload_hash":"1aeb8a75927b7fa62627026f7912682d69a0ea0d23c7b42cae3d0bfe10959dc6","producer_version":"corpus-gen/0.14.5","schema_version":2,"version":"0.14.5"}
+{
+  "schema_version": 2,
+  "workflow_ir": {
+    "plan_id": "4d780d36-8f39-46c1-bc0d-a62adae8a6ea",
+    "nodes": [
+      {
+        "id": "e891d2b3-7d61-4150-acd9-8f86ce5a237e",
+        "kind": "Generate",
+        "strategy": "Single",
+        "model": "corpus-echo",
+        "config": {}
+      },
+      {
+        "id": "805c3355-5c1f-4f37-8a2a-3c1e8d024adb",
+        "kind": "Generate",
+        "strategy": "Single",
+        "model": "corpus-echo",
+        "config": {}
+      }
+    ],
+    "edges": [],
+    "metadata": {
+      "policy_applied": [],
+      "policy_version": 0,
+      "estimated_cost": 100000000,
+      "estimated_tokens": 100
+    }
+  },
+  "provider_cassette": [
+    {
+      "model": "corpus-echo",
+      "response": {
+        "id": "cassette-2",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "corpus-echo",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "scripted response"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 4,
+          "total_tokens": 12
+        },
+        "native_tool_calls": null
+      }
+    },
+    {
+      "model": "corpus-echo",
+      "response": {
+        "id": "cassette-2",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "corpus-echo",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "scripted response"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 4,
+          "total_tokens": 12
+        },
+        "native_tool_calls": null
+      }
+    }
+  ],
+  "expected_events": [
+    {
+      "type": "workflow_started",
+      "data": {
+        "intent": "Replay",
+        "input_tokens": 0
+      }
+    },
+    {
+      "type": "workflow_compiled",
+      "data": {
+        "node_count": 2,
+        "edge_count": 0,
+        "primitive_graph_hash": 8004481446282957578
+      }
+    },
+    {
+      "type": "node_scheduled",
+      "data": {
+        "node_id": "805c3355-5c1f-4f37-8a2a-3c1e8d024adb",
+        "node_kind": "LLMGenerate",
+        "dependencies": []
+      }
+    },
+    {
+      "type": "node_started",
+      "data": {
+        "node_id": "805c3355-5c1f-4f37-8a2a-3c1e8d024adb",
+        "target_model": "corpus-echo"
+      }
+    },
+    {
+      "type": "node_finished",
+      "data": {
+        "node_id": "805c3355-5c1f-4f37-8a2a-3c1e8d024adb",
+        "duration_ms": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "type": "node_scheduled",
+      "data": {
+        "node_id": "e891d2b3-7d61-4150-acd9-8f86ce5a237e",
+        "node_kind": "LLMGenerate",
+        "dependencies": []
+      }
+    },
+    {
+      "type": "node_started",
+      "data": {
+        "node_id": "e891d2b3-7d61-4150-acd9-8f86ce5a237e",
+        "target_model": "corpus-echo"
+      }
+    },
+    {
+      "type": "node_finished",
+      "data": {
+        "node_id": "e891d2b3-7d61-4150-acd9-8f86ce5a237e",
+        "duration_ms": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "type": "workflow_completed",
+      "data": {
+        "total_duration_ms": 0,
+        "total_cost": 112000
+      }
+    }
+  ]
+}

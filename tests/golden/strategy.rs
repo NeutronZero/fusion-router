@@ -54,12 +54,14 @@ fn test_chain_strategy_produces_pipeline() {
     };
     let pg = strategy.lower(&ir, &ctx).unwrap();
     let node = make_node();
-    let eg = pg.to_execution_graph(
-        node.strategy.clone(),
-        &node.retry_policy,
-        &node.fallback,
-        &node.config,
-    );
+    let eg = pg
+        .to_execution_graph(
+            node.strategy.clone(),
+            &node.retry_policy,
+            &node.fallback,
+            &node.config,
+        )
+        .expect("primitive graph must convert");
 
     assert!(eg.nodes.len() >= 2, "Chain should produce at least 2 nodes");
     assert!(
@@ -88,12 +90,14 @@ fn test_react_strategy_produces_loop() {
         .lower(&StrategyIR::ReAct { max_iterations: 10 }, &ctx)
         .unwrap();
     let node = make_node();
-    let eg = pg.to_execution_graph(
-        node.strategy.clone(),
-        &node.retry_policy,
-        &node.fallback,
-        &node.config,
-    );
+    let eg = pg
+        .to_execution_graph(
+            node.strategy.clone(),
+            &node.retry_policy,
+            &node.fallback,
+            &node.config,
+        )
+        .expect("primitive graph must convert");
 
     assert_eq!(
         eg.nodes.len(),
@@ -128,12 +132,14 @@ fn test_debate_strategy_produces_parallel_judge() {
     };
     let pg = strategy.lower(&ir, &ctx).unwrap();
     let node = make_node();
-    let eg = pg.to_execution_graph(
-        node.strategy.clone(),
-        &node.retry_policy,
-        &node.fallback,
-        &node.config,
-    );
+    let eg = pg
+        .to_execution_graph(
+            node.strategy.clone(),
+            &node.retry_policy,
+            &node.fallback,
+            &node.config,
+        )
+        .expect("primitive graph must convert");
 
     assert!(
         eg.nodes.len() >= 3,
@@ -153,12 +159,14 @@ fn test_chain_strategy_single_stage_passthrough() {
     };
     let pg = strategy.lower(&ir, &ctx).unwrap();
     let node = make_node();
-    let eg = pg.to_execution_graph(
-        node.strategy.clone(),
-        &node.retry_policy,
-        &node.fallback,
-        &node.config,
-    );
+    let eg = pg
+        .to_execution_graph(
+            node.strategy.clone(),
+            &node.retry_policy,
+            &node.fallback,
+            &node.config,
+        )
+        .expect("primitive graph must convert");
 
     assert_eq!(
         eg.nodes.len(),

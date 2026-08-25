@@ -79,6 +79,11 @@ pub struct PrimitiveGraph {
     pub graph_id: String,
     pub nodes: Vec<PrimitiveNode>,
     pub edges: Vec<PrimitiveEdge>,
+    /// Explicit execution entry point (AD-008). When `None`, conversion falls
+    /// back to the first node in insertion order — builders should always set
+    /// this so entry selection never depends on vector ordering.
+    #[serde(default)]
+    pub entry_node_id: Option<String>,
 }
 
 impl PrimitiveGraph {
@@ -88,7 +93,14 @@ impl PrimitiveGraph {
             graph_id: graph_id.into(),
             nodes: Vec::new(),
             edges: Vec::new(),
+            entry_node_id: None,
         }
+    }
+
+    /// Sets the explicit entry node id (AD-008).
+    pub fn with_entry_node(mut self, entry_node_id: impl Into<String>) -> Self {
+        self.entry_node_id = Some(entry_node_id.into());
+        self
     }
 
     pub fn add_node(&mut self, node: PrimitiveNode) {
@@ -161,14 +173,54 @@ impl PrimitiveGraph {
     /// Deterministically produce an ExecutionGraph from this PrimitiveGraph.
     /// Node UUIDs are derived from (graph_hash, node_index) so identical
     /// PrimitiveGraphs always produce identical ExecutionGraphs.
+    ///
+    /// Fails loudly (AD-008) instead of silently dropping structure:
+    /// - any edge referencing an unknown node id is an error;
+    /// - a declared `entry_node_id` that does not exist or maps to a
+    ///   structural-only node (FanOut/Barrier) is an error.
     pub fn to_execution_graph(
         &self,
         strategy: StrategyKind,
         retry_policy: &RetryPolicy,
         fallback: &Option<FallbackConfig>,
         base_config: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> ExecutionGraph {
+    ) -> Result<ExecutionGraph, String> {
         let graph_hash = self.compute_hash();
+
+        let known_ids: HashSet<&str> = self.nodes.iter().map(|n| n.id.as_str()).collect();
+        let dangling: Vec<&str> = self
+            .edges
+            .iter()
+            .flat_map(|e| [&e.from as &str, &e.to as &str])
+            .filter(|id| !known_ids.contains(id))
+            .collect();
+        if !dangling.is_empty() {
+            return Err(format!(
+                "PrimitiveGraph '{}' has edges referencing unknown nodes: {:?}",
+                self.graph_id, dangling
+            ));
+        }
+
+        if let Some(entry) = &self.entry_node_id {
+            if !known_ids.contains(entry.as_str()) {
+                return Err(format!(
+                    "PrimitiveGraph '{}' declares entry_node_id '{entry}' but no such node exists",
+                    self.graph_id
+                ));
+            }
+            if self.nodes.iter().any(|n| {
+                n.id == *entry
+                    && matches!(
+                        n.kind,
+                        PrimitiveNodeKind::FanOut { .. } | PrimitiveNodeKind::Barrier { .. }
+                    )
+            }) {
+                return Err(format!(
+                    "PrimitiveGraph '{}' entry_node_id '{entry}' is a structural FanOut/Barrier node; the entry must be executable",
+                    self.graph_id
+                ));
+            }
+        }
 
         let skippable: HashSet<&str> = self
             .nodes
@@ -211,7 +263,15 @@ impl PrimitiveGraph {
                 PrimitiveNodeKind::ConditionalBranch { .. } => {
                     (ExecutionNodeKind::Conditional, String::new())
                 }
-                _ => continue,
+                // Unreachable: FanOut/Barrier nodes are filtered into
+                // `skippable` above. Kept as a loud error (AD-008) in case the
+                // skippable set and this match ever drift apart.
+                kind @ (PrimitiveNodeKind::FanOut { .. } | PrimitiveNodeKind::Barrier { .. }) => {
+                    return Err(format!(
+                        "PrimitiveGraph '{}' node '{}' has unconvertible structural kind {kind:?}",
+                        self.graph_id, pn.id
+                    ))
+                }
             };
 
             let mut config = base_config.clone();
@@ -281,7 +341,7 @@ impl PrimitiveGraph {
             }
         }
 
-        ExecutionGraph {
+        Ok(ExecutionGraph {
             graph_id: Uuid::from_u128(graph_hash as u128),
             nodes: exec_nodes,
             edges: exec_edges,
@@ -295,7 +355,7 @@ impl PrimitiveGraph {
             total_tokens: 0,
             total_cost: NanoUSD::ZERO,
             primitive_graph_hash: graph_hash,
-        }
+        })
     }
 
     /// Export graph to Graphviz DOT syntax

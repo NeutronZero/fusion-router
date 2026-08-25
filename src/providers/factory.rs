@@ -53,7 +53,20 @@ pub fn resolve_api_key(
         }
     }
 
-    // 3. Placeholder in unsafe-dev
+    // 3. Encrypted at rest (AES-256-GCM via SecretManager + FUSION_MASTER_KEY).
+    // Fail closed: a configured ciphertext that cannot be decrypted is a
+    // startup error, never an empty key.
+    if let Some(encrypted) = &cfg.api_key_encrypted {
+        if !encrypted.trim().is_empty() {
+            let manager = crate::security::secrets::SecretManager::from_env()
+                .map_err(|e| anyhow::anyhow!("provider '{provider_name}': {e}"))?;
+            return manager
+                .decrypt(encrypted)
+                .map_err(|e| anyhow::anyhow!("provider '{provider_name}': {e}"));
+        }
+    }
+
+    // 4. Placeholder in unsafe-dev
     if unsafe_dev {
         tracing::warn!(
             provider = %provider_name,
@@ -63,7 +76,7 @@ pub fn resolve_api_key(
     }
 
     anyhow::bail!(
-        "provider '{}' has no API key configured; set `api_key`, `api_key_env`, or run with --unsafe-dev",
+        "provider '{}' has no API key configured; set `api_key`, `api_key_env`, `api_key_encrypted`, or run with --unsafe-dev",
         provider_name
     )
 }
@@ -304,6 +317,40 @@ mod tests {
         let key = resolve_api_key(&cfg, "test", false).unwrap();
         assert_eq!(key, "sk-direct");
         std::env::remove_var("TEST_RESOLVE_KEY_789");
+    }
+
+    #[test]
+    fn test_resolve_api_key_encrypted_roundtrip() {
+        use crate::security::secrets::SecretManager;
+        let manager = SecretManager::new(SecretManager::generate_random_key());
+        let ciphertext = manager.encrypt("sk-encrypted-secret").unwrap();
+        std::env::set_var("FUSION_MASTER_KEY", manager.export_master_key_base64());
+
+        let cfg = ProviderConfig {
+            api_key_encrypted: Some(ciphertext),
+            ..Default::default()
+        };
+        let key = resolve_api_key(&cfg, "test", false).unwrap();
+        assert_eq!(key, "sk-encrypted-secret");
+        std::env::remove_var("FUSION_MASTER_KEY");
+    }
+
+    #[test]
+    fn test_resolve_api_key_encrypted_fails_closed_without_master_key() {
+        std::env::remove_var("FUSION_MASTER_KEY");
+        let cfg = ProviderConfig {
+            api_key_encrypted: Some("AAAAAAAAAAAAAAAA".into()),
+            ..Default::default()
+        };
+        let result = resolve_api_key(&cfg, "test", false);
+        assert!(
+            result.is_err(),
+            "encrypted key without FUSION_MASTER_KEY must fail closed"
+        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("FUSION_MASTER_KEY"));
     }
 
     #[test]

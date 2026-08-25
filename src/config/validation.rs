@@ -220,7 +220,43 @@ impl AppConfig {
             });
         }
 
-        if errors.is_empty() {
+        if self.tools.shell_path_mode == "direct" && release {
+            errors.push(ConfigValidationError {
+                field: "tools.shell_path_mode".into(),
+                message: "shell path_mode 'direct' bypasses TOCTOU-safe staging (ADR-041); \
+                          only acceptable on trusted single-tenant hosts"
+                    .into(),
+                value: Some(self.tools.shell_path_mode.clone()),
+                severity: ValidationSeverity::Warning,
+            });
+        }
+        if self.tools.max_staged_input_bytes == 0 {
+            errors.push(ConfigValidationError {
+                field: "tools.max_staged_input_bytes".into(),
+                message: "max_staged_input_bytes must be > 0".into(),
+                value: Some(self.tools.max_staged_input_bytes.to_string()),
+                severity: ValidationSeverity::Error,
+            });
+        }
+        if self.tools.shell_path_mode != "stage" && self.tools.shell_path_mode != "direct" {
+            errors.push(ConfigValidationError {
+                field: "tools.shell_path_mode".into(),
+                message: "shell_path_mode must be 'stage' or 'direct'".into(),
+                value: Some(self.tools.shell_path_mode.clone()),
+                severity: ValidationSeverity::Error,
+            });
+        }
+
+        for warning in errors
+            .iter()
+            .filter(|e| matches!(e.severity, ValidationSeverity::Warning))
+        {
+            tracing::warn!(field = %warning.field, "{}", warning.message);
+        }
+        let has_blocking = errors
+            .iter()
+            .any(|e| matches!(e.severity, ValidationSeverity::Error));
+        if !has_blocking {
             Ok(())
         } else {
             Err(errors)

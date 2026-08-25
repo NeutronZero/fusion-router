@@ -1,0 +1,1 @@
+﻿Summarize the retry policy for failed provider calls in three sentences.

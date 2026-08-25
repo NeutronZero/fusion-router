@@ -5,7 +5,7 @@ mod shell_tool;
 
 pub use http_tool::HTTPRequestTool;
 pub use registry::ToolRegistry;
-pub use shell_tool::ShellCommandTool;
+pub use shell_tool::{ShellCommandTool, ShellPathMode};
 
 use async_trait::async_trait;
 use serde_json::Value;

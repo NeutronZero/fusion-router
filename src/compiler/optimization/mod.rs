@@ -62,12 +62,21 @@ impl OptimizationPass for DeadNodeEliminationPass {
         let graph_id = graph.graph_id.clone();
 
         let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut queue: Vec<String> = Vec::new();
 
-        if let Some(first) = graph.nodes.first() {
-            live.insert(first.id.clone());
-            queue.push(first.id.clone());
-        }
+        // Root selection (AD-008): the explicit entry node wins so reachability
+        // never depends on insertion order. Without one, fall back to the
+        // legacy first-node root — feedback loops make topological root
+        // detection unsound here (see test_keeps_feedback_loop).
+        let mut queue: Vec<String> = Vec::new();
+        let root = match &graph.entry_node_id {
+            Some(entry) if graph.nodes.iter().any(|n| &n.id == entry) => entry.clone(),
+            _ => match graph.nodes.first() {
+                Some(n) => n.id.clone(),
+                None => return Ok(graph),
+            },
+        };
+        live.insert(root.clone());
+        queue.push(root);
 
         while let Some(current) = queue.pop() {
             for e in &graph.edges {

@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use fusion_core::PlatformError;
-use ring::aead::{self, BoundKey, SealingKey, UnboundKey, OpeningKey, AES_256_GCM, NONCE_LEN};
+use ring::aead::{self, BoundKey, OpeningKey, SealingKey, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::sync::Arc;
 
@@ -32,32 +32,77 @@ impl SecretManager {
         key
     }
 
+    /// Builds a manager from a base64-encoded 32-byte master key.
+    pub fn from_base64_key(key_b64: &str) -> Result<Self, PlatformError> {
+        let raw = BASE64
+            .decode(key_b64.trim())
+            .map_err(|e| PlatformError::Security {
+                code: "MASTER_KEY_DECODE".to_string(),
+                message: e.to_string(),
+                recovery_suggestion: "FUSION_MASTER_KEY must be base64-encoded 32 bytes"
+                    .to_string(),
+            })?;
+        if raw.len() != 32 {
+            return Err(PlatformError::Security {
+                code: "MASTER_KEY_LEN".to_string(),
+                message: format!("master key is {} bytes, expected 32", raw.len()),
+                recovery_suggestion: "Regenerate with 32 random bytes, base64-encoded".to_string(),
+            });
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&raw);
+        Ok(Self::new(key))
+    }
+
+    /// Builds a manager from the `FUSION_MASTER_KEY` environment variable.
+    pub fn from_env() -> Result<Self, PlatformError> {
+        let value = std::env::var("FUSION_MASTER_KEY").map_err(|_| PlatformError::Security {
+            code: "MASTER_KEY_MISSING".to_string(),
+            message: "FUSION_MASTER_KEY is not set".to_string(),
+            recovery_suggestion:
+                "Set FUSION_MASTER_KEY to a base64-encoded 32-byte key to use encrypted provider keys"
+                    .to_string(),
+        })?;
+        Self::from_base64_key(&value)
+    }
+
+    /// Returns this manager's key base64-encoded, for provisioning
+    /// `FUSION_MASTER_KEY` on hosts that will consume encrypted values.
+    pub fn export_master_key_base64(&self) -> String {
+        BASE64.encode(self.key_bytes)
+    }
+
     pub fn encrypt(&self, plaintext: &str) -> Result<String, PlatformError> {
         let mut nonce_bytes = [0u8; NONCE_LEN];
-        self.rng.fill(&mut nonce_bytes).map_err(|e| PlatformError::Security {
-            code: "RNG_FAIL".to_string(),
-            message: e.to_string(),
-            recovery_suggestion: "Check system entropy source".to_string(),
-        })?;
+        self.rng
+            .fill(&mut nonce_bytes)
+            .map_err(|e| PlatformError::Security {
+                code: "RNG_FAIL".to_string(),
+                message: e.to_string(),
+                recovery_suggestion: "Check system entropy source".to_string(),
+            })?;
 
-        let unbound_key = UnboundKey::new(&AES_256_GCM, &self.key_bytes)
-            .map_err(|_| PlatformError::Security {
+        let unbound_key = UnboundKey::new(&AES_256_GCM, &self.key_bytes).map_err(|_| {
+            PlatformError::Security {
                 code: "INVALID_KEY".to_string(),
                 message: "Invalid AES-256 key".to_string(),
                 recovery_suggestion: "Provide a 32-byte secret key".to_string(),
-            })?;
+            }
+        })?;
 
-        let nonce = aead::Nonce::try_assume_unique_for_key(&nonce_bytes)
-            .map_err(|_| PlatformError::Security {
+        let nonce = aead::Nonce::try_assume_unique_for_key(&nonce_bytes).map_err(|_| {
+            PlatformError::Security {
                 code: "NONCE_ERR".to_string(),
                 message: "Failed to construct nonce".to_string(),
                 recovery_suggestion: "Check nonce generation".to_string(),
-            })?;
+            }
+        })?;
 
         let mut sealing_key = SealingKey::new(unbound_key, OneNonce(Some(nonce)));
         let mut in_out = plaintext.as_bytes().to_vec();
 
-        sealing_key.seal_in_place_append_tag(aead::Aad::empty(), &mut in_out)
+        sealing_key
+            .seal_in_place_append_tag(aead::Aad::empty(), &mut in_out)
             .map_err(|_| PlatformError::Security {
                 code: "ENCRYPT_ERR".to_string(),
                 message: "Encryption failed".to_string(),
@@ -71,11 +116,13 @@ impl SecretManager {
     }
 
     pub fn decrypt(&self, ciphertext_b64: &str) -> Result<String, PlatformError> {
-        let payload = BASE64.decode(ciphertext_b64).map_err(|e| PlatformError::Security {
-            code: "BASE64_DECODE_ERR".to_string(),
-            message: e.to_string(),
-            recovery_suggestion: "Ensure base64 encoded ciphertext".to_string(),
-        })?;
+        let payload = BASE64
+            .decode(ciphertext_b64)
+            .map_err(|e| PlatformError::Security {
+                code: "BASE64_DECODE_ERR".to_string(),
+                message: e.to_string(),
+                recovery_suggestion: "Ensure base64 encoded ciphertext".to_string(),
+            })?;
 
         if payload.len() < NONCE_LEN {
             return Err(PlatformError::Security {
@@ -87,24 +134,27 @@ impl SecretManager {
 
         let (nonce_bytes, ciphertext) = payload.split_at(NONCE_LEN);
 
-        let unbound_key = UnboundKey::new(&AES_256_GCM, &self.key_bytes)
-            .map_err(|_| PlatformError::Security {
+        let unbound_key = UnboundKey::new(&AES_256_GCM, &self.key_bytes).map_err(|_| {
+            PlatformError::Security {
                 code: "INVALID_KEY".to_string(),
                 message: "Invalid AES-256 key".to_string(),
                 recovery_suggestion: "Provide a 32-byte secret key".to_string(),
-            })?;
+            }
+        })?;
 
-        let nonce = aead::Nonce::try_assume_unique_for_key(nonce_bytes)
-            .map_err(|_| PlatformError::Security {
+        let nonce = aead::Nonce::try_assume_unique_for_key(nonce_bytes).map_err(|_| {
+            PlatformError::Security {
                 code: "NONCE_ERR".to_string(),
                 message: "Failed to construct nonce".to_string(),
                 recovery_suggestion: "Check nonce generation".to_string(),
-            })?;
+            }
+        })?;
 
         let mut opening_key = OpeningKey::new(unbound_key, OneNonce(Some(nonce)));
         let mut in_out = ciphertext.to_vec();
 
-        let plaintext_bytes = opening_key.open_in_place(aead::Aad::empty(), &mut in_out)
+        let plaintext_bytes = opening_key
+            .open_in_place(aead::Aad::empty(), &mut in_out)
             .map_err(|_| PlatformError::Security {
                 code: "DECRYPT_ERR".to_string(),
                 message: "Decryption failed or invalid tag".to_string(),
@@ -151,7 +201,10 @@ mod tests {
         let key = SecretManager::generate_random_key();
         let manager = SecretManager::new(key);
 
-        assert_eq!(manager.redact("sk-openrouter-secret-key-12345"), "sk-o...2345");
+        assert_eq!(
+            manager.redact("sk-openrouter-secret-key-12345"),
+            "sk-o...2345"
+        );
         assert_eq!(manager.redact("short"), "********");
     }
 }

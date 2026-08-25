@@ -11,9 +11,9 @@ configs:
       outcome: pass
 
 snapshots:
-  - id: v0.10
-    version: "0.10.0"
-    path: snapshots/v0.10
+  - id: v0.14
+    version: "0.14.5"
+    path: snapshots/v0.14
 
 plugins:
   - id: echo

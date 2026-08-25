@@ -356,12 +356,23 @@ pub async fn execute_workflow_handler(
     axum::extract::State(plane): axum::extract::State<Arc<ExecutionPlane>>,
     axum::Json(request): axum::Json<ExecuteWorkflowRequest>,
 ) -> Result<axum::Json<Value>, (axum::http::StatusCode, axum::Json<Value>)> {
-    match plane.execute(request).await {
+    let metrics = crate::telemetry::metrics::FusionMetrics::instance();
+    metrics.requests_total.inc();
+    let start = std::time::Instant::now();
+    let result = plane.execute(request).await;
+    metrics
+        .request_duration_seconds
+        .with_label_values(&["/v1/executions"])
+        .observe(start.elapsed().as_secs_f64());
+    match result {
         Ok(result) => Ok(axum::Json(result)),
-        Err(error) => Err((
-            axum::http::StatusCode::BAD_REQUEST,
-            axum::Json(json!({ "error": error })),
-        )),
+        Err(error) => {
+            metrics.errors_total.inc();
+            Err((
+                axum::http::StatusCode::BAD_REQUEST,
+                axum::Json(json!({ "error": error })),
+            ))
+        }
     }
 }
 

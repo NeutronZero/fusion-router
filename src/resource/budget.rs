@@ -113,11 +113,11 @@ mod tests {
     }
 
     #[test]
-    fn test_record_after_failure_still_accumulates() {
+    fn test_record_after_failure_rolls_back() {
         let env = BudgetEnvelope::new(NanoUSD::from_nanos(100), 50, 5);
         assert!(env.record_and_check(NanoUSD::from_nanos(60), 30).is_ok());
-        let _ = env.record_and_check(NanoUSD::from_nanos(60), 30); // exceeds
-        assert_eq!(env.spent_cost().as_nanos(), 120); // still accumulated
-        assert_eq!(env.spent_tokens(), 60);
+        assert!(env.record_and_check(NanoUSD::from_nanos(60), 30).is_err());
+        assert_eq!(env.spent_cost().as_nanos(), 60); // rolled back, not 120
+        assert_eq!(env.spent_tokens(), 30);
     }
 }

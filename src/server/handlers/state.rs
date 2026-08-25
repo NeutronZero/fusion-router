@@ -99,12 +99,18 @@ impl AppState {
         if config.tools.enable_http_tool {
             tool_registry.register(Arc::new(HTTPRequestTool::new()));
         }
-        tool_registry.register(Arc::new(ShellCommandTool::new(
-            config.tools.allowed_shell_commands.clone(),
-            config.tools.shell_timeout_secs,
-            config.tools.allowed_read_directories.clone(),
-            config.tools.allow_unrestricted_args,
-        )));
+        tool_registry.register(Arc::new(
+            ShellCommandTool::new(
+                config.tools.allowed_shell_commands.clone(),
+                config.tools.shell_timeout_secs,
+                config.tools.allowed_read_directories.clone(),
+                config.tools.allow_unrestricted_args,
+            )
+            .with_path_policy(
+                crate::tools::ShellPathMode::from_config(&config.tools.shell_path_mode),
+                config.tools.max_staged_input_bytes,
+            ),
+        ));
         let tool_registry = Arc::new(tool_registry);
 
         strategies.insert(

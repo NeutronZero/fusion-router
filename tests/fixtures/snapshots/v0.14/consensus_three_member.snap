@@ -1,0 +1,173 @@
+{"format_version":1,"payload_hash":"87059a94306922708d43c8928e1a92f04ef48920dc81a49bec33df9d0f0c3121","producer_version":"corpus-gen/0.14.5","schema_version":2,"version":"0.14.5"}
+{
+  "schema_version": 2,
+  "workflow_ir": {
+    "plan_id": "27ec252a-12da-4f63-8457-36708c83f5c3",
+    "nodes": [
+      {
+        "id": "4107a684-09ca-44cb-9efe-8ac99760b215",
+        "kind": "Generate",
+        "strategy": "Consensus",
+        "model": "corpus-echo",
+        "config": {}
+      }
+    ],
+    "edges": [],
+    "metadata": {
+      "policy_applied": [],
+      "policy_version": 0,
+      "estimated_cost": 100000000,
+      "estimated_tokens": 100
+    }
+  },
+  "provider_cassette": [
+    {
+      "model": "corpus-echo",
+      "response": {
+        "id": "cassette-4",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "corpus-echo",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "scripted response"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 4,
+          "total_tokens": 12
+        },
+        "native_tool_calls": null
+      }
+    },
+    {
+      "model": "corpus-echo",
+      "response": {
+        "id": "cassette-4",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "corpus-echo",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "scripted response"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 4,
+          "total_tokens": 12
+        },
+        "native_tool_calls": null
+      }
+    },
+    {
+      "model": "corpus-echo",
+      "response": {
+        "id": "cassette-4",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "corpus-echo",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "scripted response"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 4,
+          "total_tokens": 12
+        },
+        "native_tool_calls": null
+      }
+    },
+    {
+      "model": "corpus-echo",
+      "response": {
+        "id": "cassette-4",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "corpus-echo",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "scripted response"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 8,
+          "completion_tokens": 4,
+          "total_tokens": 12
+        },
+        "native_tool_calls": null
+      }
+    }
+  ],
+  "expected_events": [
+    {
+      "type": "workflow_started",
+      "data": {
+        "intent": "Replay",
+        "input_tokens": 0
+      }
+    },
+    {
+      "type": "workflow_compiled",
+      "data": {
+        "node_count": 1,
+        "edge_count": 0,
+        "primitive_graph_hash": 3638197759720968805
+      }
+    },
+    {
+      "type": "node_scheduled",
+      "data": {
+        "node_id": "4107a684-09ca-44cb-9efe-8ac99760b215",
+        "node_kind": "LLMGenerate",
+        "dependencies": []
+      }
+    },
+    {
+      "type": "node_started",
+      "data": {
+        "node_id": "4107a684-09ca-44cb-9efe-8ac99760b215",
+        "target_model": "corpus-echo"
+      }
+    },
+    {
+      "type": "node_finished",
+      "data": {
+        "node_id": "4107a684-09ca-44cb-9efe-8ac99760b215",
+        "duration_ms": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "type": "workflow_completed",
+      "data": {
+        "total_duration_ms": 1,
+        "total_cost": 96000
+      }
+    }
+  ]
+}

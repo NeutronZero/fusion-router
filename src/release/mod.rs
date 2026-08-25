@@ -13,6 +13,7 @@ pub mod policy;
 pub mod report;
 pub mod runner;
 pub mod signing;
+pub mod snapshot;
 pub mod verifier;
 pub mod waiver;
 

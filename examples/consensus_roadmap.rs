@@ -61,12 +61,14 @@ async fn main() -> anyhow::Result<()> {
         config: std::collections::HashMap::new(),
         subgraph: None,
     };
-    let execution_graph = graph.to_execution_graph(
-        template.strategy.clone(),
-        &template.retry_policy,
-        &template.fallback,
-        &template.config,
-    );
+    let execution_graph = graph
+        .to_execution_graph(
+            template.strategy.clone(),
+            &template.retry_policy,
+            &template.fallback,
+            &template.config,
+        )
+        .expect("primitive graph must convert");
 
     println!("Strategy:          Consensus");
     println!("Graph Hash:        0x{:x}", hash);
