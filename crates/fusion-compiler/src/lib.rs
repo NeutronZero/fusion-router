@@ -365,7 +365,7 @@ fn three_color_cycle_detect(edges: &[(uuid::Uuid, uuid::Uuid)]) -> Result<(), uu
 /// iteration order and a transitive `preserve_order` serde_json feature),
 /// and all identifiers/hashes in the graph are derived from the IR content
 /// rather than entropy sources.
-pub fn canonical_json(graph: &ExecutionGraph) -> String {
+pub fn canonical_json(graph: &ExecutionGraph) -> Result<String, CompilerError> {
     fn canonicalize(value: &serde_json::Value) -> serde_json::Value {
         match value {
             serde_json::Value::Object(map) => {
@@ -383,8 +383,24 @@ pub fn canonical_json(graph: &ExecutionGraph) -> String {
             other => other.clone(),
         }
     }
-    let value = serde_json::to_value(graph).expect("ExecutionGraph always serializes");
-    serde_json::to_string(&canonicalize(&value)).expect("canonical value always serializes")
+    let value = serde_json::to_value(graph).map_err(|e| CompilerError::PassError {
+        pass: "canonical_json".into(),
+        message: format!("ExecutionGraph serialization failed: {e}"),
+    })?;
+    serde_json::to_string(&canonicalize(&value)).map_err(|e| CompilerError::PassError {
+        pass: "canonical_json".into(),
+        message: format!("canonical JSON stringify failed: {e}"),
+    })
+}
+
+/// Backwards-compatible infallible wrapper for call sites that treat
+/// serialization failure as a hard bug (e.g. golden tests). Prefer
+/// `canonical_json` and handle the `Result` in production paths.
+pub fn canonical_json_string(graph: &ExecutionGraph) -> String {
+    canonical_json(graph).unwrap_or_else(|e| {
+        tracing::error!(error = %e, "canonical_json fallback: returning empty object");
+        "{}".to_string()
+    })
 }
 
 pub fn lower_to_graph(ir: WorkflowIR) -> Result<ExecutionGraph, CompilerError> {

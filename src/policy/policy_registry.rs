@@ -50,8 +50,10 @@ impl PolicyRegistry {
     /// Fixed empty registry for OFFLINE verification contexts only (release
     /// gates, replay harness, examples). Production serving must share the
     /// AppState singleton (Invariant 17 / Convergence Gate 06); never wire
-    /// this into a live server path.
-    pub fn offline_default() -> Self {
+    /// this into a live server path. Restricted to `pub(crate)` so external
+    /// callers cannot accidentally use an offline registry as the live
+    /// singleton — use `PolicyRegistry :: new` via `AppState` instead.
+    pub(crate) fn offline_default() -> Self {
         Self::new()
     }
 

@@ -247,6 +247,30 @@ impl AppConfig {
             });
         }
 
+        // Provider API key mutual exclusion: at most one of api_key / api_key_env
+        // / api_key_encrypted may be set per provider. Multiple sources would
+        // make precedence confusing and hide misconfiguration.
+        for (name, provider) in &self.providers {
+            let mut sources = 0u8;
+            if provider.api_key.is_some() {
+                sources += 1;
+            }
+            if provider.api_key_env.is_some() {
+                sources += 1;
+            }
+            if provider.api_key_encrypted.is_some() {
+                sources += 1;
+            }
+            if sources > 1 {
+                errors.push(ConfigValidationError {
+                    field: format!("providers.{name}.api_key"),
+                    message: "at most one of api_key, api_key_env, api_key_encrypted may be set".into(),
+                    value: None,
+                    severity: ValidationSeverity::Error,
+                });
+            }
+        }
+
         for warning in errors
             .iter()
             .filter(|e| matches!(e.severity, ValidationSeverity::Warning))

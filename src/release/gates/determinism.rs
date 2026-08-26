@@ -54,7 +54,9 @@ impl DeterminismBackend for RealDeterminismBackend {
         // `serde_json::to_string` walks ExecutionNode.config HashMaps in
         // per-process order, making the hash flaky for any graph that carries
         // config — and certifying nothing cross-process.
-        fusion_compiler::canonical_json(&graph).hash(&mut hasher);
+        fusion_compiler::canonical_json(&graph)
+            .map_err(|e| GateError::ExecutionFailed(format!("canonical_json failed: {e}")))?
+            .hash(&mut hasher);
         Ok(hasher.finish())
     }
 }

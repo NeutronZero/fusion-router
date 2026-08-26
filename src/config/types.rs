@@ -6,6 +6,7 @@ use crate::config::defaults::*;
 use crate::feature_gate::FeatureConfig;
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppConfig {
     #[serde(default)]
     pub unsafe_dev: bool,
@@ -34,6 +35,7 @@ pub struct AppConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     #[serde(default = "default_host")]
     pub host: String,
@@ -54,6 +56,7 @@ fn default_request_timeout_secs() -> u64 {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CorsConfig {
     #[serde(default = "default_cors_origins")]
     pub allowed_origins: Vec<String>,
@@ -74,6 +77,7 @@ impl Default for CorsConfig {
 }
 
 #[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     #[serde(default = "default_auth_enabled")]
     pub enabled: bool,
@@ -105,6 +109,7 @@ impl Default for AuthConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RateLimitingConfig {
     #[serde(default = "default_rate_limiting_enabled")]
     pub enabled: bool,
@@ -128,6 +133,7 @@ impl Default for RateLimitingConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
     #[serde(default = "default_log_format")]
     pub format: String,
@@ -148,6 +154,7 @@ impl Default for LoggingConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResourceConfig {
     #[serde(deserialize_with = "deserialize_usd")]
     pub max_daily_cost: NanoUSD,
@@ -161,6 +168,7 @@ pub struct ResourceConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderLimitConfig {
     #[serde(deserialize_with = "deserialize_usd")]
     pub max_daily_cost: NanoUSD,
@@ -213,6 +221,7 @@ where
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
     pub name: String,
     #[serde(default)]
@@ -224,6 +233,7 @@ pub struct PolicyConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyConditionConfig {
     pub field: String,
     pub operator: String,
@@ -231,6 +241,7 @@ pub struct PolicyConditionConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyActionConfig {
     pub action_type: String,
     #[serde(default)]
@@ -238,6 +249,7 @@ pub struct PolicyActionConfig {
 }
 
 #[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     /// Wire protocol / transport adapter: `openai-chat`, `anthropic`, `gemini`,
     /// `ollama`, `grpc`, `websocket`, `custom`, or any OpenAI-compatible endpoint.
@@ -370,6 +382,7 @@ impl Default for ProviderConfig {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConnectorConfig {
     pub connector_type: String,
     #[serde(default)]
@@ -377,6 +390,7 @@ pub struct ConnectorConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StrategyConfig {
     #[serde(default = "default_consensus_count")]
     pub consensus_count: u32,
@@ -391,6 +405,7 @@ impl Default for StrategyConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolsConfig {
     #[serde(default = "default_allowed_shell_commands")]
     pub allowed_shell_commands: Vec<String>,

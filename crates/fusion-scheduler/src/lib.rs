@@ -239,13 +239,20 @@ impl DefaultScheduler {
                 queue.mark_in_progress(node_id);
                 node_states.insert(node_id, NodeState::Running);
 
-                // Find the node to clone for the executor
-                let node = graph
-                    .nodes
-                    .iter()
-                    .find(|n| n.id == node_id)
-                    .unwrap()
-                    .clone();
+                // Find the node to clone for the executor — use the frozen
+                // index map instead of a linear scan, and fail closed with a
+                // Scheduler error rather than panicking on a desynced queue.
+                let idx = match node_index.get(&node_id) {
+                    Some(i) => *i,
+                    None => {
+                        return Err(PlatformError::Scheduler {
+                            code: "NODE_NOT_FOUND".into(),
+                            message: format!("scheduler queue desync: node {node_id} not in graph"),
+                            recovery_suggestion: "Report this as a scheduler invariant violation".into(),
+                        });
+                    }
+                };
+                let node = graph.nodes[idx].clone();
 
                 // Build parent context: outputs of immediate predecessors
                 let incoming: Vec<uuid::Uuid> = graph
@@ -302,9 +309,9 @@ impl DefaultScheduler {
                     // Model-aware per-token pricing (review H3): the node's
                     // model drives input/output rates; unknown models fall
                     // back to the conservative flat rate.
-                    let model = graph
-                        .nodes
-                        .get(node_index[&node_id])
+                    let model = node_index
+                        .get(&node_id)
+                        .and_then(|idx| graph.nodes.get(*idx))
                         .map(|n| n.model.as_str())
                         .unwrap_or("");
                     let price = self.price_for(model);

@@ -40,6 +40,19 @@ pub fn canonicalize_within(root: &Path, candidate: &Path) -> Result<PathBuf, Pat
     Ok(candidate_canonical)
 }
 
+/// Async wrapper that offloads the blocking `canonicalize` syscalls to
+/// `spawn_blocking` so Tokio workers are not stalled under high file-tool
+/// load. Prefer this from async handlers; the sync `canonicalize_within`
+/// remains for sync contexts and tests.
+pub async fn canonicalize_within_async(
+    root: PathBuf,
+    candidate: PathBuf,
+) -> Result<PathBuf, PathError> {
+    tokio::task::spawn_blocking(move || canonicalize_within(&root, &candidate))
+        .await
+        .map_err(|e| PathError::CandidateMissing(format!("spawn_blocking join failed: {e}")))?
+}
+
 /// Number of directory entries (hard links) referencing the same file as
 /// `meta`, when the platform exposes it through stable APIs.
 ///

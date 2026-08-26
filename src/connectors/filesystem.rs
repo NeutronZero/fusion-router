@@ -1,5 +1,4 @@
 use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
-use crate::security::paths::canonicalize_within;
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
@@ -74,15 +73,17 @@ impl CapabilityExecutor for FilesystemPlugin {
                 retryable: false,
             })?;
 
-        let canonical =
-            canonicalize_within(&self.root, std::path::Path::new(path)).map_err(|err| {
-                ExecutionError {
-                    connector: "filesystem".into(),
-                    capability: instance.contract.id.clone(),
-                    reason: format!("path rejected (Law 10): {err}"),
-                    retryable: false,
-                }
-            })?;
+        let canonical = crate::security::paths::canonicalize_within_async(
+            self.root.clone(),
+            std::path::PathBuf::from(path),
+        )
+        .await
+        .map_err(|err| ExecutionError {
+            connector: "filesystem".into(),
+            capability: instance.contract.id.clone(),
+            reason: format!("path rejected (Law 10): {err}"),
+            retryable: false,
+        })?;
 
         let started = std::time::Instant::now();
         let content =

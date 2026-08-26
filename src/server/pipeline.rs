@@ -215,7 +215,13 @@ impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
                     | ExecutionNodeKind::LLMJudge
             ) {
                 if let Some(ctx_snapshot) = &ctx.assembled_context {
-                    let messages = serde_json::to_value(&ctx_snapshot.messages).unwrap_or_default();
+                    let messages = serde_json::to_value(&ctx_snapshot.messages).map_err(|e| {
+                        RouterError::StageFailure {
+                            stage: PipelineStage::Compilation,
+                            request_id: ctx.request_id,
+                            message: format!("failed to serialize context messages: {e}"),
+                        }
+                    })?;
                     node.config.insert("messages".to_string(), messages.clone());
                     // Strategy sub-nodes (consensus members, judge, etc.) are
                     // prebuilt at compile time and never see the request

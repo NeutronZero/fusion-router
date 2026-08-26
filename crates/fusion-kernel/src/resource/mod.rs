@@ -54,6 +54,7 @@ pub struct StubResourceManager {
     quota: Quota,
     cost: AtomicU64,
     tokens: AtomicU64,
+    reserve_lock: std::sync::Mutex<()>,
 }
 
 impl StubResourceManager {
@@ -62,6 +63,7 @@ impl StubResourceManager {
             quota,
             cost: AtomicU64::new(0),
             tokens: AtomicU64::new(0),
+            reserve_lock: std::sync::Mutex::new(()),
         }
     }
 
@@ -97,17 +99,26 @@ impl ResourceManager for StubResourceManager {
         let max_cost = self.quota.max_daily_cost.as_nanos();
         let max_tokens = self.quota.max_daily_tokens;
 
-        let current_cost = self.cost.load(Ordering::Relaxed);
-        let current_tokens = self.tokens.load(Ordering::Relaxed);
-
-        if current_cost + cost_nanos > max_cost || current_tokens + estimated_tokens > max_tokens {
+        // Use a single critical section so concurrent reserves cannot both
+        // pass the check and double-count over quota (TOCTOU). Saturating
+        // sums avoid overflow on adversarial inputs.
+        let _guard = match self.reserve_lock.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let current_cost = self.cost.load(Ordering::Acquire);
+        let current_tokens = self.tokens.load(Ordering::Acquire);
+        if current_cost.saturating_add(cost_nanos) > max_cost
+            || current_tokens.saturating_add(estimated_tokens) > max_tokens
+        {
             return false;
         }
-
         self.cost
-            .store(current_cost + cost_nanos, Ordering::Release);
-        self.tokens
-            .store(current_tokens + estimated_tokens, Ordering::Release);
+            .store(current_cost.saturating_add(cost_nanos), Ordering::Release);
+        self.tokens.store(
+            current_tokens.saturating_add(estimated_tokens),
+            Ordering::Release,
+        );
         true
     }
 
@@ -132,8 +143,8 @@ impl ResourceManager for StubResourceManager {
 
     async fn record_usage(&self, cost_nanos: NanoUSD, tokens: u64) {
         self.cost
-            .fetch_add(cost_nanos.as_nanos(), Ordering::Relaxed);
-        self.tokens.fetch_add(tokens, Ordering::Relaxed);
+            .fetch_add(cost_nanos.as_nanos(), Ordering::AcqRel);
+        self.tokens.fetch_add(tokens, Ordering::AcqRel);
     }
 }
 

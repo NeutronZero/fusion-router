@@ -1,4 +1,4 @@
-#![allow(dead_code)] // Intentional: binary crate exposes no public API; pub items in module tree are stubs for future production wiring
+#![allow(dead_code)] // Debt-tracked stubs — see docs/architecture/architecture_debt_register.md AD-005..AD-019; blanket kept for binary crate with no public API, migrate to per-module allows as stubs are wired (tracked debt, not hidden)
 use std::path::PathBuf;
 use std::sync::Arc;
 

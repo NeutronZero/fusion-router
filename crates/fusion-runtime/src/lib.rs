@@ -497,7 +497,8 @@ impl ProviderExecutor {
             .config
             .get("max_tool_iterations")
             .and_then(|v| v.as_u64())
-            .unwrap_or(8) as usize;
+            .unwrap_or(8)
+            .clamp(1, 32) as usize;
         let mut request = request;
         let mut all_tool_results: Vec<serde_json::Value> = Vec::new();
 

@@ -101,9 +101,13 @@ impl Compiler for DefaultCompiler {
 
         for pass in &self.passes {
             tracing::debug!(pass = %pass.name(), "running compiler pass");
-            match pass.apply(current.clone()).await {
-                Ok(next) => {
-                    current = next;
+            // Move `current` into the pass instead of cloning per iteration
+            // (previously `current.clone()` → O(P·N) clones). On failure we
+            // still have `snapshot` for the diagnostic.
+            let next = pass.apply(current).await;
+            match next {
+                Ok(next_ir) => {
+                    current = next_ir;
                 }
                 Err(e) => {
                     tracing::warn!(
