@@ -70,32 +70,54 @@ impl Stream for MeteredStream {
                 // back to stream state after the guard is released.
                 let mut seen_totals: Option<(u64, u64)> = None;
 
-                if let Ok(mut meter) = self.meter.lock() {
-                    meter.record_chunk(&chunk, self.pricing.as_ref());
+                // Scope the meter lock so a poisoned mutex does not keep an
+                // immutable borrow of `self.meter` alive across the fail-closed
+                // abort path (which needs `&mut self`).
+                let poisoned = {
+                    match self.meter.lock() {
+                        Ok(mut meter) => {
+                            meter.record_chunk(&chunk, self.pricing.as_ref());
 
-                    // Active mid-stream budget enforcement against envelope.
-                    // The meter exposes RUNNING totals while
-                    // `record_and_check` ADDS what it is given, so only the
-                    // per-chunk delta (current minus previously seen totals)
-                    // may be recorded; passing the running total would
-                    // over-account quadratically and kill healthy streams.
-                    if let Some(ref envelope) = self.budget_envelope {
-                        let cur_cost_nanos = meter.cost().as_nanos();
-                        let cur_tokens = meter.prompt_tokens() + meter.completion_tokens();
-                        let delta_cost =
-                            cur_cost_nanos.saturating_sub(self.prev_cost_nanos.unwrap_or(0));
-                        let delta_tokens = cur_tokens.saturating_sub(self.prev_tokens.unwrap_or(0));
-                        if let Err(e) =
-                            envelope.record_and_check(NanoUSD::from_nanos(delta_cost), delta_tokens)
-                        {
-                            tracing::warn!(error = ?e, "Mid-stream budget ceiling breached; terminating stream");
-                            breached = true;
-                            breach_err = Some(e);
+                            // Active mid-stream budget enforcement against envelope.
+                            // The meter exposes RUNNING totals while
+                            // `record_and_check` ADDS what it is given, so only the
+                            // per-chunk delta (current minus previously seen totals)
+                            // may be recorded; passing the running total would
+                            // over-account quadratically and kill healthy streams.
+                            if let Some(ref envelope) = self.budget_envelope {
+                                let cur_cost_nanos = meter.cost().as_nanos();
+                                let cur_tokens = meter.prompt_tokens() + meter.completion_tokens();
+                                let delta_cost = cur_cost_nanos
+                                    .saturating_sub(self.prev_cost_nanos.unwrap_or(0));
+                                let delta_tokens =
+                                    cur_tokens.saturating_sub(self.prev_tokens.unwrap_or(0));
+                                if let Err(e) = envelope
+                                    .record_and_check(NanoUSD::from_nanos(delta_cost), delta_tokens)
+                                {
+                                    tracing::warn!(error = ?e, "Mid-stream budget ceiling breached; terminating stream");
+                                    breached = true;
+                                    breach_err = Some(e);
+                                }
+                                if !breached {
+                                    seen_totals = Some((cur_cost_nanos, cur_tokens));
+                                }
+                            }
+                            false
                         }
-                        if !breached {
-                            seen_totals = Some((cur_cost_nanos, cur_tokens));
-                        }
+                        Err(_) => true,
                     }
+                };
+                if poisoned {
+                    // Poisoned meter lock previously caused fail-open: the
+                    // entire budget-check block was skipped and the stream
+                    // continued unmetered. Fail closed instead.
+                    tracing::error!("StreamMeter lock poisoned; terminating stream fail-closed");
+                    self.cancel.cancel();
+                    self.release_guard();
+                    self.fire_finish_hook();
+                    return Poll::Ready(Some(Err(anyhow::anyhow!(
+                        "stream metering state poisoned; aborting fail-closed"
+                    ))));
                 }
 
                 if let Some((cost_nanos, tokens)) = seen_totals {
@@ -419,5 +441,48 @@ mod tests {
             "envelope must equal true streamed total, not quadratic sum"
         );
         assert_eq!(envelope.spent_cost().as_nanos(), 20);
+    }
+
+    #[test]
+    fn test_metered_stream_poisoned_lock_fails_closed() {
+        // P0: previously `if let Ok(mut meter) = meter.lock()` silently skipped
+        // the entire budget/meter block on poison, continuing unmetered (fail-open).
+        // Must abort fail-closed instead.
+        let cancel = CancellationToken::new();
+        let guard = make_test_guard();
+        let chunk = ChatStreamChunk {
+            content: Some("hello world poison test".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
+            Box::pin(stream::iter(vec![Ok(chunk)]));
+        let (mut stream, meter) = metered_stream(inner, guard, cancel.clone(), None);
+
+        // Poison the meter mutex by panicking while holding the lock.
+        let meter_clone = meter.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = meter_clone.lock().unwrap();
+            panic!("intentional poison for test");
+        }));
+        assert!(meter.lock().is_err(), "meter must be poisoned for this test");
+
+        // Stream must terminate with an error, not deliver the chunk unmetered.
+        let result = block_on(stream.next()).unwrap();
+        assert!(
+            result.is_err(),
+            "poisoned meter must cause stream to error fail-closed, got Ok"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("poisoned"),
+            "error must mention poisoned state, got: {err_msg}"
+        );
+        assert!(
+            cancel.is_cancelled(),
+            "cancel token must be cancelled on poisoned-meter abort"
+        );
+        // Subsequent poll must return None (stream terminated).
+        assert!(block_on(stream.next()).is_none());
     }
 }

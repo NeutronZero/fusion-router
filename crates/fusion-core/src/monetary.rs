@@ -205,7 +205,7 @@ impl NanoUSD {
 impl Add for NanoUSD {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
-        self.checked_add(rhs).expect("NanoUSD overflow in Add")
+        self.saturating_add(rhs)
     }
 }
 
@@ -218,7 +218,7 @@ impl AddAssign for NanoUSD {
 impl Sub for NanoUSD {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        self.checked_sub(rhs).expect("NanoUSD underflow in Sub")
+        self.saturating_sub(rhs)
     }
 }
 
@@ -274,5 +274,27 @@ mod tests {
         assert!(serde_json::from_str::<NanoUSD>("-1.0").is_err());
         assert!(serde_json::from_str::<NanoUSD>("NaN").is_err());
         assert!(serde_json::from_str::<NanoUSD>("Infinity").is_err());
+    }
+
+    #[test]
+    fn test_nanousd_add_sub_saturate_instead_of_panic() {
+        // P0: Add/Sub must not panic on overflow/underflow. Previously used
+        // `expect("NanoUSD overflow")` which unwinds the request task on
+        // adversarial pricing inputs (e.g. `pricing.sum()` in providers/mod.rs:108).
+        let max = NanoUSD::from_nanos(u64::MAX);
+        let one = NanoUSD::from_nanos(1);
+        // Saturating semantics: MAX + 1 == MAX, 0 - 1 == 0.
+        assert_eq!((max + one).as_nanos(), u64::MAX);
+        assert_eq!((NanoUSD::ZERO - one).as_nanos(), 0);
+        // AddAssign/SubAssign inherit the same non-panicking behaviour.
+        let mut a = max;
+        a += one;
+        assert_eq!(a.as_nanos(), u64::MAX);
+        let mut b = NanoUSD::ZERO;
+        b -= one;
+        assert_eq!(b.as_nanos(), 0);
+        // checked_* remains fallible for callers that need explicit errors.
+        assert!(max.checked_add(one).is_none());
+        assert!(NanoUSD::ZERO.checked_sub(one).is_none());
     }
 }
