@@ -101,6 +101,18 @@ impl FilesystemConnectorBackend {
     }
 }
 
+/// On-disk connector manifest. Unknown or absent fields fail closed instead of
+/// fabricating a healthy artifact (gate integrity).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConnectorManifestFile {
+    name: String,
+    version: semver::Version,
+    protocol_version: u32,
+    valid_health_endpoint_schema: bool,
+    valid_serde_schema: bool,
+}
+
 impl ConnectorBackend for FilesystemConnectorBackend {
     fn name(&self) -> &'static str {
         "filesystem"
@@ -108,7 +120,7 @@ impl ConnectorBackend for FilesystemConnectorBackend {
 
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<ConnectorArtifact>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
-        let entries = discover_fixtures(&manifest, FixtureKind::Connectors);
+        let entries = discover_fixtures(&manifest, FixtureKind::Connectors)?;
         let mut results = Vec::new();
         for entry in &entries {
             let full_path = self
@@ -120,18 +132,22 @@ impl ConnectorBackend for FilesystemConnectorBackend {
     }
 
     fn load(&self, path: &std::path::Path) -> Result<ConnectorArtifact, GateError> {
-        if !path.exists() {
-            return Err(GateError::ExecutionFailed(format!(
-                "connector path not found: {}",
-                path.display()
-            )));
-        }
+        let file = self
+            .loader
+            .resolve_manifest_file(path, "json", "connector")?;
+        let content = self.loader.read_to_string(&file)?;
+        let manifest: ConnectorManifestFile = serde_json::from_str(&content).map_err(|e| {
+            GateError::ExecutionFailed(format!(
+                "invalid connector manifest {}: {e}",
+                file.display()
+            ))
+        })?;
         Ok(ConnectorArtifact::new(
-            "http",
-            semver::Version::new(0, 10, 0),
-            1,
-            true,
-            true,
+            manifest.name,
+            manifest.version,
+            manifest.protocol_version,
+            manifest.valid_health_endpoint_schema,
+            manifest.valid_serde_schema,
         ))
     }
 }
@@ -314,5 +330,75 @@ mod tests {
         };
         let result = gate.run(&ctx).await;
         assert!(!result.passed());
+    }
+
+    fn temp_connector_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "fusion_connector_gate_{tag}_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(dir.join("connectors/http")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_filesystem_backend_loads_real_fixture_content() {
+        let temp = temp_connector_dir("real");
+        std::fs::write(
+            temp.join("connectors/http/connector.json"),
+            r#"{
+                "name": "http",
+                "version": "0.10.0",
+                "protocol_version": 1,
+                "valid_health_endpoint_schema": true,
+                "valid_serde_schema": true
+            }"#,
+        )
+        .unwrap();
+
+        let backend = FilesystemConnectorBackend::new(temp.clone());
+        let artifact = backend.load(&temp.join("connectors/http")).unwrap();
+        assert_eq!(artifact.name, "http");
+        assert_eq!(artifact.version, semver::Version::new(0, 10, 0));
+        assert_eq!(artifact.protocol_version, 1);
+        assert!(artifact.valid_health_endpoint_schema);
+        assert!(artifact.valid_serde_schema);
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_backend_rejects_corrupt_manifest() {
+        let temp = temp_connector_dir("corrupt");
+        std::fs::write(temp.join("connectors/http/connector.json"), "]]] not json").unwrap();
+
+        let backend = FilesystemConnectorBackend::new(temp.clone());
+        let result = backend.load(&temp.join("connectors/http"));
+        assert!(
+            result.is_err(),
+            "unparseable manifest must fail the gate, not fabricate a healthy artifact"
+        );
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_backend_rejects_missing_required_fields() {
+        let temp = temp_connector_dir("missing");
+        // protocol_schema_version and validity flags absent.
+        std::fs::write(
+            temp.join("connectors/http/connector.json"),
+            r#"{ "name": "http", "version": "0.10.0" }"#,
+        )
+        .unwrap();
+
+        let backend = FilesystemConnectorBackend::new(temp.clone());
+        let result = backend.load(&temp.join("connectors/http"));
+        assert!(
+            result.is_err(),
+            "missing required fields must be a hard error"
+        );
+
+        let _ = std::fs::remove_dir_all(temp);
     }
 }

@@ -12,6 +12,14 @@ const DEFAULT_MAX_RETRIES: u32 = 5;
 const DEFAULT_BACKOFF_BASE_MS: u64 = 1000;
 const DEFAULT_BACKOFF_MAX_MS: u64 = 60_000;
 
+/// Hardened default client timeout (policy: never ship a timeout-less client).
+const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Upper bound for buffered upstream error bodies. Provider error payloads
+/// are diagnostics, not data; buffering them unboundedly lets a hostile or
+/// broken upstream exhaust memory.
+pub const MAX_ERROR_BODY_BYTES: usize = 1024 * 1024;
+const ERROR_BODY_TRUNCATION_SUFFIX: &str = "\n...[truncated]";
+
 pub struct HttpTransport {
     client: Client,
     backoff_base_ms: u64,
@@ -73,7 +81,7 @@ impl HttpTransport {
 
         let status = resp.status().as_u16();
         if status >= 400 {
-            let err_body = resp.text().await.unwrap_or_default();
+            let err_body = read_body_capped(resp).await;
             return Err(TransportError::Http {
                 status,
                 body: err_body,
@@ -89,17 +97,67 @@ impl HttpTransport {
     }
 }
 
-impl Default for HttpTransport {
-    fn default() -> Self {
-        Self::new(Duration::from_secs(30)).unwrap_or_else(|e| {
-            tracing::error!(error = %e, "failed to build configured HTTP client for transport; falling back to default Client");
-            Self {
-                client: Client::new(),
-                backoff_base_ms: DEFAULT_BACKOFF_BASE_MS,
-                backoff_max_ms: DEFAULT_BACKOFF_MAX_MS,
-                max_retries: DEFAULT_MAX_RETRIES,
+/// Reads an upstream error body with a hard byte cap. Bodies larger than
+/// [`MAX_ERROR_BODY_BYTES`] are truncated and marked, never buffered whole.
+async fn read_body_capped(mut resp: reqwest::Response) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    while !truncated {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                let remaining = MAX_ERROR_BODY_BYTES.saturating_sub(buf.len());
+                if chunk.len() > remaining {
+                    buf.extend_from_slice(&chunk[..remaining]);
+                    truncated = true;
+                } else {
+                    buf.extend_from_slice(&chunk);
+                }
             }
+            Ok(None) => break,
+            Err(_) => {
+                // A partial error body is still usable diagnostics; keep what
+                // was read instead of failing the classification.
+                break;
+            }
+        }
+    }
+    finalize_error_body(buf, truncated)
+}
+
+/// Pure helper: lossy-decode a capped byte buffer and mark truncation.
+fn finalize_error_body(buf: Vec<u8>, truncated: bool) -> String {
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    if truncated {
+        text.push_str(ERROR_BODY_TRUNCATION_SUFFIX);
+    }
+    text
+}
+
+impl Default for HttpTransport {
+    /// Fail-fast: silently falling back to `Client::new()` (no timeout)
+    /// contradicts the transport hardening policy. If the hardened client
+    /// cannot be built, panic with a clear startup-time message instead of
+    /// running unbounded requests.
+    fn default() -> Self {
+        Self::new(DEFAULT_HTTP_TIMEOUT).unwrap_or_else(|e| {
+            panic!(
+                "HttpTransport::default failed to build hardened HTTP client (timeout {:?}): {e}. \
+                 Refusing to start with an unbounded (timeout-less) HTTP client.",
+                DEFAULT_HTTP_TIMEOUT
+            )
         })
+    }
+}
+
+/// Retry classification. Timeouts are deliberately NOT retryable: retrying a
+/// timed-out provider call re-bills the full (potentially expensive) upstream
+/// request and doubles latency on long completions.
+fn is_retryable(result: &Result<TransportResponse, TransportError>) -> bool {
+    match result {
+        Ok(response) => response.status == 429,
+        Err(TransportError::Http { status, .. }) => *status == 429 || *status >= 500,
+        Err(TransportError::Timeout(_)) => false,
+        Err(TransportError::Network(_)) | Err(TransportError::Serialization(_)) => true,
     }
 }
 
@@ -112,17 +170,11 @@ impl Transport for HttpTransport {
         // Only transient failures are retried: rate limits (429), server
         // errors (5xx), and network/serialization hiccups. Permanent client
         // errors (4xx) fail immediately instead of wasting latency and
-        // potentially tripping provider rate limits.
+        // potentially tripping provider rate limits. Timeouts are never
+        // retried (re-billed long calls).
         for attempt in 0..=self.max_retries {
             let result = self.send_once(&req).await;
-            let should_retry = match &result {
-                Ok(response) => response.status == 429,
-                Err(TransportError::Http { status, .. }) => *status == 429 || *status >= 500,
-                Err(TransportError::Network(_))
-                | Err(TransportError::Timeout(_))
-                | Err(TransportError::Serialization(_)) => true,
-            };
-            if !should_retry || attempt == self.max_retries {
+            if !is_retryable(&result) || attempt == self.max_retries {
                 return result;
             }
             tokio::time::sleep(backoff.next()).await;
@@ -156,13 +208,12 @@ impl Transport for HttpTransport {
 
         let status = resp.status().as_u16();
         if status >= 400 {
-            let err_body = resp.text().await.unwrap_or_default();
+            let err_body = read_body_capped(resp).await;
             return Err(TransportError::Http {
                 status,
                 body: err_body,
             });
         }
-
         // Chunk boundaries are arbitrary byte counts: a multi-byte UTF-8
         // sequence may be split across two chunks. `drain_utf8` decodes only
         // complete sequences per chunk and carries any trailing partial
@@ -250,6 +301,66 @@ mod tests {
         assert_eq!(transport.backoff_base_ms, 250);
         assert_eq!(transport.backoff_max_ms, 4_000);
         assert_eq!(transport.max_retries, 3);
+    }
+
+    #[test]
+    fn test_timeout_is_not_retryable() {
+        let timeout: Result<TransportResponse, TransportError> =
+            Err(TransportError::Timeout("request timed out".into()));
+        assert!(
+            !is_retryable(&timeout),
+            "retrying a timed-out provider call re-bills the full request; must not retry"
+        );
+    }
+
+    #[test]
+    fn test_retryable_classification_table() {
+        let ok_429 = Ok(TransportResponse {
+            status: 429,
+            body: serde_json::json!({}),
+        });
+        let ok_200 = Ok(TransportResponse {
+            status: 200,
+            body: serde_json::json!({}),
+        });
+        let http_500: Result<TransportResponse, TransportError> = Err(TransportError::Http {
+            status: 500,
+            body: String::new(),
+        });
+        let http_400: Result<TransportResponse, TransportError> = Err(TransportError::Http {
+            status: 400,
+            body: String::new(),
+        });
+        let network: Result<TransportResponse, TransportError> =
+            Err(TransportError::Network("conn reset".into()));
+        let serialization: Result<TransportResponse, TransportError> =
+            Err(TransportError::Serialization("bad json".into()));
+
+        assert!(is_retryable(&ok_429), "rate limit is retryable");
+        assert!(!is_retryable(&ok_200));
+        assert!(is_retryable(&http_500), "server error is retryable");
+        assert!(!is_retryable(&http_400), "client error fails fast");
+        assert!(is_retryable(&network));
+        assert!(is_retryable(&serialization));
+    }
+
+    #[test]
+    fn test_finalize_error_body_marks_truncation() {
+        let full = finalize_error_body(b"error detail".to_vec(), false);
+        assert_eq!(full, "error detail");
+        assert!(!full.contains("truncated"));
+
+        let truncated = finalize_error_body(vec![b'x'; MAX_ERROR_BODY_BYTES], true);
+        assert!(truncated.contains(ERROR_BODY_TRUNCATION_SUFFIX));
+        assert!(truncated.len() < MAX_ERROR_BODY_BYTES + ERROR_BODY_TRUNCATION_SUFFIX.len() + 16);
+    }
+
+    #[test]
+    fn test_finalize_error_body_lossy_on_invalid_utf8() {
+        let mut buf = b"partial ".to_vec();
+        buf.push(0xFF); // invalid byte
+        let text = finalize_error_body(buf, false);
+        assert_eq!(text, "partial \u{FFFD}");
     }
 
     #[test]

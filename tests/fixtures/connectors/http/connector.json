@@ -1,0 +1,7 @@
+{
+  "name": "http",
+  "version": "0.10.0",
+  "protocol_version": 1,
+  "valid_health_endpoint_schema": true,
+  "valid_serde_schema": true
+}

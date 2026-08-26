@@ -50,9 +50,11 @@ impl DeterminismBackend for RealDeterminismBackend {
         ir.to_canonical_json()
             .map_err(|e| GateError::ExecutionFailed(e.to_string()))?
             .hash(&mut hasher);
-        serde_json::to_string(&graph)
-            .map_err(|e| GateError::ExecutionFailed(e.to_string()))?
-            .hash(&mut hasher);
+        // Canonical, key-sorted serialization of the graph. Raw
+        // `serde_json::to_string` walks ExecutionNode.config HashMaps in
+        // per-process order, making the hash flaky for any graph that carries
+        // config — and certifying nothing cross-process.
+        fusion_compiler::canonical_json(&graph).hash(&mut hasher);
         Ok(hasher.finish())
     }
 }
@@ -351,7 +353,7 @@ mod tests {
         assert!(result.passed());
         if let GateExecution::Success(res) = result {
             // One check per fixture under tests/fixtures/determinism.
-            assert!(res.details.len() >= 1);
+            assert!(!res.details.is_empty());
             assert!(res.details.iter().all(|d| d.passed));
         } else {
             panic!("expected GateExecution::Success");
@@ -393,5 +395,33 @@ mod tests {
         };
         let result = gate.run(&ctx).await;
         assert!(result.is_error());
+    }
+
+    #[tokio::test]
+    async fn test_real_backend_canonical_hash_stable_across_compilations() {
+        // Exercises the real planner → compiler → canonical_json hash path on
+        // the committed workspace fixtures, twice per fixture.
+        let gate = DeterminismGate::new(
+            Box::new(RealDeterminismBackend),
+            DeterminismGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
+        );
+        let ctx = GateContext {
+            workspace_root: PathBuf::from("."),
+            baseline_version: None,
+        };
+        let result = gate.run(&ctx).await;
+        match result {
+            GateExecution::Success(res) => {
+                assert!(
+                    res.passed,
+                    "determinism gate must pass on committed fixtures: {}",
+                    res.summary
+                );
+                assert!(res.details.iter().all(|d| d.passed));
+            }
+            other => panic!("expected success, got {other:?}"),
+        }
     }
 }

@@ -143,6 +143,13 @@ impl StagingSession {
         if !handle_meta.is_file() {
             return Err("validated path is not a regular file".into());
         }
+        // Hardlink guard: fs::canonicalize resolves symlinks but cannot see a
+        // hard link planted inside an allowed root pointing at content that
+        // lives elsewhere (both names are equally canonical). A link count
+        // above one means outside aliases exist, so fail closed. The check
+        // runs on the opened handle so the verdict covers the exact inode.
+        crate::security::paths::check_not_hardlinked(&handle, canonical)
+            .map_err(|e| format!("refusing staged input: {e}"))?;
         if handle_meta.len() as usize > max_bytes {
             return Err(format!(
                 "file is {} bytes, exceeding max_staged_input_bytes {max_bytes}",
@@ -510,8 +517,8 @@ impl Tool for ShellCommandTool {
 
         // Read each stream up to MAX_OUTPUT_BYTES + 1 so a chatty child can
         // never buffer unbounded memory in the host before truncation.
-        let stdout_task = tokio::spawn(read_capped(stdout_pipe));
-        let stderr_task = tokio::spawn(read_capped(stderr_pipe));
+        let mut stdout_task = tokio::spawn(read_capped(stdout_pipe));
+        let mut stderr_task = tokio::spawn(read_capped(stderr_pipe));
 
         let status = match tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs),
@@ -533,14 +540,47 @@ impl Tool for ShellCommandTool {
             }
         };
 
-        let (stdout_bytes, stdout_truncated) = stdout_task
-            .await
-            .map_err(|e| format!("stdout reader failed: {e}"))?
-            .map_err(|e| format!("stdout read failed: {e}"))?;
-        let (stderr_bytes, stderr_truncated) = stderr_task
-            .await
-            .map_err(|e| format!("stderr reader failed: {e}"))?
-            .map_err(|e| format!("stderr read failed: {e}"))?;
+        // Bound the drain joins with the same deadline philosophy as the
+        // wait: a background grandchild inheriting the pipe write end would
+        // otherwise pin these reader tasks (and their buffers) forever.
+        let grace = drain_grace(self.timeout_secs);
+        let stdout_joined = tokio::time::timeout(grace, &mut stdout_task).await;
+        let stderr_joined = tokio::time::timeout(grace, &mut stderr_task).await;
+
+        let (stdout_bytes, stdout_truncated) = match stdout_joined {
+            Ok(Ok(result)) => match result {
+                Ok(pair) => pair,
+                Err(e) => return Err(format!("stdout read failed: {e}")),
+            },
+            Ok(Err(e)) => return Err(format!("stdout reader failed: {e}")),
+            Err(_) => {
+                tracing::warn!(
+                    command = cmd,
+                    grace_secs = grace.as_secs(),
+                    "stdout pipe drain exceeded grace period; discarding pending output"
+                );
+                (Vec::new(), true)
+            }
+        };
+        let (stderr_bytes, stderr_truncated) = match stderr_joined {
+            Ok(Ok(result)) => match result {
+                Ok(pair) => pair,
+                Err(e) => return Err(format!("stderr read failed: {e}")),
+            },
+            Ok(Err(e)) => return Err(format!("stderr reader failed: {e}")),
+            Err(_) => {
+                tracing::warn!(
+                    command = cmd,
+                    grace_secs = grace.as_secs(),
+                    "stderr pipe drain exceeded grace period; discarding pending output"
+                );
+                (Vec::new(), true)
+            }
+        };
+        // No-op for completed tasks; severs any task still blocked on an
+        // open write end so it cannot leak.
+        stdout_task.abort();
+        stderr_task.abort();
 
         let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
         let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
@@ -587,6 +627,17 @@ where
         }
     }
     Ok((buf, truncated))
+}
+
+/// Maximum grace period granted to the stdout/stderr drain joins after the
+/// child exits. A grandchild inheriting the write end can keep a pipe open
+/// forever; without this bound the reader tasks leak.
+const DRAIN_GRACE_CAP_SECS: u64 = 5;
+
+/// Deadline budget for the post-exit pipe drains: never more than the
+/// command's own timeout, capped at [`DRAIN_GRACE_CAP_SECS`], floored at 1s.
+fn drain_grace(timeout_secs: u64) -> std::time::Duration {
+    std::time::Duration::from_secs(timeout_secs.clamp(1, DRAIN_GRACE_CAP_SECS))
 }
 
 fn maybe_terminate(text: &str) -> String {
@@ -878,6 +929,52 @@ mod tests {
         assert!(dir.is_dir());
         drop(session);
         assert!(!dir.exists(), "session drop must remove the staging dir");
+    }
+
+    #[test]
+    fn test_drain_grace_is_bounded() {
+        assert_eq!(drain_grace(0), std::time::Duration::from_secs(1));
+        assert_eq!(drain_grace(2), std::time::Duration::from_secs(2));
+        assert_eq!(drain_grace(5), std::time::Duration::from_secs(5));
+        assert_eq!(
+            drain_grace(600),
+            std::time::Duration::from_secs(DRAIN_GRACE_CAP_SECS),
+            "drain grace must be capped even for long command timeouts"
+        );
+        assert_eq!(
+            drain_grace(u64::MAX),
+            std::time::Duration::from_secs(DRAIN_GRACE_CAP_SECS),
+            "drain grace must not overflow on huge timeouts"
+        );
+    }
+
+    #[test]
+    fn test_stage_mode_rejects_hardlinked_input() {
+        let root = std::env::temp_dir().join(format!("_fusion_hard_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let data = root.join("input.txt");
+        std::fs::write(&data, "hardlinked-content").unwrap();
+        let alias = root.join("alias.txt");
+        std::fs::hard_link(&data, &alias).expect("hard links supported on test volume");
+
+        let tool = ShellCommandTool::new(
+            vec!["cat".into()],
+            5,
+            vec![root.to_str().unwrap().to_string()],
+            false,
+        );
+        // Both names of the same inode must be rejected: content reachable
+        // through the allowed root is also aliased from outside it.
+        for path in [&data, &alias] {
+            let err = tool
+                .apply_path_policy("cat", &[path.to_str().unwrap().to_string()])
+                .unwrap_err();
+            assert!(
+                err.contains("hard-linked"),
+                "hardlinked input '{path:?}' must be rejected, got: {err}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]

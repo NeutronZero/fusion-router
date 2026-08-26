@@ -130,7 +130,22 @@ impl PluginManager {
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("WasmRuntime initialization failed"))?;
 
-        let wasm_path = Path::new(dir).join(&manifest.plugin.entry);
+        // Manifest entries are untrusted: `dir.join(entry)` would happily
+        // resolve `../outside.wasm` or an absolute path. Contain the resolved
+        // path within the plugin directory (Law 10) before reading.
+        let wasm_path = crate::security::paths::canonicalize_within(
+            std::path::Path::new(dir),
+            std::path::Path::new(&manifest.plugin.entry),
+        )
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "plugin '{}' entry '{}' rejected by path containment: {}",
+                name,
+                manifest.plugin.entry,
+                e
+            )
+        })?;
+
         let wasm_bytes = std::fs::read(&wasm_path)?;
         let module = runtime.load_module(&wasm_bytes)?;
         self.wasm_modules.insert(name.to_string(), module);
@@ -233,5 +248,65 @@ mod tests {
         let res = manager.register_capability_plugin(&bad);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Incompatible API major version"));
+    }
+
+    #[cfg(all(test, feature = "wasm-plugins"))]
+    mod wasm_entry_containment {
+        use super::*;
+        use crate::plugin::{PluginManifest, WasmConfig};
+
+        fn manifest_with_entry(entry: &str) -> PluginManifest {
+            PluginManifest {
+                plugin: crate::plugin::manifest::PluginMeta {
+                    name: "evil".into(),
+                    version: "0.1.0".into(),
+                    description: None,
+                    entry: entry.to_string(),
+                },
+                provider: None,
+                strategy: None,
+                pass: None,
+                tool: None,
+                wasm: Some(WasmConfig { functions: vec![] }),
+            }
+        }
+
+        #[test]
+        fn test_manifest_entry_traversal_is_rejected() {
+            let root = std::env::temp_dir().join(format!("_fusion_plug_{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            // The "outside" module exists, so the only possible failure is
+            // containment — not a missing file.
+            let outside = root
+                .parent()
+                .unwrap()
+                .join(format!("_fusion_outside_{}.wasm", uuid::Uuid::new_v4()));
+            std::fs::write(&outside, b"\x00asm\x01\x00\x00\x00").unwrap();
+
+            let mut manager = PluginManager::new();
+            let err = manager
+                .load_wasm_plugin(
+                    "evil",
+                    &manifest_with_entry(outside.to_string_lossy().as_ref()),
+                    root.to_str().unwrap(),
+                )
+                .expect_err("../-style escape must be rejected");
+
+            assert!(
+                err.to_string().contains("path containment"),
+                "typed rejection expected, got: {err}"
+            );
+
+            // Absolute-path splicing is equally rejected.
+            let err2 = manager.load_wasm_plugin(
+                "evil",
+                &manifest_with_entry("/etc/passwd"),
+                root.to_str().unwrap(),
+            );
+            assert!(err2.is_err(), "absolute entries must not escape the dir");
+
+            let _ = std::fs::remove_file(&outside);
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 }

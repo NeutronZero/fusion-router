@@ -380,12 +380,50 @@ impl BudgetEnvelope {
     /// values so a rejected record leaves no permanent overspend. The error
     /// still reports the prospective total for diagnostics. Under concurrent
     /// records a transient over-read is possible (another thread may observe
-    /// the reservation before rollback) — that fails closed rather than open.
+    /// the reservation before rollback) â€” that fails closed rather than open.
+    ///
+    /// Arithmetic is checked: a record whose addition would overflow a u64
+    /// counter wraps nothing â€” nothing is committed for the overflowing
+    /// counter and a saturated ceiling-violation error is returned instead
+    /// (plain adds wrap in release builds, which previously let a huge
+    /// reservation bypass the ceilings).
     pub fn record_and_check(&self, cost: NanoUSD, tokens: u64) -> Result<(), BudgetExceededError> {
-        let prev_cost = self.spent_cost.fetch_add(cost.as_nanos(), Ordering::SeqCst);
-        let new_cost = NanoUSD::from_nanos(prev_cost + cost.as_nanos());
-        let prev_tokens = self.spent_tokens.fetch_add(tokens, Ordering::SeqCst);
-        let new_tokens = prev_tokens + tokens;
+        let cost_nanos = cost.as_nanos();
+
+        // `fetch_update` yields the PREVIOUS counter value; the committed new
+        // total is prev + increment, which the closure already proved fits.
+        let prev_cost =
+            match self
+                .spent_cost
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| {
+                    prev.checked_add(cost_nanos)
+                }) {
+                Ok(prev) => prev,
+                Err(_overflow) => {
+                    return Err(BudgetExceededError::Cost {
+                        spent: u64::MAX,
+                        max: self.max_cost.as_nanos(),
+                    });
+                }
+            };
+        let new_cost = NanoUSD::from_nanos(prev_cost.saturating_add(cost_nanos));
+
+        let prev_tokens =
+            match self
+                .spent_tokens
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| {
+                    prev.checked_add(tokens)
+                }) {
+                Ok(prev) => prev,
+                Err(_overflow) => {
+                    self.spent_cost.fetch_sub(cost_nanos, Ordering::SeqCst);
+                    return Err(BudgetExceededError::Tokens {
+                        spent: u64::MAX,
+                        max: self.max_tokens,
+                    });
+                }
+            };
+        let new_tokens = prev_tokens.saturating_add(tokens);
 
         let violation = if new_cost > self.max_cost {
             Some(BudgetExceededError::Cost {
@@ -402,7 +440,7 @@ impl BudgetEnvelope {
         };
 
         if let Some(err) = violation {
-            self.spent_cost.fetch_sub(cost.as_nanos(), Ordering::SeqCst);
+            self.spent_cost.fetch_sub(cost_nanos, Ordering::SeqCst);
             self.spent_tokens.fetch_sub(tokens, Ordering::SeqCst);
             return Err(err);
         }
@@ -412,6 +450,7 @@ impl BudgetEnvelope {
     pub fn increment_iteration(&self) -> Result<u64, BudgetExceededError> {
         let iter = self.current_iterations.fetch_add(1, Ordering::SeqCst) + 1;
         if iter > self.max_iterations as u64 {
+            self.current_iterations.fetch_sub(1, Ordering::SeqCst);
             return Err(BudgetExceededError::Iterations {
                 current: iter,
                 max: self.max_iterations,
@@ -458,7 +497,7 @@ impl std::fmt::Display for BudgetExceededError {
         match self {
             Self::Cost { spent, max } => write!(
                 f,
-                "Cost budget exceeded: {} millicosts spent, {} max",
+                "Cost budget exceeded: {} nano-USD spent, {} nano-USD max",
                 spent, max
             ),
             Self::Tokens { spent, max } => write!(
@@ -636,5 +675,89 @@ mod tests {
         assert!(ok.is_ok(), "rolled-back spend must free budget again");
         assert_eq!(env.spent_cost().as_nanos(), 100);
         assert_eq!(env.spent_tokens(), 50);
+    }
+
+    #[test]
+    fn test_budget_cost_overflow_rejected_without_committing() {
+        let half = u64::MAX / 2 + 1;
+        let env = BudgetEnvelope::new(NanoUSD::from_nanos(u64::MAX), u64::MAX, 5);
+        assert!(env.record_and_check(NanoUSD::from_nanos(half), 0).is_ok());
+        // half + half would exceed u64::MAX: must fail closed, not wrap.
+        let err = env
+            .record_and_check(NanoUSD::from_nanos(half), 0)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            BudgetExceededError::Cost {
+                spent: u64::MAX,
+                max: u64::MAX
+            }
+        );
+        assert_eq!(
+            env.spent_cost().as_nanos(),
+            half,
+            "overflow must not commit"
+        );
+        assert_eq!(env.spent_tokens(), 0);
+        // Envelope remains usable for spend within the remaining headroom.
+        assert!(env
+            .record_and_check(NanoUSD::from_nanos(u64::MAX - half), 0)
+            .is_ok());
+        assert_eq!(env.spent_cost().as_nanos(), u64::MAX);
+    }
+
+    #[test]
+    fn test_budget_token_overflow_rolls_back_cost() {
+        let half = u64::MAX / 2 + 1;
+        let env = BudgetEnvelope::new(NanoUSD::from_nanos(u64::MAX), u64::MAX, 5);
+        assert!(env.record_and_check(NanoUSD::from_nanos(10), half).is_ok());
+        let err = env
+            .record_and_check(NanoUSD::from_nanos(10), half)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            BudgetExceededError::Tokens {
+                spent: u64::MAX,
+                max: u64::MAX
+            }
+        );
+        assert_eq!(env.spent_tokens(), half);
+        assert_eq!(
+            env.spent_cost().as_nanos(),
+            10,
+            "cost must roll back with tokens"
+        );
+    }
+
+    #[test]
+    fn test_budget_iteration_failure_rolls_back_counter() {
+        let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 100, 2);
+        assert_eq!(env.increment_iteration().unwrap(), 1);
+        assert_eq!(env.increment_iteration().unwrap(), 2);
+        let err = env.increment_iteration().unwrap_err();
+        assert_eq!(err, BudgetExceededError::Iterations { current: 3, max: 2 });
+        assert_eq!(
+            env.current_iterations(),
+            2,
+            "failed iterations must consume nothing"
+        );
+        // Repeated failures keep reporting the same prospective count.
+        let again = env.increment_iteration().unwrap_err();
+        assert_eq!(
+            again,
+            BudgetExceededError::Iterations { current: 3, max: 2 }
+        );
+        assert_eq!(env.current_iterations(), 2);
+    }
+
+    #[test]
+    fn test_budget_error_display_reports_nano_usd_units() {
+        let err = BudgetExceededError::Cost {
+            spent: 123,
+            max: 100,
+        };
+        let text = err.to_string();
+        assert!(text.contains("nano-USD"), "unit must be nano-USD: {text}");
+        assert!(!text.contains("millicosts"), "stale unit label: {text}");
     }
 }

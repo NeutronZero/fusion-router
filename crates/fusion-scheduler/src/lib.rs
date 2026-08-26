@@ -183,7 +183,7 @@ impl DefaultScheduler {
 
             // Now we can mutate queue
             let mut handles = Vec::new();
-            for node_id in batch_ids {
+            for &node_id in &batch_ids {
                 queue.mark_in_progress(node_id);
                 node_states.insert(node_id, NodeState::Running);
 
@@ -237,10 +237,11 @@ impl DefaultScheduler {
                 });
             }
 
-            // Wait for all nodes in this batch
-            for handle in handles {
-                let (node_id, result) = handle.await;
-
+            // Wait for ALL nodes in this batch concurrently — join_all polls
+            // every future together, so independent nodes overlap instead of
+            // running strictly serially.
+            let results = futures::future::join_all(handles).await;
+            for (node_id, result) in results {
                 // Cost/token accounting runs for ANY result carrying usage
                 // (including failed provider calls), matching the monolith —
                 // then the budget envelope is checked after accumulation.
@@ -263,9 +264,46 @@ impl DefaultScheduler {
                             envelope.record_and_check(node_cost, usage.total_tokens as u64)
                         {
                             tracing::info!(node_id = ?node_id, error = %e, "Budget envelope breached; stopping further execution");
+
+                            // Preserve the breaching node's terminal state so
+                            // its completed work is not discarded.
+                            match result.state {
+                                NodeState::Succeeded => {
+                                    node_states.insert(node_id, NodeState::Succeeded);
+                                    outputs.insert(
+                                        node_id,
+                                        result.output.unwrap_or(serde_json::Value::Null),
+                                    );
+                                }
+                                other_state => {
+                                    node_states.insert(node_id, other_state);
+                                }
+                            }
+
+                            // Siblings of this batch whose results were never
+                            // processed must not linger as phantom Running.
+                            for &batch_id in &batch_ids {
+                                if !matches!(
+                                    node_states.get(&batch_id),
+                                    Some(
+                                        NodeState::Succeeded
+                                            | NodeState::Failed(_)
+                                            | NodeState::Skipped
+                                    )
+                                ) {
+                                    node_states.insert(
+                                        batch_id,
+                                        NodeState::Failed(format!("Budget breached: {e}")),
+                                    );
+                                }
+                            }
+
                             for node in &graph.nodes {
                                 if !node_states.contains_key(&node.id)
-                                    || matches!(node_states.get(&node.id), Some(NodeState::Pending))
+                                    || matches!(
+                                        node_states.get(&node.id),
+                                        Some(NodeState::Pending | NodeState::Running)
+                                    )
                                 {
                                     node_states.insert(node.id, NodeState::Skipped);
                                 }
@@ -333,6 +371,13 @@ impl DefaultScheduler {
                                         node_states.insert(body_id, NodeState::Pending);
                                     }
                                     queue.reset_loop_body(&body_ids);
+                                    // Loop sources never blanket-activate
+                                    // downstream; re-arm only the body edges.
+                                    // The `"exit"` targets stay gated until a
+                                    // non-continue decision below.
+                                    for &body_id in &body_ids {
+                                        queue.activate_edge(node_id, body_id);
+                                    }
                                 } else {
                                     let exit_targets: Vec<uuid::Uuid> = queue
                                         .outgoing_edges(node_id)
@@ -1277,6 +1322,469 @@ mod tests {
         assert!(
             matches!(outcome.node_states.get(&n2), Some(NodeState::Skipped)),
             "outstanding node must be skipped"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Concurrency: batch members must overlap, not await serially
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_independent_batch_nodes_execute_concurrently() {
+        use std::sync::Mutex;
+        use std::time::{Duration, Instant};
+
+        struct SleepExecutor {
+            starts: Mutex<Vec<Instant>>,
+        }
+
+        #[async_trait]
+        impl Executor for SleepExecutor {
+            async fn execute_node(
+                &self,
+                _node: &ExecutionNode,
+                _ctx: &NodeExecContext,
+            ) -> NodeExecutionResult {
+                self.starts.lock().unwrap().push(Instant::now());
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                NodeExecutionResult {
+                    state: NodeState::Succeeded,
+                    usage: None,
+                    latency_ms: 50,
+                    output: Some(serde_json::json!("slept")),
+                }
+            }
+        }
+
+        let n1 = uuid::Uuid::new_v4();
+        let n2 = uuid::Uuid::new_v4();
+        let graph = RecordingExecutor::graph_of(
+            vec![
+                RecordingExecutor::node_node(n1, ExecutionNodeKind::LLMGenerate, "n1"),
+                RecordingExecutor::node_node(n2, ExecutionNodeKind::LLMGenerate, "n2"),
+            ],
+            vec![],
+        );
+
+        let executor = SleepExecutor {
+            starts: Mutex::new(Vec::new()),
+        };
+        let scheduler = DefaultScheduler::new();
+        let start = Instant::now();
+        let outcome = scheduler.run(graph, &executor).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(outcome.success);
+        let starts = executor.starts.lock().unwrap().clone();
+        assert_eq!(starts.len(), 2, "both nodes must have executed");
+        let spread = starts
+            .iter()
+            .max()
+            .unwrap()
+            .duration_since(*starts.iter().min().unwrap());
+        assert!(
+            spread < Duration::from_millis(40),
+            "batch nodes must start together, spread was {spread:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(95),
+            "two 50ms nodes awaited serially would exceed 100ms; took {elapsed:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Budget breach mid-batch: no discarded results, no phantom Running
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_budget_breach_records_result_and_fails_unprocessed_batch_members() {
+        struct UsageExecutor;
+
+        #[async_trait]
+        impl Executor for UsageExecutor {
+            async fn execute_node(
+                &self,
+                _node: &ExecutionNode,
+                _ctx: &NodeExecContext,
+            ) -> NodeExecutionResult {
+                NodeExecutionResult {
+                    state: NodeState::Succeeded,
+                    usage: Some(Usage {
+                        prompt_tokens: 10,
+                        completion_tokens: 10,
+                        total_tokens: 20,
+                    }),
+                    latency_ms: 1,
+                    output: Some(serde_json::json!("ok")),
+                }
+            }
+        }
+
+        let n1 = uuid::Uuid::new_v4();
+        let n2 = uuid::Uuid::new_v4();
+        let graph = RecordingExecutor::graph_of(
+            vec![
+                RecordingExecutor::node_node(n1, ExecutionNodeKind::LLMGenerate, "n1"),
+                RecordingExecutor::node_node(n2, ExecutionNodeKind::LLMGenerate, "n2"),
+            ],
+            vec![],
+        );
+        // Token limit 5 < 20 consumed per node: the first processed result
+        // breaches while its sibling is still unresolved in the same batch.
+        let env = BudgetEnvelope::new(NanoUSD::from_nanos(10_000_000), 5, 100);
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler
+            .run_with_budget(graph, &UsageExecutor, &env)
+            .await
+            .unwrap();
+
+        assert!(!outcome.success);
+        assert_eq!(
+            outcome.total_tokens, 20,
+            "only results processed before the breach are counted"
+        );
+        assert!(
+            matches!(outcome.node_states.get(&n1), Some(NodeState::Succeeded)),
+            "the breaching node's succeeded work must be recorded, not discarded"
+        );
+        assert_eq!(
+            outcome.outputs.get(&n1),
+            Some(&serde_json::json!("ok")),
+            "the breaching node's output must survive the early return"
+        );
+        match outcome.node_states.get(&n2) {
+            Some(NodeState::Failed(msg)) => assert!(
+                msg.contains("Budget"),
+                "unresolved sibling must fail with a budget-breach reason, got: {msg}"
+            ),
+            other => panic!("sibling must be terminally Failed, got {other:?}"),
+        }
+        assert!(
+            outcome
+                .node_states
+                .values()
+                .all(|s| !matches!(s, NodeState::Running)),
+            "no phantom Running states may remain: {:?}",
+            outcome.node_states
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Loop gating: should_continue decides body-vs-exit activation
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_loop_exit_target_runs_only_after_loop_finishes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Mutex;
+        let loop_calls = Arc::new(AtomicUsize::new(0));
+        let body_calls = Arc::new(AtomicUsize::new(0));
+        let exit_calls = Arc::new(AtomicUsize::new(0));
+        let order: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+        struct GatedLoopExecutor {
+            loop_calls: Arc<AtomicUsize>,
+            body_calls: Arc<AtomicUsize>,
+            exit_calls: Arc<AtomicUsize>,
+            order: Arc<Mutex<Vec<String>>>,
+        }
+        #[async_trait]
+        impl Executor for GatedLoopExecutor {
+            async fn execute_node(
+                &self,
+                node: &ExecutionNode,
+                _ctx: &NodeExecContext,
+            ) -> NodeExecutionResult {
+                self.order.lock().unwrap().push(node.model.clone());
+                if node.model == "loop" {
+                    let n = self.loop_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                    let out = serde_json::json!(n <= 3);
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(out),
+                    }
+                } else if node.model == "body" {
+                    self.body_calls.fetch_add(1, Ordering::SeqCst);
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!("iterated")),
+                    }
+                } else {
+                    self.exit_calls.fetch_add(1, Ordering::SeqCst);
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!("exit-reached")),
+                    }
+                }
+            }
+        }
+
+        let loop_id = uuid::Uuid::new_v4();
+        let body = uuid::Uuid::new_v4();
+        let exit = uuid::Uuid::new_v4();
+        let mut loop_node = RecordingExecutor::node_node(loop_id, ExecutionNodeKind::Loop, "loop");
+        loop_node
+            .config
+            .insert("max_iterations".into(), serde_json::json!(3));
+        let graph = RecordingExecutor::graph_of(
+            vec![
+                loop_node,
+                RecordingExecutor::node_node(body, ExecutionNodeKind::LLMGenerate, "body"),
+                RecordingExecutor::node_node(exit, ExecutionNodeKind::LLMGenerate, "exit-node"),
+            ],
+            vec![
+                ExecutionEdge {
+                    from: loop_id,
+                    to: body,
+                    condition: None,
+                },
+                ExecutionEdge {
+                    from: loop_id,
+                    to: exit,
+                    condition: Some("exit".into()),
+                },
+                ExecutionEdge {
+                    from: body,
+                    to: loop_id,
+                    condition: Some("loop".into()),
+                },
+            ],
+        );
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler
+            .run(
+                graph,
+                &GatedLoopExecutor {
+                    loop_calls: loop_calls.clone(),
+                    body_calls: body_calls.clone(),
+                    exit_calls: exit_calls.clone(),
+                    order: order.clone(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(outcome.success);
+        assert_eq!(
+            loop_calls.load(Ordering::SeqCst),
+            4,
+            "parity: initial pass + max_iterations loop-backs"
+        );
+        assert_eq!(body_calls.load(Ordering::SeqCst), 4);
+        assert_eq!(exit_calls.load(Ordering::SeqCst), 1);
+        let order = order.lock().unwrap().clone();
+        assert_eq!(
+            order.last().map(String::as_str),
+            Some("exit-node"),
+            "exit target must execute only after all loop/body iterations, order: {order:?}"
+        );
+        assert_eq!(
+            order.iter().filter(|m| m.as_str() == "exit-node").count(),
+            1,
+            "exit target must execute exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_loop_always_continue_never_activates_exit_target() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let loop_calls = Arc::new(AtomicUsize::new(0));
+        let exit_calls = Arc::new(AtomicUsize::new(0));
+
+        struct AlwaysContinueExecutor {
+            loop_calls: Arc<AtomicUsize>,
+            exit_calls: Arc<AtomicUsize>,
+        }
+        #[async_trait]
+        impl Executor for AlwaysContinueExecutor {
+            async fn execute_node(
+                &self,
+                node: &ExecutionNode,
+                _ctx: &NodeExecContext,
+            ) -> NodeExecutionResult {
+                if node.model == "loop" {
+                    self.loop_calls.fetch_add(1, Ordering::SeqCst);
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!(true)),
+                    }
+                } else if node.model == "body" {
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!("iterated")),
+                    }
+                } else {
+                    self.exit_calls.fetch_add(1, Ordering::SeqCst);
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!("premature-exit")),
+                    }
+                }
+            }
+        }
+
+        let loop_id = uuid::Uuid::new_v4();
+        let body = uuid::Uuid::new_v4();
+        let exit = uuid::Uuid::new_v4();
+        let mut loop_node = RecordingExecutor::node_node(loop_id, ExecutionNodeKind::Loop, "loop");
+        loop_node
+            .config
+            .insert("max_iterations".into(), serde_json::json!(2));
+        let graph = RecordingExecutor::graph_of(
+            vec![
+                loop_node,
+                RecordingExecutor::node_node(body, ExecutionNodeKind::LLMGenerate, "body"),
+                RecordingExecutor::node_node(exit, ExecutionNodeKind::LLMGenerate, "exit-node"),
+            ],
+            vec![
+                ExecutionEdge {
+                    from: loop_id,
+                    to: body,
+                    condition: None,
+                },
+                ExecutionEdge {
+                    from: loop_id,
+                    to: exit,
+                    condition: Some("exit".into()),
+                },
+                ExecutionEdge {
+                    from: body,
+                    to: loop_id,
+                    condition: Some("loop".into()),
+                },
+            ],
+        );
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler
+            .run(
+                graph,
+                &AlwaysContinueExecutor {
+                    loop_calls: loop_calls.clone(),
+                    exit_calls: exit_calls.clone(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            exit_calls.load(Ordering::SeqCst),
+            0,
+            "exit-conditioned edge must never activate while should_continue is true"
+        );
+        assert_eq!(
+            loop_calls.load(Ordering::SeqCst),
+            3,
+            "parity: initial pass + max_iterations loop-backs terminate the loop"
+        );
+        assert!(
+            !matches!(outcome.node_states.get(&exit), Some(NodeState::Succeeded)),
+            "exit node must remain untouched (Pending)"
+        );
+        assert!(
+            !outcome.success,
+            "an un-activated exit target keeps the graph incomplete, like un-taken conditional branches"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_loop_head_waits_for_upstream_dependency() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Mutex;
+        use std::time::Duration;
+        let loop_calls = Arc::new(AtomicUsize::new(0));
+        let saw_dependency = Arc::new(AtomicBool::new(false));
+        let order: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+        struct DependentLoopExecutor {
+            dep_id: uuid::Uuid,
+            loop_calls: Arc<AtomicUsize>,
+            saw_dependency: Arc<AtomicBool>,
+            order: Arc<Mutex<Vec<String>>>,
+        }
+        #[async_trait]
+        impl Executor for DependentLoopExecutor {
+            async fn execute_node(
+                &self,
+                node: &ExecutionNode,
+                ctx: &NodeExecContext,
+            ) -> NodeExecutionResult {
+                self.order.lock().unwrap().push(node.model.clone());
+                if node.model == "dep" {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    return NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 50,
+                        output: Some(serde_json::json!("dep-done")),
+                    };
+                }
+                self.loop_calls.fetch_add(1, Ordering::SeqCst);
+                if ctx.parent_outputs.contains_key(&self.dep_id) {
+                    self.saw_dependency.store(true, Ordering::SeqCst);
+                }
+                NodeExecutionResult {
+                    state: NodeState::Succeeded,
+                    usage: None,
+                    latency_ms: 0,
+                    output: Some(serde_json::json!(false)),
+                }
+            }
+        }
+
+        let dep = uuid::Uuid::new_v4();
+        let loop_id = uuid::Uuid::new_v4();
+        let graph = RecordingExecutor::graph_of(
+            vec![
+                RecordingExecutor::node_node(dep, ExecutionNodeKind::LLMGenerate, "dep"),
+                RecordingExecutor::node_node(loop_id, ExecutionNodeKind::Loop, "loop"),
+            ],
+            vec![ExecutionEdge {
+                from: dep,
+                to: loop_id,
+                condition: None,
+            }],
+        );
+
+        let scheduler = DefaultScheduler::new();
+        let outcome = scheduler
+            .run(
+                graph,
+                &DependentLoopExecutor {
+                    dep_id: dep,
+                    loop_calls: loop_calls.clone(),
+                    saw_dependency: saw_dependency.clone(),
+                    order: order.clone(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(outcome.success);
+        let order = order.lock().unwrap().clone();
+        assert_eq!(
+            order.first().map(String::as_str),
+            Some("dep"),
+            "dependency must execute before the loop head becomes ready, order: {order:?}"
+        );
+        assert_eq!(loop_calls.load(Ordering::SeqCst), 1);
+        assert!(
+            saw_dependency.load(Ordering::SeqCst),
+            "loop head must run only after its upstream dependency and receive its output"
         );
     }
 }

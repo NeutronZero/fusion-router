@@ -78,6 +78,9 @@ flate2 = "1"
 tar = "0.4"
 ctrlc = "3"
 http = "0.2"
+# Direct dep required to implement reqwest::dns::Resolve (its `Name` type
+# lives in hyper 0.14); version unifies with reqwest's own hyper.
+hyper = { version = "0.14", default-features = false, features = ["client", "runtime"] }
 fusion-core = { path = "crates/fusion-core" }
 fusion-types = { path = "crates/fusion-types" }
 fusion-kernel = { path = "crates/fusion-kernel" }
@@ -87,6 +90,7 @@ fusion-scheduler = { path = "crates/fusion-scheduler" }
 fusion-runtime = { path = "crates/fusion-runtime" }
 fusion-plugin-echo = { path = "plugins/fusion-plugin-echo" }
 ring = { version = "0.17.14", default-features = false }
+zeroize = "1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }

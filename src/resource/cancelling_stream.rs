@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::providers::ModelPricing;
 use crate::resource::guard::ResourceGuard;
 use crate::resource::stream_meter::{StreamMeter, StreamMeterReport};
-use crate::types::ChatStreamChunk;
+use crate::types::{ChatStreamChunk, NanoUSD};
 
 /// Fired exactly once when a streamed response terminates (completion,
 /// error, cancellation, or drop) with the final measured report. Used to
@@ -49,6 +49,8 @@ pub struct MeteredStream {
     pricing: Option<ModelPricing>,
     budget_envelope: Option<fusion_types::BudgetEnvelope>,
     on_finish: Option<StreamFinishHook>,
+    prev_cost_nanos: Option<u64>,
+    prev_tokens: Option<u64>,
 }
 
 impl Stream for MeteredStream {
@@ -64,20 +66,41 @@ impl Stream for MeteredStream {
             Poll::Ready(Some(Ok(chunk))) => {
                 let mut breached = false;
                 let mut breach_err = None;
+                // New running totals observed under the meter lock; written
+                // back to stream state after the guard is released.
+                let mut seen_totals: Option<(u64, u64)> = None;
 
                 if let Ok(mut meter) = self.meter.lock() {
                     meter.record_chunk(&chunk, self.pricing.as_ref());
 
-                    // Active mid-stream budget enforcement against envelope
+                    // Active mid-stream budget enforcement against envelope.
+                    // The meter exposes RUNNING totals while
+                    // `record_and_check` ADDS what it is given, so only the
+                    // per-chunk delta (current minus previously seen totals)
+                    // may be recorded; passing the running total would
+                    // over-account quadratically and kill healthy streams.
                     if let Some(ref envelope) = self.budget_envelope {
-                        let cur_cost = meter.cost();
+                        let cur_cost_nanos = meter.cost().as_nanos();
                         let cur_tokens = meter.prompt_tokens() + meter.completion_tokens();
-                        if let Err(e) = envelope.record_and_check(cur_cost, cur_tokens) {
+                        let delta_cost =
+                            cur_cost_nanos.saturating_sub(self.prev_cost_nanos.unwrap_or(0));
+                        let delta_tokens = cur_tokens.saturating_sub(self.prev_tokens.unwrap_or(0));
+                        if let Err(e) =
+                            envelope.record_and_check(NanoUSD::from_nanos(delta_cost), delta_tokens)
+                        {
                             tracing::warn!(error = ?e, "Mid-stream budget ceiling breached; terminating stream");
                             breached = true;
                             breach_err = Some(e);
                         }
+                        if !breached {
+                            seen_totals = Some((cur_cost_nanos, cur_tokens));
+                        }
                     }
+                }
+
+                if let Some((cost_nanos, tokens)) = seen_totals {
+                    self.prev_cost_nanos = Some(cost_nanos);
+                    self.prev_tokens = Some(tokens);
                 }
 
                 if breached {
@@ -174,6 +197,8 @@ pub fn metered_stream_with_finish(
         pricing,
         budget_envelope: None,
         on_finish: Some(on_finish),
+        prev_cost_nanos: None,
+        prev_tokens: None,
     };
     (stream, meter)
 }
@@ -355,5 +380,44 @@ mod tests {
             cancel.is_cancelled(),
             "Token must be cancelled on mid-stream breach"
         );
+    }
+
+    #[test]
+    fn test_metered_stream_records_chunk_deltas_not_running_totals() {
+        let cancel = CancellationToken::new();
+        let guard = make_test_guard();
+        // 4 chars -> exactly 1 estimated token per chunk.
+        let chunk = ChatStreamChunk {
+            content: Some("abcd".to_string()),
+            finish_reason: None,
+            usage: None,
+        };
+        let chunks: Vec<_> = (0..20).map(|_| Ok(chunk.clone())).collect();
+        let inner: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
+            Box::pin(stream::iter(chunks));
+        // 1 nano per token: after k chunks the meter total is k nanos.
+        let pricing = ModelPricing {
+            input_cost_per_1k: NanoUSD::from_nanos(1000),
+            output_cost_per_1k: NanoUSD::from_nanos(1000),
+        };
+        let (stream, _meter) = metered_stream(inner, guard, cancel, Some(pricing));
+
+        // 20 linear tokens fit; the old quadratic bug would record 210 tokens
+        // and breach this ceiling mid-stream.
+        let envelope = fusion_types::BudgetEnvelope::new(NanoUSD::from_nanos(25), 25, 10);
+        let mut stream = stream.with_budget_envelope(envelope.clone());
+
+        let mut delivered = 0usize;
+        while let Some(item) = block_on(stream.next()) {
+            assert!(item.is_ok(), "healthy stream must not be killed early");
+            delivered += 1;
+        }
+        assert_eq!(delivered, 20);
+        assert_eq!(
+            envelope.spent_tokens(),
+            20,
+            "envelope must equal true streamed total, not quadratic sum"
+        );
+        assert_eq!(envelope.spent_cost().as_nanos(), 20);
     }
 }

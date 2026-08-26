@@ -22,6 +22,9 @@ pub struct SnapshotData {
     /// Declared payload integrity hash (lowercase hex SHA-256), if the
     /// snapshot header carries one.
     pub payload_hash: Option<String>,
+    /// Source file the snapshot was loaded from, used to name offending files
+    /// in seal-verification errors.
+    pub source_path: PathBuf,
 }
 
 pub struct ReplayContext {
@@ -80,20 +83,30 @@ impl ReplayBackend for FilesystemReplayBackend {
 
     fn discover_snapshots(&self, ctx: &ReplayContext) -> Result<Vec<SnapshotData>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
-        let entries = discover_fixtures(&manifest, FixtureKind::Snapshots);
+        let entries = discover_fixtures(&manifest, FixtureKind::Snapshots)?;
         let declared = entries.len();
         let snap_root = ctx.root.join("tests/fixtures");
         let mut results = Vec::new();
         for entry in &entries {
             let dir = snap_root.join(&entry.path);
             let files = self.loader.find_files(&dir, "snap")?;
+            if files.is_empty() {
+                // Per-entry coverage enforcement: an entry that declares
+                // snapshots but yields zero .snap files is a hard error.
+                return Err(GateError::ExecutionFailed(format!(
+                    "manifest entry '{}' ({}) declares snapshots but no .snap files were found under {} — replay coverage is vacuous (ADR-042)",
+                    entry.id.clone().unwrap_or_else(|| entry.version.to_string()),
+                    entry.path.display(),
+                    dir.display()
+                )));
+            }
             for file in &files {
                 results.push(self.load_snapshot(file)?);
             }
         }
         if results.is_empty() && declared > 0 {
             return Err(GateError::ExecutionFailed(format!(
-                "{declared} snapshot entries declared in the fixture manifest but no .snap files were found â€” replay coverage is vacuous (ADR-042)"
+                "{declared} snapshot entries declared in the fixture manifest but no .snap files were found — replay coverage is vacuous (ADR-042)"
             )));
         }
         Ok(results)
@@ -125,6 +138,7 @@ impl ReplayBackend for FilesystemReplayBackend {
             metadata: header.to_snapshot_metadata(),
             payload: content[header_end + 1..].to_vec(),
             payload_hash: header.payload_hash.clone(),
+            source_path: path.to_path_buf(),
         })
     }
 }
@@ -186,6 +200,17 @@ impl ReleaseGate for ReplayGate {
         }
         let mut all_checks = Vec::new();
         for snapshot in &snapshots {
+            // Header seal (gate integrity): the header schema version is
+            // whitelisted to exactly 1 or 2. Anything else — including 0,
+            // which previously slipped past every content check under a
+            // `<= 2` comparison — is a hard error naming the offending file.
+            if !matches!(snapshot.metadata.schema_version, 1 | 2) {
+                return GateExecution::ExecutionError(GateError::ExecutionFailed(format!(
+                    "snapshot {}: unsupported schema_version {} (allowed: exactly 1 or 2)",
+                    snapshot.source_path.display(),
+                    snapshot.metadata.schema_version
+                )));
+            }
             all_checks.push(GateCheck {
                 name: format!("metadata-version/v{}", snapshot.metadata.version),
                 passed: true,
@@ -198,20 +223,28 @@ impl ReleaseGate for ReplayGate {
                 ),
             });
             all_checks.push(GateCheck {
-                name: "schema-version".into(),
-                passed: snapshot.metadata.schema_version <= 2,
-                message: format!(
-                    "schema version {} (compatible: <=2)",
-                    snapshot.metadata.schema_version
-                ),
-            });
-            all_checks.push(GateCheck {
                 name: "format-version".into(),
                 passed: snapshot.metadata.format_version == 1,
                 message: format!("format version {}", snapshot.metadata.format_version),
             });
-            let payload_check = if snapshot.metadata.schema_version >= 2 {
-                // ADR-042: v2 snapshots are behaviorally verified â€” recompile
+            let payload_check = if snapshot.metadata.schema_version == 2 {
+                // Seal verification FIRST: the declared payload_hash must match
+                // the SHA-256 over exactly the byte form used at record time —
+                // the pretty-printed `SnapshotPayloadV2` JSON bytes stored after
+                // the header line (examples/record_replay_snapshots.rs). A
+                // tampered payload is rejected before any behavioral replay.
+                if let Some(declared) = &snapshot.payload_hash {
+                    let actual = sha256_hex(&snapshot.payload);
+                    if !actual.eq_ignore_ascii_case(declared.trim()) {
+                        return GateExecution::ExecutionError(GateError::ExecutionFailed(format!(
+                            "snapshot {}: payload_hash mismatch: declared {}, actual {} — recorded corpus seal is broken (record-time form: serde_json::to_vec_pretty(SnapshotPayloadV2))",
+                            snapshot.source_path.display(),
+                            declared,
+                            actual
+                        )));
+                    }
+                }
+                // ADR-042: v2 snapshots are behaviorally verified — recompile
                 // the recorded IR, replay the cassette, diff normalized traces.
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(120),
@@ -267,6 +300,15 @@ impl ReleaseGate for ReplayGate {
     }
 }
 
+/// Lowercase hex SHA-256 over the exact payload bytes.
+fn sha256_hex(payload: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(payload)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// Content verification for one snapshot payload (AD-006): v1 payloads must
 /// deserialize as JSON, and a declared `payload_hash` must match the actual
 /// SHA-256 of the payload bytes.
@@ -290,9 +332,7 @@ fn verify_payload(snapshot: &SnapshotData) -> GateCheck {
         }
     }
     if let Some(declared) = &snapshot.payload_hash {
-        use sha2::{Digest, Sha256};
-        let digest = Sha256::digest(&snapshot.payload);
-        let actual: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        let actual = sha256_hex(&snapshot.payload);
         if !actual.eq_ignore_ascii_case(declared.trim()) {
             return GateCheck {
                 name: name.into(),
@@ -360,8 +400,8 @@ impl ReplayBackend for MockReplayBackend {
         Ok(vec![SnapshotData {
             metadata: SnapshotMetadata {
                 version: semver::Version::new(0, 10, 0),
-                format_version: if self.should_pass { 1 } else { 99 },
-                schema_version: if self.should_pass { 1 } else { 999 },
+                format_version: 1,
+                schema_version: 1,
                 producer_version: "mock/0.1.0".into(),
             },
             payload: if self.should_pass {
@@ -370,6 +410,7 @@ impl ReplayBackend for MockReplayBackend {
                 vec![]
             },
             payload_hash: None,
+            source_path: PathBuf::from("mock.snap"),
         }])
     }
     fn load_snapshot(&self, _path: &std::path::Path) -> Result<SnapshotData, GateError> {
@@ -635,6 +676,7 @@ mod tests {
             },
             payload: payload.to_vec(),
             payload_hash: hash,
+            source_path: PathBuf::from("test.snap"),
         }
     }
 
@@ -669,5 +711,206 @@ mod tests {
         let check = verify_payload(&bad);
         assert!(!check.passed, "declared hash mismatch must fail the gate");
         assert!(check.message.contains("hash mismatch"));
+    }
+
+    /// Builds a temp workspace with one v2 snapshot under a manifest entry.
+    fn temp_v2_workspace(tag: &str, declared_hash: &str, payload: &[u8]) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("fusion_replay_seal_{tag}_{}", uuid::Uuid::new_v4()));
+        let fx = root.join("tests/fixtures/snapshots/vX");
+        std::fs::create_dir_all(&fx).unwrap();
+        std::fs::write(
+            root.join("tests/fixtures/manifest.yaml"),
+            "snapshots:\n  - id: vX\n    version: \"9.9.9\"\n    path: snapshots/vX\n",
+        )
+        .unwrap();
+        let header = format!(
+            r#"{{"version":"9.9.9","format_version":1,"schema_version":2,"producer_version":"test/9.9.9","payload_hash":"{declared_hash}"}}"#
+        );
+        write_snapshot(&fx, "sealed.snap", &header, payload);
+        root
+    }
+
+    #[tokio::test]
+    async fn test_tampered_v2_payload_hash_is_rejected_by_name() {
+        use sha2::{Digest, Sha256};
+        // A real record-time-style payload...
+        let payload = b"{\n  \"schema_version\": 2,\n  \"tampered\": true\n}";
+        let true_hash: String = Sha256::digest(payload)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        // ...but the header declares a different (stale/tampered) hash.
+        let wrong_hash = "ab".repeat(32);
+        assert_ne!(true_hash, wrong_hash);
+
+        let root = temp_v2_workspace("tampered", &wrong_hash, payload);
+        let backend = FilesystemReplayBackend::new(root.clone());
+        let gate = ReplayGate::new(
+            Box::new(backend),
+            ReplayGateConfig {
+                fixture_root: root.clone(),
+            },
+        );
+        let ctx = GateContext {
+            workspace_root: root.clone(),
+            baseline_version: None,
+        };
+        match gate.run(&ctx).await {
+            GateExecution::ExecutionError(GateError::ExecutionFailed(msg)) => {
+                assert!(
+                    msg.contains("payload_hash mismatch"),
+                    "must name the mismatch: {msg}"
+                );
+                assert!(
+                    msg.contains("sealed.snap"),
+                    "must name the offending file: {msg}"
+                );
+            }
+            other => panic!("expected seal-verification error, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_v2_record_time_byte_form_verifies() {
+        use sha2::{Digest, Sha256};
+        // The exact byte form used when recording:
+        // serde_json::to_vec_pretty(SnapshotPayloadV2) written after the
+        // header line. Hashing those bytes must satisfy the seal.
+        let payload = serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": 2,
+            "workflow_ir": null,
+            "provider_cassette": [],
+            "expected_events": []
+        }))
+        .unwrap();
+        let hash: String = Sha256::digest(&payload)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+
+        let root = temp_v2_workspace("recordform", &hash, &payload);
+        let backend = FilesystemReplayBackend::new(root.clone());
+        let snapshots_dir = root.join("tests/fixtures/snapshots/vX");
+        let snap_path = snapshots_dir.join("sealed.snap");
+        let snapshot = backend.load_snapshot(&snap_path).unwrap();
+        assert_eq!(
+            sha256_hex(&snapshot.payload),
+            hash,
+            "loaded payload bytes must be byte-identical to the recorded form"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_schema_version_zero_is_rejected() {
+        let root =
+            std::env::temp_dir().join(format!("fusion_replay_schema0_{}", uuid::Uuid::new_v4()));
+        let fx = root.join("tests/fixtures/snapshots/vZ");
+        std::fs::create_dir_all(&fx).unwrap();
+        std::fs::write(
+            root.join("tests/fixtures/manifest.yaml"),
+            "snapshots:\n  - id: vZ\n    version: \"8.8.8\"\n    path: snapshots/vZ\n",
+        )
+        .unwrap();
+        let header = r#"{"version":"8.8.8","format_version":1,"schema_version":0,"producer_version":"test/8.8.8"}"#;
+        write_snapshot(&fx, "zero.snap", header, br#"{"ok":true}"#);
+
+        let gate = ReplayGate::new(
+            Box::new(FilesystemReplayBackend::new(root.clone())),
+            ReplayGateConfig {
+                fixture_root: root.clone(),
+            },
+        );
+        let ctx = GateContext {
+            workspace_root: root.clone(),
+            baseline_version: None,
+        };
+        match gate.run(&ctx).await {
+            GateExecution::ExecutionError(GateError::ExecutionFailed(msg)) => {
+                assert!(
+                    msg.contains("unsupported schema_version 0"),
+                    "schema_version 0 must be hard-rejected: {msg}"
+                );
+                assert!(
+                    msg.contains("zero.snap"),
+                    "error must name the offending file: {msg}"
+                );
+            }
+            GateExecution::Success(r) => {
+                panic!(
+                    "schema_version 0 must not pass content-bypassing checks, got: {}",
+                    r.summary
+                )
+            }
+            other => panic!("expected hard schema rejection, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_schema_version_above_two_is_rejected() {
+        let root =
+            std::env::temp_dir().join(format!("fusion_replay_schema9_{}", uuid::Uuid::new_v4()));
+        let fx = root.join("tests/fixtures/snapshots/vF");
+        std::fs::create_dir_all(&fx).unwrap();
+        std::fs::write(
+            root.join("tests/fixtures/manifest.yaml"),
+            "snapshots:\n  - id: vF\n    version: \"7.7.7\"\n    path: snapshots/vF\n",
+        )
+        .unwrap();
+        let header = r#"{"version":"7.7.7","format_version":1,"schema_version":3,"producer_version":"test/7.7.7"}"#;
+        write_snapshot(&fx, "future.snap", header, br#"{"ok":true}"#);
+
+        let gate = ReplayGate::new(
+            Box::new(FilesystemReplayBackend::new(root.clone())),
+            ReplayGateConfig {
+                fixture_root: root.clone(),
+            },
+        );
+        let ctx = GateContext {
+            workspace_root: root.clone(),
+            baseline_version: None,
+        };
+        match gate.run(&ctx).await {
+            GateExecution::ExecutionError(GateError::ExecutionFailed(msg)) => {
+                assert!(msg.contains("unsupported schema_version 3"), "{msg}");
+                assert!(msg.contains("future.snap"), "{msg}");
+            }
+            other => panic!("expected hard schema rejection, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_entry_declaring_but_yielding_zero_snap_files_fails() {
+        let root =
+            std::env::temp_dir().join(format!("fusion_replay_zero_files_{}", uuid::Uuid::new_v4()));
+        let fx = root.join("tests/fixtures/snapshots/vEmpty");
+        std::fs::create_dir_all(&fx).unwrap();
+        std::fs::write(
+            root.join("tests/fixtures/manifest.yaml"),
+            "snapshots:\n  - id: vEmpty\n    version: \"7.7.7\"\n    path: snapshots/vEmpty\n",
+        )
+        .unwrap();
+
+        let backend = FilesystemReplayBackend::new(root.clone());
+        let ctx = ReplayContext {
+            root: root.clone(),
+            manifest: None,
+            version: None,
+        };
+        let err = match backend.discover_snapshots(&ctx) {
+            Ok(snaps) => panic!(
+                "entry declaring snapshots but yielding zero files must error, got {} snapshots",
+                snaps.len()
+            ),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("vEmpty"), "must name the entry: {msg}");
+        assert!(msg.contains("vacuous"), "{msg}");
+        let _ = std::fs::remove_dir_all(root);
     }
 }

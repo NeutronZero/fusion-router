@@ -15,7 +15,10 @@ pub fn new_openrouter_provider_with_base_url(
         "openrouter-model".to_string(),
         base_url,
     ));
-    let transport = Box::new(HttpTransport::new(Duration::from_secs(600)).unwrap_or_default());
+    let transport = Box::new(
+        HttpTransport::new(Duration::from_secs(600))
+            .expect("failed to build OpenRouter HTTP transport (hardened client required)"),
+    );
     Provider::new(model, transport, api_key)
 }
 

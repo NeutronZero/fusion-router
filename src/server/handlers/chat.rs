@@ -9,6 +9,7 @@ use axum::{
 };
 use futures::stream::{self, BoxStream};
 use futures::StreamExt;
+use tracing::Instrument;
 use uuid::Uuid;
 
 use super::state::AppState;
@@ -24,14 +25,12 @@ pub async fn chat_completions(
     Json(request): Json<ChatCompletionRequest>,
 ) -> impl IntoResponse {
     let request_id = Uuid::new_v4();
-    let _span = tracing::info_span!(
+    let span = tracing::info_span!(
         "chat_completions",
         request_id = %request_id,
         model = %request.model,
         stream = %request.stream
     );
-
-    let _enter = _span.enter();
 
     if request.model.trim().is_empty() {
         tracing::warn!(request_id = %request_id, "request rejected: empty model");
@@ -49,7 +48,12 @@ pub async fn chat_completions(
     tracing::info!("processing request through full pipeline");
 
     let is_stream = request.stream;
-    let result = process_request(&state, &request, request_id, request.stream).await;
+    // `Instrument` attaches the span to the future itself: safe across .await
+    // (a manually entered guard would leak thread-local span state when the
+    // future resumes on a different worker).
+    let result = process_request(&state, &request, request_id, request.stream)
+        .instrument(span)
+        .await;
 
     match result {
         Ok(ChatOutcome::Stream(response)) => response,
@@ -431,15 +435,25 @@ async fn native_stream_sse(
     let inner = match provider_dyn.chat_stream(&upstream).await {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!(request_id = %request_id, error = %e, "upstream stream failed to start");
+            // Typed routing rejections (e.g. NoRouteForModel) keep their own
+            // status/client message; anything else is an opaque 502.
+            let (status, message) = match e.downcast_ref::<RouterError>() {
+                Some(re) => {
+                    tracing::warn!(request_id = %request_id, error = %re, "native stream rejected");
+                    (re.status_code(), re.user_message())
+                }
+                None => {
+                    tracing::error!(request_id = %request_id, error = %e, "upstream stream failed to start");
+                    (
+                        axum::http::StatusCode::BAD_GATEWAY,
+                        "upstream provider unavailable".to_string(),
+                    )
+                }
+            };
             drop(guard);
             let mut resp = (
-                axum::http::StatusCode::BAD_GATEWAY,
-                Json(error_response(
-                    request_id,
-                    &request.model,
-                    "upstream provider unavailable",
-                )),
+                status,
+                Json(error_response(request_id, &request.model, &message)),
             )
                 .into_response();
             resp.headers_mut().insert(
@@ -528,8 +542,18 @@ async fn native_stream_sse(
                 )),
                 Err(e) => {
                     tracing::warn!(request_id = %request_id, error = %e, "stream terminated abnormally");
+                    // Client-visible message is opaque: internal details
+                    // (reqwest URLs, budget internals, provider errors) stay
+                    // in the trace log above.
+                    let public = if e.to_string().to_lowercase().contains("budget exceeded")
+                        || e.downcast_ref::<RouterError>().map(|re| matches!(re, RouterError::BudgetExceeded { .. })).unwrap_or(false)
+                    {
+                        "request budget exceeded"
+                    } else {
+                        "upstream stream failed"
+                    };
                     Some(Ok(Event::default().event("error").data(
-                        serde_json::json!({ "error": e.to_string() }).to_string(),
+                        serde_json::json!({ "error": public }).to_string(),
                     )))
                 }
             }

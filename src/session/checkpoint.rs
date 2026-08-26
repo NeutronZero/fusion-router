@@ -7,6 +7,15 @@ use crate::session::types::{SessionId, SessionSnapshot};
 use crate::types::execution_context::ExecutionContext;
 use uuid::Uuid;
 
+/// Wall-clock epoch milliseconds. Used for checkpoint ordering; a single
+/// helper so tests and callers share one time source.
+pub fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 pub struct CheckpointEngine;
 
 impl CheckpointEngine {
@@ -23,7 +32,9 @@ impl CheckpointEngine {
             state: ctx.state(),
             execution_context_id: ctx.execution_id,
             trace_id: ctx.trace.trace_id,
-            checkpoint_timestamp_ms: 1000,
+            // Real wall-clock time: constant stamps collapsed checkpoint
+            // ordering (all checkpoints tied at the same millisecond).
+            checkpoint_timestamp_ms: now_epoch_ms(),
         };
 
         store.save_snapshot(snapshot.clone()).await?;

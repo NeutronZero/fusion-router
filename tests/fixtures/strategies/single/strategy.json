@@ -1,0 +1,20 @@
+{
+  "name": "single",
+  "version": "0.10.0",
+  "pattern": "single/*",
+  "kind": "Single",
+  "config": {},
+  "policy": {
+    "version": "1.0",
+    "declarations": [
+      {
+        "name": "allow-single-strategy",
+        "priority": 10,
+        "match_target": "strategy.single",
+        "effect": "allow",
+        "conditions": {},
+        "annotations": {}
+      }
+    ]
+  }
+}

@@ -65,6 +65,7 @@ mod tests {
             environment: ReleaseEnvironment::Production,
             decision: ReleaseDecision::Approved,
             summary: PolicySummary::default(),
+            reason: None,
             required_failures: vec![],
             waived_failures: vec![],
             advisory_failures: vec![],

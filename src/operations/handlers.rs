@@ -58,6 +58,31 @@ fn json_value<T: serde::Serialize>(value: T) -> Result<Json<Value>, (StatusCode,
     })
 }
 
+/// Maximum accepted metrics window in hours.
+const MAX_WINDOW_HOURS: u64 = 720;
+
+/// Parses the `window` query parameter as a whole number of hours.
+/// Rejects 0 and values above MAX_WINDOW_HOURS (400 material); accepts an
+/// optional trailing `h` suffix (`"24h"` or `"24"`).
+fn parse_window_hours(params: &std::collections::HashMap<String, String>) -> Result<u64, String> {
+    let Some(raw) = params.get("window") else {
+        return Ok(1);
+    };
+    let cleaned = raw.trim().trim_end_matches('h');
+    let hours: u64 = cleaned
+        .parse()
+        .map_err(|_| format!("invalid window '{raw}': expected integer hours (e.g. '24h')"))?;
+    if hours == 0 {
+        return Err("window must be at least 1 hour".into());
+    }
+    if hours > MAX_WINDOW_HOURS {
+        return Err(format!(
+            "window exceeds maximum of {MAX_WINDOW_HOURS} hours"
+        ));
+    }
+    Ok(hours)
+}
+
 pub async fn registry_handler(
     State(state): State<OperationsState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -86,13 +111,19 @@ pub async fn metrics_handler(
     State(state): State<OperationsState>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let window_secs = params
-        .get("window")
-        .and_then(|w| w.trim_end_matches('h').parse::<i64>().ok())
-        .unwrap_or(1);
+    let window_hours = match parse_window_hours(&params) {
+        Ok(h) => h,
+        Err(msg) => {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({"error": msg}))));
+        }
+    };
     let now = chrono::Utc::now().timestamp();
+    // window_hours is bounded [1, 720], so the multiply cannot overflow; the
+    // saturating ops keep start <= end even under clock skew.
+    let window_secs = window_hours.saturating_mul(3600);
+    let start_secs = now.saturating_sub(window_secs.min(i64::MAX as u64) as i64);
     let window = TimeWindow {
-        start_secs: now - window_secs * 3600,
+        start_secs,
         end_secs: now,
     };
     match state.dashboard.invocation_metrics(window) {
@@ -211,6 +242,45 @@ mod tests {
         assert!(result.is_ok());
         let body = result.unwrap().0;
         assert_eq!(body["total_capabilities"], 3);
+    }
+
+    fn window_params(window: Option<&str>) -> std::collections::HashMap<String, String> {
+        let mut m = std::collections::HashMap::new();
+        if let Some(w) = window {
+            m.insert("window".to_string(), w.to_string());
+        }
+        m
+    }
+
+    #[test]
+    fn test_parse_window_hours_rejection_table() {
+        // Accepted values
+        assert_eq!(parse_window_hours(&window_params(None)).unwrap(), 1);
+        assert_eq!(parse_window_hours(&window_params(Some("1h"))).unwrap(), 1);
+        assert_eq!(parse_window_hours(&window_params(Some("24h"))).unwrap(), 24);
+        assert_eq!(parse_window_hours(&window_params(Some("12"))).unwrap(), 12);
+        assert_eq!(
+            parse_window_hours(&window_params(Some("720h"))).unwrap(),
+            720
+        );
+
+        // Rejected values
+        for bad in [
+            "0h",
+            "0",
+            "721h",
+            "-4h",
+            "-1",
+            "abc",
+            "1.5h",
+            "",
+            "99999999999999999999",
+        ] {
+            assert!(
+                parse_window_hours(&window_params(Some(bad))).is_err(),
+                "window '{bad}' must be rejected"
+            );
+        }
     }
 
     #[tokio::test]

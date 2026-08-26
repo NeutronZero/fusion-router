@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub mod circuit_breaker;
 pub mod circuit_breaking_provider;
@@ -258,6 +259,11 @@ pub struct Provider {
     pub model: Box<dyn Model>,
     pub transport: Box<dyn Transport>,
     pub api_key: String,
+    /// Config-driven custom headers merged onto every outgoing
+    /// `TransportRequest`. Explicitly configured headers WIN over headers the
+    /// inner model sets (including `Authorization`); unset keys leave the
+    /// model's own headers untouched.
+    extra_headers: parking_lot::RwLock<HashMap<String, String>>,
 }
 
 impl Provider {
@@ -266,6 +272,18 @@ impl Provider {
             model,
             transport,
             api_key,
+            extra_headers: parking_lot::RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Replaces the set of custom headers injected into outgoing requests.
+    pub fn set_extra_headers(&self, headers: HashMap<String, String>) {
+        *self.extra_headers.write() = headers;
+    }
+
+    fn apply_extra_headers(&self, req: &mut TransportRequest) {
+        for (k, v) in self.extra_headers.read().iter() {
+            req.headers.insert(k.clone(), v.clone());
         }
     }
 }
@@ -281,7 +299,8 @@ impl ChatProvider for Provider {
         &self,
         request: &ChatCompletionRequest,
     ) -> anyhow::Result<ChatCompletionResponse> {
-        let req = self.model.format_request(request, &self.api_key)?;
+        let mut req = self.model.format_request(request, &self.api_key)?;
+        self.apply_extra_headers(&mut req);
         let resp = self
             .transport
             .send(req)
@@ -296,6 +315,7 @@ impl ChatProvider for Provider {
         request: &ChatCompletionRequest,
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ChatStreamChunk>>> {
         let mut transport_req = self.model.format_request(request, &self.api_key)?;
+        self.apply_extra_headers(&mut transport_req);
         transport_req.body["stream"] = serde_json::json!(true);
         let stream = self
             .transport
@@ -307,35 +327,7 @@ impl ChatProvider for Provider {
             let chunks = match event {
                 Ok(event) => {
                     buf.push_str(&event.data);
-                    let mut chunks = Vec::new();
-                    while let Some(pos) = buf.find("\n\n") {
-                        let raw = buf[..pos].trim().to_string();
-                        buf.drain(..=pos + 1);
-                        // Per the SSE spec only `data:` lines carry payload;
-                        // comments (`:`) and other fields (`event:`, `id:`,
-                        // `retry:`) are ignored — some upstreams emit
-                        // keep-alive comments between chunks.
-                        let mut payloads: Vec<String> = Vec::new();
-                        for line in raw.lines() {
-                            if let Some(rest) = line.strip_prefix("data:") {
-                                let data = rest.strip_prefix(' ').unwrap_or(rest);
-                                if !data.trim().is_empty() && data != "[DONE]" {
-                                    payloads.push(data.to_string());
-                                }
-                            }
-                        }
-                        for data in payloads {
-                            match ChatStreamChunk::from_sse_data(&data) {
-                                Ok(Some(chunk)) => chunks.push(Ok(chunk)),
-                                Ok(None) => {}
-                                Err(e) => {
-                                    tracing::warn!(raw = %data, "SSE parse error");
-                                    chunks.push(Err(e))
-                                }
-                            }
-                        }
-                    }
-                    chunks
+                    drain_sse_events(buf)
                 }
                 Err(e) => vec![Err(anyhow::anyhow!("Transport error: {}", e))],
             };
@@ -344,6 +336,91 @@ impl ChatProvider for Provider {
 
         Ok(Box::pin(framed.flat_map(stream::iter)))
     }
+}
+
+// ---------------------------------------------------------------------------
+// SSE framing
+// ---------------------------------------------------------------------------
+
+/// Hard cap for the buffered SSE scan buffer. A hostile/broken upstream that
+/// never emits an event boundary must not grow the buffer without bound.
+pub const MAX_SSE_SCAN_BUFFER_BYTES: usize = 1024 * 1024;
+
+/// Locates the earliest SSE event delimiter in `buf`, supporting both LF
+/// (`\n\n`) and CRLF (`\r\n\r\n`) framings. Returns `(start, delim_len)`.
+fn find_sse_boundary(buf: &str) -> Option<(usize, usize)> {
+    let lf = buf.find("\n\n").map(|p| (p, 2usize));
+    let crlf = buf.find("\r\n\r\n").map(|p| (p, 4usize));
+    match (lf, crlf) {
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (Some(a), Some(b)) => {
+            if a.0 <= b.0 {
+                Some(a)
+            } else {
+                Some(b)
+            }
+        }
+        (None, None) => None,
+    }
+}
+
+/// Extracts `data:` payload lines from one raw SSE event. Per the SSE spec
+/// only `data:` lines carry payload; comments (`:`) and other fields
+/// (`event:`, `id:`, `retry:`) are ignored — some upstreams emit keep-alive
+/// comments between chunks. Handles both `\n` and `\r\n` line endings.
+fn parse_event_payloads(raw: &str) -> Vec<String> {
+    let mut payloads: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix("data:") {
+            let data = rest.strip_prefix(' ').unwrap_or(rest);
+            if !data.trim().is_empty() && data != "[DONE]" {
+                payloads.push(data.to_string());
+            }
+        }
+    }
+    payloads
+}
+
+/// Drains every complete event from `buf`, parsing payloads into chunks.
+/// If no boundary is present and the buffer exceeds
+/// [`MAX_SSE_SCAN_BUFFER_BYTES`], emits a single error and clears the buffer
+/// (fail-closed rather than unbounded growth).
+fn drain_sse_events(buf: &mut String) -> Vec<anyhow::Result<ChatStreamChunk>> {
+    let mut chunks: Vec<anyhow::Result<ChatStreamChunk>> = Vec::new();
+    loop {
+        match find_sse_boundary(buf) {
+            Some((pos, delim_len)) => {
+                let raw = buf[..pos].trim().to_string();
+                buf.drain(..pos + delim_len);
+                for data in parse_event_payloads(&raw) {
+                    match ChatStreamChunk::from_sse_data(&data) {
+                        Ok(Some(chunk)) => chunks.push(Ok(chunk)),
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!(raw = %data, "SSE parse error");
+                            chunks.push(Err(e))
+                        }
+                    }
+                }
+            }
+            None => {
+                if buf.len() > MAX_SSE_SCAN_BUFFER_BYTES {
+                    tracing::warn!(
+                        size = buf.len(),
+                        cap = MAX_SSE_SCAN_BUFFER_BYTES,
+                        "SSE frame exceeded scan buffer cap; dropping buffered bytes"
+                    );
+                    chunks.push(Err(anyhow::anyhow!(
+                        "streamed SSE frame exceeded maximum buffered size"
+                    )));
+                    buf.clear();
+                }
+                break;
+            }
+        }
+    }
+    chunks
 }
 
 #[cfg(test)]
@@ -508,5 +585,80 @@ mod tests {
         assert!(super::native_tool_calls_from(&body, "choices", 0).is_none());
         let empty = serde_json::json!({ "message": { "tool_calls": [] } });
         assert!(super::native_tool_calls_from(&empty, "message", -1).is_none());
+    }
+
+    #[test]
+    fn test_find_sse_boundary_lf() {
+        assert_eq!(super::find_sse_boundary("a\n\nb"), Some((1, 2)));
+    }
+
+    #[test]
+    fn test_find_sse_boundary_crlf() {
+        assert_eq!(super::find_sse_boundary("a\r\n\r\nb"), Some((1, 4)));
+    }
+
+    #[test]
+    fn test_find_sse_boundary_mixed_prefers_earliest() {
+        // LF event first, CRLF later.
+        assert_eq!(super::find_sse_boundary("a\n\nb\r\n\r\nc"), Some((1, 2)));
+        // CRLF first, LF later.
+        assert_eq!(super::find_sse_boundary("a\r\n\r\nb\n\nc"), Some((1, 4)));
+    }
+
+    #[test]
+    fn test_find_sse_boundary_none() {
+        assert_eq!(super::find_sse_boundary(""), None);
+        assert_eq!(super::find_sse_boundary("\r\n"), None);
+        assert_eq!(super::find_sse_boundary("no delimiter yet"), None);
+    }
+
+    #[test]
+    fn test_parse_event_payloads_ignores_comments_and_other_fields() {
+        let raw = ": keep-alive comment\nevent: message\nid: 42\ndata: {\"a\":1}\nretry: 100";
+        assert_eq!(super::parse_event_payloads(raw), vec![r#"{"a":1}"#]);
+    }
+
+    #[test]
+    fn test_parse_event_payloads_handles_crlf_lines_and_done() {
+        let raw = "data: {\"x\":1}\r\ndata: [DONE]\r\ndata: {\"y\":2}\r\n";
+        assert_eq!(
+            super::parse_event_payloads(raw),
+            vec![r#"{"x":1}"#, r#"{"y":2}"#]
+        );
+    }
+
+    #[test]
+    fn test_drain_sse_events_parses_crlf_framed_chunks() {
+        let mut buf = String::from(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\r\n\r\n",
+        );
+        let chunks = super::drain_sse_events(&mut buf);
+        assert_eq!(chunks.len(), 2);
+        let first = chunks[0].as_ref().unwrap();
+        assert_eq!(first.content.as_deref(), Some("hi"));
+        let second = chunks[1].as_ref().unwrap();
+        assert_eq!(second.finish_reason.as_deref(), Some("stop"));
+        assert!(buf.is_empty(), "CRLF-framed buffer must be fully drained");
+    }
+
+    #[test]
+    fn test_drain_sse_events_partial_event_stays_buffered() {
+        let mut buf = String::from("data: {\"choices\"");
+        assert!(super::drain_sse_events(&mut buf).is_empty());
+        assert_eq!(buf, "data: {\"choices\"", "incomplete frame stays buffered");
+    }
+
+    #[test]
+    fn test_drain_sse_events_caps_unbounded_buffer() {
+        let mut buf = "x".repeat(super::MAX_SSE_SCAN_BUFFER_BYTES + 1);
+        buf.push_str("data: {}"); // still no boundary
+        let chunks = super::drain_sse_events(&mut buf);
+        assert_eq!(chunks.len(), 1);
+        assert!(
+            chunks[0].is_err(),
+            "oversized unterminated frame must error"
+        );
+        assert!(buf.is_empty(), "buffer must be reset after the cap trips");
     }
 }

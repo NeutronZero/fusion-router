@@ -73,12 +73,26 @@ impl Default for CorsConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct AuthConfig {
     #[serde(default = "default_auth_enabled")]
     pub enabled: bool,
     #[serde(default)]
     pub api_keys: Vec<String>,
+}
+
+// Redacted Debug: auth keys must never reach logs/panic messages via
+// `{:?}` of a config struct.
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("enabled", &self.enabled)
+            .field(
+                "api_keys",
+                &format!("[REDACTED; {} key(s)]", self.api_keys.len()),
+            )
+            .finish()
+    }
 }
 
 impl Default for AuthConfig {
@@ -223,7 +237,7 @@ pub struct PolicyActionConfig {
     pub params: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ProviderConfig {
     /// Wire protocol / transport adapter: `openai-chat`, `anthropic`, `gemini`,
     /// `ollama`, `grpc`, `websocket`, `custom`, or any OpenAI-compatible endpoint.
@@ -262,6 +276,38 @@ pub struct ProviderConfig {
     // Legacy alias: `provider_type` deserializes into `transport`.
     #[serde(default, alias = "provider_type")]
     pub(crate) _legacy_provider_type: Option<String>,
+}
+
+// Manual redacted Debug (the derived impl would print raw `api_key`,
+// `api_key_encrypted`, custom header values, and provider option values).
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("transport", &self.transport)
+            .field("base_url", &self.base_url)
+            .field("api_key_env", &self.api_key_env)
+            .field(
+                "api_key",
+                &self.api_key.as_ref().map(|_| "[REDACTED]".to_string()),
+            )
+            .field(
+                "api_key_encrypted",
+                &self
+                    .api_key_encrypted
+                    .as_ref()
+                    .map(|_| "[REDACTED]".to_string()),
+            )
+            // Header/option VALUES can carry secrets; only names are shown.
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
+            .field("models_count", &self.models.len())
+            .field("blacklist", &self.blacklist)
+            .field("whitelist", &self.whitelist)
+            .field("failure_threshold", &self.failure_threshold)
+            .field("cooldown_secs", &self.cooldown_secs)
+            .field("options_keys", &self.options.keys().collect::<Vec<_>>())
+            .field("_legacy_provider_type", &self._legacy_provider_type)
+            .finish()
+    }
 }
 
 /// Full capability descriptor for a model.
@@ -390,5 +436,45 @@ impl Default for ToolsConfig {
             shell_path_mode: default_shell_path_mode(),
             max_staged_input_bytes: default_max_staged_input_bytes(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_provider_config_debug_redacts_api_key() {
+        let mut cfg = ProviderConfig::default();
+        cfg.api_key = Some("sk-super-secret-value".to_string());
+        cfg.api_key_encrypted = Some("ciphertext-abc".to_string());
+        cfg.headers
+            .insert("X-Vault-Token".to_string(), "vault-secret".to_string());
+
+        let rendered = format!("{cfg:?}");
+        assert!(!rendered.contains("sk-super-secret-value"), "{rendered}");
+        assert!(!rendered.contains("ciphertext-abc"), "{rendered}");
+        assert!(
+            !rendered.contains("vault-secret"),
+            "header values must not render"
+        );
+        assert!(rendered.contains("[REDACTED]"), "{rendered}");
+        assert!(
+            rendered.contains("X-Vault-Token"),
+            "header names are not secrets and stay visible"
+        );
+    }
+
+    #[test]
+    fn test_auth_config_debug_redacts_keys() {
+        let auth = AuthConfig {
+            enabled: true,
+            api_keys: vec!["key-one".into(), "key-two".into()],
+        };
+        let rendered = format!("{auth:?}");
+        assert!(!rendered.contains("key-one"));
+        assert!(!rendered.contains("key-two"));
+        assert!(rendered.contains("REDACTED"));
+        assert!(rendered.contains("2 key(s)"));
     }
 }

@@ -236,12 +236,12 @@ async fn law5_non_denied_target_passes_deny_compiler() {
     .await;
 
     assert_eq!(
-        status, 400,
+        status, 502,
         "EchoProvider aborts execution, but compile must succeed: {body}"
     );
     assert!(
-        body["error"].as_str().unwrap().contains("Provider error"),
-        "workflow must fail in the executor, not the compiler: {body}"
+        body["error"].as_str().unwrap().contains("upstream node execution"),
+        "workflow must fail in the executor, not the compiler (compile/policy failures map to 500): {body}"
     );
 }
 

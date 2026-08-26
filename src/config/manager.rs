@@ -29,6 +29,10 @@ pub struct ConfigManager {
     pub config_path: PathBuf,
     subscribers: RwLock<Vec<Box<dyn ConfigSubscriber + Send + Sync>>>,
     generation: AtomicU64,
+    /// Serializes `reload()` end-to-end (read → validate → prepare → commit
+    /// → swap). Without it two concurrent reloads could interleave prepare/
+    /// commit phases across subscribers and publish mixed-generation state.
+    reload_lock: tokio::sync::Mutex<()>,
 }
 
 impl ConfigManager {
@@ -47,6 +51,7 @@ impl ConfigManager {
             config_path,
             subscribers: RwLock::new(subscribers),
             generation: AtomicU64::new(generation),
+            reload_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -66,6 +71,12 @@ impl ConfigManager {
     }
 
     pub async fn reload(&self) -> Result<u64, ReloadError> {
+        // Serialize concurrent reloads: the whole read → validate → prepare →
+        // commit → swap sequence must be atomic with respect to other
+        // reloads, or interleaved subscriber phases can publish a mixture of
+        // two generations.
+        let _reload_guard = self.reload_lock.lock().await;
+
         let content = tokio::fs::read_to_string(&self.config_path)
             .await
             .map_err(|e| ReloadError::Parse(e.to_string()))?;
@@ -416,6 +427,59 @@ resources:
 
         let after = manager.snapshot();
         assert_eq!(after.generation, 2);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_reloads_serialize_without_interleaving() {
+        // A subscriber that flags overlap between any two reloads' phases:
+        // with the internal reload lock, each reload runs prepare→commit
+        // atomically, so ACTIVE never exceeds 1.
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
+        static ACTIVE: AtomicU64 = AtomicU64::new(0);
+        static INTERLEAVED: AtomicBool = AtomicBool::new(false);
+
+        struct DetectorSubscriber;
+        impl ConfigSubscriber for DetectorSubscriber {
+            fn prepare(
+                &self,
+                _old: &ConfigSnapshot,
+                _new: &ConfigSnapshot,
+            ) -> Result<(), ReloadError> {
+                if ACTIVE.fetch_add(1, AtomicOrdering::SeqCst) > 0 {
+                    INTERLEAVED.store(true, AtomicOrdering::SeqCst);
+                }
+                Ok(())
+            }
+
+            fn commit(&self, _generation: u64) {
+                ACTIVE.fetch_sub(1, AtomicOrdering::SeqCst);
+            }
+        }
+
+        let path = temp_yaml("serialized_reload.yaml", &valid_yaml());
+        let manager = std::sync::Arc::new(ConfigManager::new(
+            path.clone(),
+            minimal_config(),
+            vec![Box::new(DetectorSubscriber)],
+        ));
+
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let mgr = manager.clone();
+            tasks.push(tokio::spawn(async move { mgr.reload().await }));
+        }
+        for task in tasks {
+            task.await
+                .unwrap()
+                .expect("every serialized reload succeeds");
+        }
+
+        assert!(
+            !INTERLEAVED.load(AtomicOrdering::SeqCst),
+            "reload prepare/commit phases must never overlap across concurrent reloads"
+        );
+        assert_eq!(manager.snapshot().generation, 9);
         let _ = std::fs::remove_file(&path);
     }
 }

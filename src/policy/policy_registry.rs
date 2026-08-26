@@ -1,6 +1,16 @@
 use fusion_planner::{PolicyDeclarationSnapshot, PolicySnapshot};
 use parking_lot::RwLock;
 
+/// Immutable triple read/written atomically: a version number and the exact
+/// policy list that version contains, plus the append-only history. Holding
+/// them in one lock guarantees readers never observe an old version paired
+/// with new rules (or vice versa).
+struct PolicyState {
+    version: u64,
+    policies: Vec<PolicyDeclarationSnapshot>,
+    history: Vec<PolicySnapshot>,
+}
+
 /// Authoritative policy registry emitting versioned immutable snapshots.
 ///
 /// All policy mutations go through this registry. Each mutation increments the
@@ -8,9 +18,7 @@ use parking_lot::RwLock;
 /// The current snapshot is always available via `current_snapshot()`, and
 /// historical snapshots can be retrieved via `snapshot_at(version)`.
 pub struct PolicyRegistry {
-    version: RwLock<u64>,
-    policies: RwLock<Vec<PolicyDeclarationSnapshot>>,
-    history: RwLock<Vec<PolicySnapshot>>,
+    state: RwLock<PolicyState>,
 }
 
 impl Default for PolicyRegistry {
@@ -21,15 +29,21 @@ impl Default for PolicyRegistry {
 
 impl PolicyRegistry {
     pub fn new() -> Self {
+        Self {
+            state: RwLock::new(Self::initial_state()),
+        }
+    }
+
+    fn initial_state() -> PolicyState {
         let initial = PolicySnapshot {
             version: 1,
             policies: vec![],
             created_at: now_epoch_secs(),
         };
-        Self {
-            version: RwLock::new(1),
-            policies: RwLock::new(Vec::new()),
-            history: RwLock::new(vec![initial]),
+        PolicyState {
+            version: 1,
+            policies: vec![],
+            history: vec![initial],
         }
     }
 
@@ -42,12 +56,14 @@ impl PolicyRegistry {
     }
 
     /// Returns the current (latest) policy snapshot.
+    ///
+    /// Version and policies are captured under one lock, so the returned
+    /// snapshot is always a consistent (version, rules) pair.
     pub fn current_snapshot(&self) -> PolicySnapshot {
-        let ver = *self.version.read();
-        let list = self.policies.read().clone();
+        let state = self.state.read();
         PolicySnapshot {
-            version: ver,
-            policies: list,
+            version: state.version,
+            policies: state.policies.clone(),
             created_at: now_epoch_secs(),
         }
     }
@@ -55,8 +71,9 @@ impl PolicyRegistry {
     /// Returns a specific historical snapshot by version number.
     /// Returns `None` if the version does not exist.
     pub fn snapshot_at(&self, version: u64) -> Option<PolicySnapshot> {
-        self.history
+        self.state
             .read()
+            .history
             .iter()
             .find(|s| s.version == version)
             .cloned()
@@ -64,50 +81,50 @@ impl PolicyRegistry {
 
     /// Returns all historical snapshots (append-only log).
     pub fn snapshot_history(&self) -> Vec<PolicySnapshot> {
-        self.history.read().clone()
+        self.state.read().history.clone()
     }
 
     /// Returns the number of mutations applied (version - 1).
     pub fn mutation_count(&self) -> u64 {
-        self.version.read().saturating_sub(1)
+        self.state.read().version.saturating_sub(1)
     }
 
     /// Applies a policy declaration (upsert by id), increments version,
     /// and appends the new snapshot to history.
     pub fn apply_policy(&self, id: String, name: String, rule: String) -> PolicySnapshot {
-        let mut list = self.policies.write();
-        list.retain(|p| p.id != id);
-        list.push(PolicyDeclarationSnapshot { id, name, rule });
-        let mut ver = self.version.write();
-        *ver += 1;
+        let mut state = self.state.write();
+        state.policies.retain(|p| p.id != id);
+        state
+            .policies
+            .push(PolicyDeclarationSnapshot { id, name, rule });
+        state.version += 1;
         let snapshot = PolicySnapshot {
-            version: *ver,
-            policies: list.clone(),
+            version: state.version,
+            policies: state.policies.clone(),
             created_at: now_epoch_secs(),
         };
-        self.history.write().push(snapshot.clone());
+        state.history.push(snapshot.clone());
         snapshot
     }
 
     /// Removes a policy declaration by id, increments version,
     /// and appends the new snapshot to history.
     pub fn remove_policy(&self, id: &str) -> PolicySnapshot {
-        let mut list = self.policies.write();
-        list.retain(|p| p.id != id);
-        let mut ver = self.version.write();
-        *ver += 1;
+        let mut state = self.state.write();
+        state.policies.retain(|p| p.id != id);
+        state.version += 1;
         let snapshot = PolicySnapshot {
-            version: *ver,
-            policies: list.clone(),
+            version: state.version,
+            policies: state.policies.clone(),
             created_at: now_epoch_secs(),
         };
-        self.history.write().push(snapshot.clone());
+        state.history.push(snapshot.clone());
         snapshot
     }
 
     /// Returns the number of active policies.
     pub fn policy_count(&self) -> usize {
-        self.policies.read().len()
+        self.state.read().policies.len()
     }
 
     /// Builds the compiler-facing `PolicyIR` from the current snapshot.
@@ -124,7 +141,7 @@ impl PolicyRegistry {
 
     /// Checks if a policy with the given id exists.
     pub fn has_policy(&self, id: &str) -> bool {
-        self.policies.read().iter().any(|p| p.id == id)
+        self.state.read().policies.iter().any(|p| p.id == id)
     }
 }
 
@@ -238,5 +255,107 @@ mod tests {
         let reg = PolicyRegistry::new();
         reg.apply_policy("x".into(), "x".into(), "garbage".into());
         assert!(reg.policy_ir().is_err(), "corrupt rules must fail closed");
+    }
+
+    /// Invariant under concurrent mutation: a given version must always map
+    /// to the SAME rule set. With the historical split-lock implementation a
+    /// reader could observe an old version paired with new rules (torn
+    /// snapshot); this stress test fails on any such tear.
+    #[test]
+    fn stress_concurrent_readers_never_observe_torn_snapshots() {
+        use std::collections::HashMap;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let registry = Arc::new(PolicyRegistry::new());
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // (version -> policies.len()) observed by readers; the same version
+        // must never be seen with two different lengths.
+        let observations: Arc<Mutex<HashMap<u64, usize>>> = Arc::new(Mutex::new(HashMap::new()));
+
+        let mut readers = Vec::new();
+        for _ in 0..6 {
+            let registry = Arc::clone(&registry);
+            let stop = Arc::clone(&stop);
+            let observations = Arc::clone(&observations);
+            readers.push(std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let snap = registry.current_snapshot();
+                    let mut obs = observations.lock().unwrap();
+                    match obs.get(&snap.version) {
+                        Some(seen_len) => {
+                            assert_eq!(
+                                *seen_len,
+                                snap.policies.len(),
+                                "TORN SNAPSHOT: version {} observed with both {} and {} rules",
+                                snap.version,
+                                seen_len,
+                                snap.policies.len()
+                            );
+                        }
+                        None => {
+                            obs.insert(snap.version, snap.policies.len());
+                        }
+                    }
+                }
+            }));
+        }
+
+        const WRITERS: usize = 4;
+        const OPS_PER_WRITER: usize = 250;
+        let mut writers = Vec::new();
+        for w in 0..WRITERS {
+            let registry = Arc::clone(&registry);
+            writers.push(std::thread::spawn(move || {
+                for i in 0..OPS_PER_WRITER {
+                    registry.apply_policy(
+                        format!("p{w}-{i}"),
+                        "stress".into(),
+                        format!("rule-{w}-{i}"),
+                    );
+                }
+            }));
+        }
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        for reader in readers {
+            reader.join().unwrap();
+        }
+
+        // Post-conditions: versioning is contiguous and every history entry
+        // agrees with what readers recorded for that version.
+        assert_eq!(
+            registry.mutation_count(),
+            (WRITERS * OPS_PER_WRITER) as u64,
+            "every mutation must have landed exactly once"
+        );
+        let final_version = registry.current_snapshot().version;
+        assert_eq!(final_version, 1 + (WRITERS * OPS_PER_WRITER) as u64);
+
+        let history = registry.snapshot_history();
+        assert_eq!(history.len(), final_version as usize);
+        for window in history.windows(2) {
+            assert_eq!(
+                window[1].version,
+                window[0].version + 1,
+                "contiguous versions"
+            );
+        }
+
+        let observations = observations.lock().unwrap();
+        for snapshot in &history {
+            if let Some(seen_len) = observations.get(&snapshot.version) {
+                assert_eq!(
+                    *seen_len,
+                    snapshot.policies.len(),
+                    "reader view of version {} diverged from authoritative history",
+                    snapshot.version
+                );
+            }
+        }
     }
 }

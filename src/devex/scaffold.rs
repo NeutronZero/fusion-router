@@ -29,6 +29,7 @@ edition = "2021"
 
 [dependencies]
 fusion-plugin-api = {{ path = "../../crates/fusion-plugin-api" }}
+semver = {{ version = "1.0", features = ["serde"] }}
 "#,
             name
         );
@@ -36,8 +37,13 @@ fusion-plugin-api = {{ path = "../../crates/fusion-plugin-api" }}
         let src_dir = base_path.join("src");
         fs::create_dir_all(&src_dir)?;
 
+        // Mirrors the current `Plugin` trait contract (see
+        // crates/fusion-plugin-api/src/lib.rs): metadata must carry
+        // api_version, min_compiler_version and the capability list or the
+        // scaffolded plugin will not compile.
         let lib_rs = r#"
-use fusion_plugin_api::{Plugin, PluginMetadata};
+use fusion_plugin_api::{CapabilityId, Plugin, PluginMetadata};
+use semver::Version;
 
 pub struct MyPlugin;
 
@@ -45,8 +51,10 @@ impl Plugin for MyPlugin {
     fn metadata(&self) -> PluginMetadata {
         PluginMetadata {
             name: env!("CARGO_PKG_NAME").to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            description: "A scaffolded plugin".to_string(),
+            version: Version::parse(env!("CARGO_PKG_VERSION")).expect("valid version"),
+            api_version: Version::parse("0.2.0").expect("valid api version"),
+            min_compiler_version: Version::parse("0.11.0").expect("valid compiler version"),
+            capabilities: vec![CapabilityId::new("my_plugin.echo")],
         }
     }
 }
@@ -57,6 +65,17 @@ impl Plugin for MyPlugin {
 
         Ok(())
     }
+
+    /// Fields the generated plugin `lib.rs` must contain for the current
+    /// `PluginMetadata` contract; used by the template completeness test.
+    #[cfg(test)]
+    pub(crate) const REQUIRED_TEMPLATE_FIELDS: &[&str] = &[
+        "api_version",
+        "min_compiler_version",
+        "capabilities",
+        "CapabilityId::new",
+        "Version::parse(env!(\"CARGO_PKG_VERSION\"))",
+    ];
 
     pub fn scaffold_capability<P: AsRef<Path>>(&self, path: P, name: &str) -> std::io::Result<()> {
         let base_path = path.as_ref().join(name);
@@ -123,5 +142,40 @@ fn test_{name}_scaffolded() {{
         fs::write(base_path.join("tests/integration.rs"), integration_rs)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scaffold_plugin_template_matches_current_metadata_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        PluginScaffolder::new()
+            .scaffold_plugin(dir.path(), "my-plugin")
+            .unwrap();
+
+        let lib = fs::read_to_string(dir.path().join("my-plugin/src/lib.rs")).unwrap();
+        for field in PluginScaffolder::REQUIRED_TEMPLATE_FIELDS {
+            assert!(
+                lib.contains(field),
+                "scaffolded plugin template must contain '{field}' (current PluginMetadata \
+                 contract requires api_version/min_compiler_version/capabilities)"
+            );
+        }
+
+        // The template must no longer reference the removed `description`
+        // metadata field.
+        assert!(
+            !lib.contains("description:"),
+            "stale 'description' field must not appear in the template"
+        );
+
+        let cargo = fs::read_to_string(dir.path().join("my-plugin/Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("semver"),
+            "template Cargo.toml must declare the semver dependency"
+        );
     }
 }

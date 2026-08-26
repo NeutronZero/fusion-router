@@ -201,6 +201,12 @@ pub struct ChatStreamChunk {
 }
 
 impl ChatStreamChunk {
+    /// Parses one OpenAI-compatible SSE `data:` payload.
+    ///
+    /// `finish_reason` and `usage` are parsed whenever present, independent of
+    /// `delta.content`: OpenAI's final chunk carries an EMPTY delta object
+    /// (`{"delta":{},"finish_reason":"stop","usage":{...}}`), which must not
+    /// be dropped. A missing `content` field is treated like an empty one.
     pub fn from_sse_data(data: &str) -> anyhow::Result<Option<Self>> {
         let trimmed = data.trim();
         if trimmed.is_empty() || trimmed == "[DONE]" {
@@ -211,30 +217,38 @@ impl ChatStreamChunk {
         let content = body["choices"][0]["delta"]["content"]
             .as_str()
             .map(|s| s.to_string());
-        if content.as_deref() == Some("") {
-            let finish = body["choices"][0]["finish_reason"]
-                .as_str()
-                .map(|s| s.to_string());
-            let usage = body["usage"].as_object().map(|u| Usage {
-                prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-                completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
-                total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
-            });
-            if finish.is_some() || usage.is_some() {
-                return Ok(Some(ChatStreamChunk {
-                    content: None,
-                    finish_reason: finish,
-                    usage,
-                }));
-            }
+        let finish_reason = body["choices"][0]["finish_reason"]
+            .as_str()
+            .map(|s| s.to_string());
+        let usage = parse_usage(body.get("usage"));
+
+        // Pure keep-alive frame (`delta: {}` with no finish/usage) — no payload.
+        if content.as_deref().unwrap_or("").is_empty() && finish_reason.is_none() && usage.is_none()
+        {
             return Ok(None);
         }
         Ok(Some(ChatStreamChunk {
             content,
-            finish_reason: None,
-            usage: None,
+            finish_reason,
+            usage,
         }))
     }
+}
+
+fn saturating_token_u32(value: Option<&serde_json::Value>) -> u32 {
+    value
+        .and_then(|v| v.as_u64())
+        .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
+        .unwrap_or(0)
+}
+
+fn parse_usage(usage: Option<&serde_json::Value>) -> Option<Usage> {
+    usage.as_ref()?.as_object()?;
+    Some(Usage {
+        prompt_tokens: saturating_token_u32(usage.and_then(|u| u.get("prompt_tokens"))),
+        completion_tokens: saturating_token_u32(usage.and_then(|u| u.get("completion_tokens"))),
+        total_tokens: saturating_token_u32(usage.and_then(|u| u.get("total_tokens"))),
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,5 +287,83 @@ mod tests {
                 "as_label must match Debug format for Prometheus metric label continuity"
             );
         }
+    }
+
+    #[test]
+    fn test_sse_final_chunk_with_empty_delta_yields_finish_and_usage() {
+        // OpenAI's final chunk: empty delta object, finish_reason + usage.
+        let data = r#"{"id":"x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":34,"total_tokens":46}}"#;
+        let chunk = ChatStreamChunk::from_sse_data(data)
+            .unwrap()
+            .expect("final chunk with usage must not be dropped");
+        assert_eq!(chunk.finish_reason.as_deref(), Some("stop"));
+        let usage = chunk.usage.expect("usage must be populated");
+        assert_eq!(usage.prompt_tokens, 12);
+        assert_eq!(usage.completion_tokens, 34);
+        assert_eq!(usage.total_tokens, 46);
+        assert_eq!(chunk.content, None);
+    }
+
+    #[test]
+    fn test_sse_finish_reason_parsed_alongside_content() {
+        // Some upstreams send content AND finish_reason in the same frame.
+        let data = r#"{"choices":[{"delta":{"content":"bye"},"finish_reason":"stop"}]}"#;
+        let chunk = ChatStreamChunk::from_sse_data(data)
+            .unwrap()
+            .expect("frame with content must parse");
+        assert_eq!(chunk.content.as_deref(), Some("bye"));
+        assert_eq!(chunk.finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[test]
+    fn test_sse_missing_content_treated_like_empty() {
+        // delta without a content key at all behaves like an empty delta.
+        let data = r#"{"choices":[{"delta":{"role":"assistant"},"finish_reason":"length"}]}"#;
+        let chunk = ChatStreamChunk::from_sse_data(data)
+            .unwrap()
+            .expect("missing-content final frame must parse");
+        assert_eq!(chunk.finish_reason.as_deref(), Some("length"));
+        assert_eq!(chunk.content, None);
+    }
+
+    #[test]
+    fn test_sse_huge_token_counts_saturate_not_wrap() {
+        let data = r#"{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":18446744073709551615,"completion_tokens":99999999999,"total_tokens":7}}"#;
+        let chunk = ChatStreamChunk::from_sse_data(data)
+            .unwrap()
+            .expect("usage frame must parse");
+        let usage = chunk.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, u32::MAX, "must saturate, not wrap");
+        assert_eq!(usage.completion_tokens, u32::MAX, "must saturate, not wrap");
+        assert_eq!(usage.total_tokens, 7);
+    }
+
+    #[test]
+    fn test_sse_keepalive_frames_return_none() {
+        assert!(ChatStreamChunk::from_sse_data("").unwrap().is_none());
+        assert!(ChatStreamChunk::from_sse_data("[DONE]").unwrap().is_none());
+        assert!(
+            ChatStreamChunk::from_sse_data(r#"{"choices":[{"delta":{}}]}"#)
+                .unwrap()
+                .is_none(),
+            "pure keep-alive frame (empty delta, no finish/usage) carries no payload"
+        );
+        // Legacy shape preserved: empty-string content without finish/usage.
+        assert!(
+            ChatStreamChunk::from_sse_data(r#"{"choices":[{"delta":{"content":""}}]}"#)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_sse_content_only_frame_unchanged() {
+        let data = r#"{"choices":[{"delta":{"content":"hello"}}]}"#;
+        let chunk = ChatStreamChunk::from_sse_data(data)
+            .unwrap()
+            .expect("content frame must parse");
+        assert_eq!(chunk.content.as_deref(), Some("hello"));
+        assert_eq!(chunk.finish_reason, None);
+        assert!(chunk.usage.is_none());
     }
 }

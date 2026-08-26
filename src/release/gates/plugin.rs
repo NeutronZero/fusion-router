@@ -112,6 +112,19 @@ impl FilesystemPluginBackend {
     }
 }
 
+/// On-disk plugin manifest. Unknown or absent fields fail closed instead of
+/// fabricating a healthy artifact (gate integrity).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PluginManifestFile {
+    name: String,
+    version: semver::Version,
+    sdk_version: semver::Version,
+    capabilities: Vec<String>,
+    exported_symbols: Vec<String>,
+    valid_manifest: bool,
+}
+
 impl PluginBackend for FilesystemPluginBackend {
     fn name(&self) -> &'static str {
         "filesystem"
@@ -119,7 +132,7 @@ impl PluginBackend for FilesystemPluginBackend {
 
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<PluginArtifact>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
-        let entries = discover_fixtures(&manifest, FixtureKind::Plugins);
+        let entries = discover_fixtures(&manifest, FixtureKind::Plugins)?;
         let mut results = Vec::new();
         for entry in &entries {
             let full_path = self
@@ -131,19 +144,18 @@ impl PluginBackend for FilesystemPluginBackend {
     }
 
     fn load(&self, path: &std::path::Path) -> Result<PluginArtifact, GateError> {
-        if !path.exists() {
-            return Err(GateError::ExecutionFailed(format!(
-                "plugin path not found: {}",
-                path.display()
-            )));
-        }
+        let file = self.loader.resolve_manifest_file(path, "json", "plugin")?;
+        let content = self.loader.read_to_string(&file)?;
+        let manifest: PluginManifestFile = serde_json::from_str(&content).map_err(|e| {
+            GateError::ExecutionFailed(format!("invalid plugin manifest {}: {e}", file.display()))
+        })?;
         Ok(PluginArtifact::new(
-            "echo",
-            semver::Version::new(0, 10, 0),
-            semver::Version::new(0, 10, 0),
-            vec!["echo".into()],
-            vec!["create_plugin".into(), "plugin_api_version".into()],
-            true,
+            manifest.name,
+            manifest.version,
+            manifest.sdk_version,
+            manifest.capabilities,
+            manifest.exported_symbols,
+            manifest.valid_manifest,
         ))
     }
 }
@@ -349,5 +361,112 @@ mod tests {
         };
         let result = gate.run(&ctx).await;
         assert!(result.is_error());
+    }
+
+    fn temp_plugin_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("fusion_plugin_gate_{tag}_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("plugins/echo")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_filesystem_backend_loads_real_fixture_content() {
+        let temp = temp_plugin_dir("real");
+        std::fs::write(
+            temp.join("plugins/echo/plugin.json"),
+            r#"{
+                "name": "echo",
+                "version": "0.12.0",
+                "sdk_version": "0.10.0",
+                "capabilities": ["echo"],
+                "exported_symbols": ["create_plugin"],
+                "valid_manifest": true
+            }"#,
+        )
+        .unwrap();
+
+        let backend = FilesystemPluginBackend::new(temp.clone());
+        let artifact = backend.load(&temp.join("plugins/echo")).unwrap();
+        assert_eq!(artifact.name, "echo");
+        assert_eq!(artifact.version, semver::Version::new(0, 12, 0));
+        assert_eq!(artifact.sdk_version, semver::Version::new(0, 10, 0));
+        assert_eq!(artifact.capabilities, vec!["echo".to_string()]);
+        assert_eq!(artifact.exported_symbols, vec!["create_plugin".to_string()]);
+        assert!(artifact.valid_manifest);
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_backend_rejects_corrupt_manifest() {
+        let temp = temp_plugin_dir("corrupt");
+        std::fs::write(temp.join("plugins/echo/plugin.json"), "{ not json ]").unwrap();
+
+        let backend = FilesystemPluginBackend::new(temp.clone());
+        let result = backend.load(&temp.join("plugins/echo"));
+        assert!(
+            result.is_err(),
+            "unparseable manifest must fail the gate, not fabricate a healthy artifact"
+        );
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_backend_rejects_missing_required_fields() {
+        let temp = temp_plugin_dir("missing");
+        // Missing sdk_version / capabilities / exported_symbols / valid_manifest.
+        std::fs::write(
+            temp.join("plugins/echo/plugin.json"),
+            r#"{ "name": "echo", "version": "0.10.0" }"#,
+        )
+        .unwrap();
+
+        let backend = FilesystemPluginBackend::new(temp.clone());
+        let result = backend.load(&temp.join("plugins/echo"));
+        assert!(
+            result.is_err(),
+            "missing required fields must be a hard error"
+        );
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_backend_rejects_unknown_fields() {
+        let temp = temp_plugin_dir("unknown");
+        std::fs::write(
+            temp.join("plugins/echo/plugin.json"),
+            r#"{
+                "name": "echo",
+                "version": "0.10.0",
+                "sdk_version": "0.10.0",
+                "capabilities": ["echo"],
+                "exported_symbols": ["create_plugin"],
+                "valid_manifest": true,
+                "healthy_because_i_said_so": true
+            }"#,
+        )
+        .unwrap();
+
+        let backend = FilesystemPluginBackend::new(temp.clone());
+        let result = backend.load(&temp.join("plugins/echo"));
+        assert!(
+            result.is_err(),
+            "unknown self-declared fields must not be silently accepted"
+        );
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_backend_missing_path_is_gate_error() {
+        let temp = temp_plugin_dir("absent");
+        let backend = FilesystemPluginBackend::new(temp.clone());
+        let result = backend.load(&temp.join("plugins/ghost"));
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(temp);
     }
 }

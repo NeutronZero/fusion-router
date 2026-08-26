@@ -249,7 +249,8 @@ async fn test_provider_registry_rejects_bad_prepare() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 3 — get_matching_targets routes by prefix
+// Test 3 — get_matching_targets routes by prefix; multi-provider unmatched
+// models fail closed (no silent default substitution)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -267,9 +268,28 @@ async fn test_chat_provider_delegates_to_correct_target() {
     assert_eq!(matched.len(), 1);
     assert_eq!(matched[0].name, "or-target");
 
+    // Multi-provider setup: an unprefixed model must NOT silently ride the
+    // default target anymore — callers convert the empty result into a typed
+    // no-route error instead.
+    let matched = registry.get_matching_targets("unknown/model");
+    assert!(
+        matched.is_empty(),
+        "unmatched models in a multi-provider registry must return empty (fail-closed)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 3b — single-provider setups keep default fallback for unmatched models
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_single_provider_registry_falls_back_to_default() {
+    let registry = ProviderRegistry::new(dummy_target("solo-default"));
+    registry.register_target(vec!["zen/".into()], dummy_target("zen-target"));
+
     let matched = registry.get_matching_targets("unknown/model");
     assert_eq!(matched.len(), 1);
-    assert_eq!(matched[0].name, "fallback");
+    assert_eq!(matched[0].name, "solo-default");
 }
 
 // ---------------------------------------------------------------------------

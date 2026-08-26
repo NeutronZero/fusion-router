@@ -97,6 +97,18 @@ impl FilesystemProviderBackend {
     }
 }
 
+/// On-disk provider manifest. Unknown or absent fields fail closed instead of
+/// fabricating a healthy artifact (gate integrity).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderManifestFile {
+    name: String,
+    version: semver::Version,
+    models: Vec<String>,
+    valid_pricing_metadata: bool,
+    valid_auth_schema: bool,
+}
+
 impl ProviderBackend for FilesystemProviderBackend {
     fn name(&self) -> &'static str {
         "filesystem"
@@ -104,7 +116,7 @@ impl ProviderBackend for FilesystemProviderBackend {
 
     fn discover(&self, _ctx: &CertificationContext) -> Result<Vec<ProviderArtifact>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
-        let entries = discover_fixtures(&manifest, FixtureKind::Providers);
+        let entries = discover_fixtures(&manifest, FixtureKind::Providers)?;
         let mut results = Vec::new();
         for entry in &entries {
             let full_path = self
@@ -116,18 +128,19 @@ impl ProviderBackend for FilesystemProviderBackend {
     }
 
     fn load(&self, path: &std::path::Path) -> Result<ProviderArtifact, GateError> {
-        if !path.exists() {
-            return Err(GateError::ExecutionFailed(format!(
-                "provider path not found: {}",
-                path.display()
-            )));
-        }
+        let file = self
+            .loader
+            .resolve_manifest_file(path, "json", "provider")?;
+        let content = self.loader.read_to_string(&file)?;
+        let manifest: ProviderManifestFile = serde_json::from_str(&content).map_err(|e| {
+            GateError::ExecutionFailed(format!("invalid provider manifest {}: {e}", file.display()))
+        })?;
         Ok(ProviderArtifact::new(
-            "openai",
-            semver::Version::new(0, 10, 0),
-            vec!["gpt-4o".into(), "gpt-4o-mini".into()],
-            true,
-            true,
+            manifest.name,
+            manifest.version,
+            manifest.models,
+            manifest.valid_pricing_metadata,
+            manifest.valid_auth_schema,
         ))
     }
 }
@@ -315,5 +328,81 @@ mod tests {
         };
         let result = gate.run(&ctx).await;
         assert!(!result.passed());
+    }
+
+    fn temp_provider_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "fusion_provider_gate_{tag}_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(dir.join("providers/openai")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_filesystem_backend_loads_real_fixture_content() {
+        let temp = temp_provider_dir("real");
+        std::fs::write(
+            temp.join("providers/openai/provider.json"),
+            r#"{
+                "name": "openai",
+                "version": "0.10.0",
+                "models": ["gpt-4o", "gpt-4o-mini"],
+                "valid_pricing_metadata": true,
+                "valid_auth_schema": true
+            }"#,
+        )
+        .unwrap();
+
+        let backend = FilesystemProviderBackend::new(temp.clone());
+        let artifact = backend.load(&temp.join("providers/openai")).unwrap();
+        assert_eq!(artifact.name, "openai");
+        assert_eq!(artifact.version, semver::Version::new(0, 10, 0));
+        assert_eq!(
+            artifact.models,
+            vec!["gpt-4o".to_string(), "gpt-4o-mini".to_string()]
+        );
+        assert!(artifact.valid_pricing_metadata);
+        assert!(artifact.valid_auth_schema);
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_backend_rejects_corrupt_manifest() {
+        let temp = temp_provider_dir("corrupt");
+        std::fs::write(
+            temp.join("providers/openai/provider.json"),
+            "{\"name\": \"openai\",", // truncated JSON
+        )
+        .unwrap();
+
+        let backend = FilesystemProviderBackend::new(temp.clone());
+        let result = backend.load(&temp.join("providers/openai"));
+        assert!(
+            result.is_err(),
+            "unparseable manifest must fail the gate, not fabricate a healthy artifact"
+        );
+
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_backend_rejects_missing_required_fields() {
+        let temp = temp_provider_dir("missing");
+        std::fs::write(
+            temp.join("providers/openai/provider.json"),
+            r#"{ "name": "openai", "version": "0.10.0" }"#,
+        )
+        .unwrap();
+
+        let backend = FilesystemProviderBackend::new(temp.clone());
+        let result = backend.load(&temp.join("providers/openai"));
+        assert!(
+            result.is_err(),
+            "missing required fields must be a hard error"
+        );
+
+        let _ = std::fs::remove_dir_all(temp);
     }
 }

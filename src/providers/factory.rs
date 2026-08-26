@@ -98,16 +98,16 @@ pub fn create_provider_target(name: &str, cfg: &ProviderConfig, api_key: String)
         name.to_string(),
         circuit_breaker,
         Box::new(move || -> Arc<dyn ChatProvider + Send + Sync> {
-            let provider: Arc<dyn ChatProvider + Send + Sync> = match transport.as_str() {
-                "openrouter" => Arc::new(OpenRouterProvider::with_base_url(
-                    api_key.clone(),
-                    base_url.clone(),
-                )),
-                "zen" | "opencode-zen" => Arc::new(ZenProvider::with_base_url(
-                    api_key.clone(),
-                    base_url.clone(),
-                )),
-                "ollama" => Arc::new(OllamaProvider::new()),
+            // Every arm yields the concrete `Provider` so config-driven custom
+            // headers can be injected uniformly onto outgoing requests.
+            let provider_impl: super::Provider = match transport.as_str() {
+                "openrouter" => {
+                    OpenRouterProvider::with_base_url(api_key.clone(), base_url.clone())
+                }
+                "zen" | "opencode-zen" => {
+                    ZenProvider::with_base_url(api_key.clone(), base_url.clone())
+                }
+                "ollama" => OllamaProvider::new(),
                 _ => {
                     // Generic OpenAI-compatible provider.
                     let url = base_url
@@ -143,21 +143,18 @@ pub fn create_provider_target(name: &str, cfg: &ProviderConfig, api_key: String)
                         &model_cfg,
                         format!("{}/", provider_name),
                     );
-                    let transport = super::HttpTransport::new(GENERIC_TIMEOUT).unwrap_or_default();
-                    Arc::new(super::Provider::new(
-                        Box::new(model),
-                        Box::new(transport),
-                        api_key.clone(),
-                    ))
+                    let http_transport = super::HttpTransport::new(GENERIC_TIMEOUT)
+                        .expect("failed to build generic OpenAI-compatible HTTP transport");
+                    super::Provider::new(Box::new(model), Box::new(http_transport), api_key.clone())
                 }
             };
 
-            // Wrap with custom headers if any
-            if custom_headers.is_empty() {
-                provider
-            } else {
-                Arc::new(ProviderWithHeaders::new(provider, custom_headers.clone()))
+            if !custom_headers.is_empty() {
+                provider_impl.set_extra_headers(custom_headers.clone());
             }
+
+            let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(provider_impl);
+            provider
         }),
     )
 }
@@ -182,16 +179,14 @@ pub fn create_protected_target(
         name.to_string(),
         circuit_breaker,
         Box::new(move || -> Arc<dyn ChatProvider + Send + Sync> {
-            let inner: Arc<dyn ChatProvider + Send + Sync> = match transport.as_str() {
-                "openrouter" => Arc::new(OpenRouterProvider::with_base_url(
-                    api_key.clone(),
-                    base_url.clone(),
-                )),
-                "zen" | "opencode-zen" => Arc::new(ZenProvider::with_base_url(
-                    api_key.clone(),
-                    base_url.clone(),
-                )),
-                "ollama" => Arc::new(OllamaProvider::new()),
+            let provider_impl: super::Provider = match transport.as_str() {
+                "openrouter" => {
+                    OpenRouterProvider::with_base_url(api_key.clone(), base_url.clone())
+                }
+                "zen" | "opencode-zen" => {
+                    ZenProvider::with_base_url(api_key.clone(), base_url.clone())
+                }
+                "ollama" => OllamaProvider::new(),
                 _ => {
                     let url = base_url
                         .clone()
@@ -226,19 +221,23 @@ pub fn create_protected_target(
                         &model_cfg,
                         format!("{}/", provider_name),
                     );
-                    let transport = super::HttpTransport::new(GENERIC_TIMEOUT).unwrap_or_default();
-                    Arc::new(super::Provider::new(
-                        Box::new(model),
-                        Box::new(transport),
-                        api_key.clone(),
-                    ))
+                    let http_transport = super::HttpTransport::new(GENERIC_TIMEOUT)
+                        .expect("failed to build generic OpenAI-compatible HTTP transport");
+                    super::Provider::new(Box::new(model), Box::new(http_transport), api_key.clone())
                 }
             };
 
-            let with_headers = if custom_headers.is_empty() {
-                inner
+            if !custom_headers.is_empty() {
+                provider_impl.set_extra_headers(custom_headers.clone());
+            }
+
+            let with_headers: Arc<dyn ChatProvider + Send + Sync> = if custom_headers.is_empty() {
+                Arc::new(provider_impl)
             } else {
-                Arc::new(ProviderWithHeaders::new(inner, custom_headers.clone()))
+                Arc::new(ProviderWithHeaders::new(
+                    Arc::new(provider_impl),
+                    custom_headers.clone(),
+                ))
             };
 
             Arc::new(CircuitBreakingProvider::new(

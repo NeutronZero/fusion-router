@@ -1,0 +1,8 @@
+{
+  "name": "echo",
+  "version": "0.10.0",
+  "sdk_version": "0.10.0",
+  "capabilities": ["echo"],
+  "exported_symbols": ["create_plugin", "plugin_api_version"],
+  "valid_manifest": true
+}

@@ -97,7 +97,14 @@ impl AppState {
             tool_registry.register(Arc::new(FileReadTool::new(dir.clone())));
         }
         if config.tools.enable_http_tool {
-            tool_registry.register(Arc::new(HTTPRequestTool::new()));
+            // HTTPRequestTool::new is now fail-closed (returns Result): it
+            // refuses to fall back to an unhardened client. This infallible
+            // constructor therefore aborts loudly on hardening failure
+            // instead of serving a degraded tool.
+            // (Mechanical call-site wiring for the tools-agent API change.)
+            let http_tool = HTTPRequestTool::new()
+                .expect("hardened HTTP client for http_request tool must build");
+            tool_registry.register(Arc::new(http_tool));
         }
         tool_registry.register(Arc::new(
             ShellCommandTool::new(

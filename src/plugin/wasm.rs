@@ -10,6 +10,9 @@ use crate::compiler::ir::{PrimitiveGraph, StrategyIR};
 use crate::plugin::PluginRegistry;
 use crate::strategies::{Parallelism, Strategy, StrategyDescriptor, StreamingMode};
 use crate::types::{RetryPolicy, StrategyKind};
+use crate::wasm::runtime::{
+    fueled_engine, WasmGuestLimits, WASM_EPOCH_DEADLINE_TICKS, WASM_FUEL_PER_INSTANTIATION,
+};
 
 const EXPORT_MEMORY: &str = "memory";
 const EXPORT_NAME: &str = "fusion_strategy_name";
@@ -39,7 +42,7 @@ pub struct WasmStrategy {
 
 impl WasmStrategy {
     pub fn from_file(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let engine = Engine::default();
+        let engine = fueled_engine()?;
         let module = Module::from_file(&engine, path.as_ref())?;
         validate_exports(&engine, &module)?;
         let name = read_name(&engine, &module)?;
@@ -51,13 +54,17 @@ impl WasmStrategy {
         })
     }
 
-    pub fn from_binary(engine: &Engine, bytes: &[u8]) -> anyhow::Result<Self> {
-        let module = Module::new(engine, bytes)?;
-        validate_exports(engine, &module)?;
-        let name = read_name(engine, &module)?;
+    /// Builds a strategy from raw wasm bytes. The module always runs on a
+    /// freshly built fueled/epoch-interrupted engine: accepting a caller's
+    /// arbitrary `Engine` previously allowed unfueled (unbounded) execution.
+    pub fn from_binary(bytes: &[u8]) -> anyhow::Result<Self> {
+        let engine = fueled_engine()?;
+        let module = Module::new(&engine, bytes)?;
+        validate_exports(&engine, &module)?;
+        let name = read_name(&engine, &module)?;
         Ok(Self {
             name,
-            engine: engine.clone(),
+            engine,
             module,
             descriptor: Mutex::new(None),
         })
@@ -151,9 +158,16 @@ impl Strategy for WasmStrategy {
         ir: &StrategyIR,
         ctx: &CompilationContext,
     ) -> Result<PrimitiveGraph, CompilerDiagnostic> {
-        self.lower_inner(ir, ctx).map_err(|e| {
-            CompilerDiagnostic::error("WASM_STRATEGY_LOWER", format!("WASM lower failed: {}", e))
-        })
+        // Map trap-class failures (fuel exhaustion, epoch timeout) onto
+        // typed messages before they become compiler diagnostics.
+        self.lower_inner(ir, ctx)
+            .map_err(map_guest_error)
+            .map_err(|e| {
+                CompilerDiagnostic::error(
+                    "WASM_STRATEGY_LOWER",
+                    format!("WASM lower failed: {}", e),
+                )
+            })
     }
 }
 
@@ -166,11 +180,39 @@ fn validate_exports(_engine: &Engine, module: &Module) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn instantiate(engine: &Engine, module: &Module) -> anyhow::Result<(Store<()>, Instance)> {
+fn instantiate(
+    engine: &Engine,
+    module: &Module,
+) -> anyhow::Result<(Store<WasmGuestLimits>, Instance)> {
     let linker = Linker::new(engine);
-    let mut store = Store::new(engine, ());
+    let mut store = Store::new(engine, WasmGuestLimits::default());
+    // Resource ceiling: memory growth capped, table growth capped (DoS).
+    store.limiter(|limits: &mut WasmGuestLimits| limits as &mut dyn wasmtime::ResourceLimiter);
+    // CPU ceiling: fuel metering turns infinite loops into OutOfFuel traps.
+    store.set_fuel(WASM_FUEL_PER_INSTANTIATION)?;
+    // Wall-clock ceiling: the engine is epoch-interrupted (see fueled_engine)
+    // and this store traps when its epoch budget elapses.
+    store.set_epoch_deadline(WASM_EPOCH_DEADLINE_TICKS);
     let instance = linker.instantiate(&mut store, module)?;
     Ok((store, instance))
+}
+
+/// Maps a guest failure onto a typed, actionable error message: fuel
+/// exhaustion and epoch (wall-clock) interruption are called out explicitly
+/// instead of surfacing as opaque traps.
+fn map_guest_error(err: anyhow::Error) -> anyhow::Error {
+    if let Some(trap) = err.downcast_ref::<wasmtime::Trap>() {
+        return match trap {
+            wasmtime::Trap::OutOfFuel => anyhow::anyhow!(
+                "WASM strategy exceeded its fuel budget ({WASM_FUEL_PER_INSTANTIATION})"
+            ),
+            wasmtime::Trap::Interrupt => anyhow::anyhow!(
+                "WASM strategy execution timed out (epoch deadline of {WASM_EPOCH_DEADLINE_TICKS} ticks)"
+            ),
+            other => anyhow::anyhow!("WASM strategy trapped: {other}"),
+        };
+    }
+    err
 }
 
 fn read_name(engine: &Engine, module: &Module) -> anyhow::Result<String> {
@@ -183,7 +225,7 @@ fn read_name(engine: &Engine, module: &Module) -> anyhow::Result<String> {
     read_string(&store, &memory, ptr)
 }
 
-fn read_string(store: &Store<()>, memory: &Memory, ptr: i32) -> anyhow::Result<String> {
+fn read_string<T>(store: &Store<T>, memory: &Memory, ptr: i32) -> anyhow::Result<String> {
     let data = memory.data(store);
     let start = ptr as usize;
     if start >= data.len() {
@@ -215,11 +257,12 @@ pub fn load_and_register_wasm_strategy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wasm::runtime::fueled_engine;
     use wasmtime::MemoryType;
 
     #[test]
     fn test_validate_exports_rejects_module_without_strategy_exports() {
-        let engine = Engine::default();
+        let engine = fueled_engine().unwrap();
         let wat = r#"(module (func (export "dummy") (result i32) i32.const 42))"#;
         let module = Module::new(&engine, wat).unwrap();
         let result = validate_exports(&engine, &module);
@@ -230,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_read_name_from_module() {
-        let engine = Engine::default();
+        let engine = fueled_engine().unwrap();
         let wat = r#"
             (module
                 (memory (export "memory") 1)
@@ -259,7 +302,7 @@ mod tests {
 
     #[test]
     fn test_read_string_rejects_out_of_bounds_pointer() {
-        let engine = Engine::default();
+        let engine = fueled_engine().unwrap();
         let mut store = Store::new(&engine, ());
         let memory = Memory::new(&mut store, MemoryType::new(1, Some(1))).unwrap();
 
@@ -270,6 +313,34 @@ mod tests {
         assert!(
             past_end.is_err(),
             "pointer past memory end must error, not panic"
+        );
+    }
+
+    #[test]
+    fn test_lower_fuel_exhaustion_maps_to_typed_error() {
+        // fusion_strategy_lower loops forever: the fuel budget must turn the
+        // infinite loop into a typed, human-readable failure instead of
+        // hanging the compiler pass.
+        let wat = r#"
+            (module
+                (memory (export "memory") 1)
+                (func (export "alloc") (param i32) (result i32) i32.const 0)
+                (func (export "fusion_strategy_name") (result i32) i32.const 0)
+                (func (export "fusion_strategy_descriptor") (result i32) i32.const 0)
+                (func (export "fusion_strategy_lower") (param i32 i32) (result i32)
+                    (loop (result i32) (br 0))
+                )
+            )
+        "#;
+        let strategy = WasmStrategy::from_binary(wat.as_bytes()).expect("module must load");
+        let diag = strategy
+            .lower(&StrategyIR::Single, &CompilationContext::new())
+            .expect_err("infinite loop must fail");
+        assert_eq!(diag.code, "WASM_STRATEGY_LOWER");
+        assert!(
+            diag.message.contains("fuel budget"),
+            "fuel exhaustion must be named explicitly, got: {}",
+            diag.message
         );
     }
 }

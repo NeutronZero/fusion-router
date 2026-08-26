@@ -67,7 +67,12 @@ fn build_tool_registry(config: &AppConfig) -> ToolRegistry {
         tool_registry.register(Arc::new(FileReadTool::new(dir.clone())));
     }
     if config.tools.enable_http_tool {
-        tool_registry.register(Arc::new(HTTPRequestTool::new()));
+        // HTTPRequestTool::new is fail-closed (Result); this infallible
+        // helper aborts loudly rather than serving a degraded client.
+        // (Mechanical call-site wiring for the tools-agent API change.)
+        let http_tool =
+            HTTPRequestTool::new().expect("hardened HTTP client for http_request tool must build");
+        tool_registry.register(Arc::new(http_tool));
     }
     tool_registry.register(Arc::new(
         ShellCommandTool::new(
@@ -119,10 +124,20 @@ impl Default for ReviewArgs {
 
 impl ReviewArgs {
     pub fn from_args() -> Self {
+        Self::parse_from(std::env::args().skip(2))
+    }
+
+    /// Pure argument parser so flag semantics are unit-testable without
+    /// touching process-global argv.
+    pub fn parse_from<I>(raw: I) -> Self
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let raw: Vec<String> = raw.into_iter().collect();
         let mut args = Self::default();
-        let raw: Vec<String> = std::env::args().skip(2).collect();
         let mut i = 0;
         let mut members_given = false;
+        let mut files_given = false;
         while i < raw.len() {
             match raw[i].as_str() {
                 "--config" => {
@@ -153,6 +168,12 @@ impl ReviewArgs {
                     }
                 }
                 "--files" => {
+                    // First occurrence REPLACES the default file list (same
+                    // semantics as --members); later occurrences append.
+                    if !files_given {
+                        args.files.clear();
+                        files_given = true;
+                    }
                     let mut taken = 0;
                     while let Some(v) = raw.get(i + 1 + taken) {
                         if v.starts_with("--") {
@@ -328,5 +349,62 @@ pub async fn run(args: ReviewArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| "(no textual report)".to_string());
     println!("{report}");
 
+    // CLI boundary: a failed review must not exit 0 — CI and scripts rely on
+    // the exit status to detect review failures.
+    if !result.success {
+        eprintln!("review completed unsuccessfully (success=false); exiting non-zero");
+        std::process::exit(1);
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReviewArgs;
+
+    fn args(items: &[&str]) -> ReviewArgs {
+        ReviewArgs::parse_from(items.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn defaults_apply_without_flags() {
+        let a = args(&[]);
+        assert_eq!(a.max_tool_rounds, 6);
+        assert_eq!(a.files.len(), 6, "default file list is prepopulated");
+        assert!(a.members.is_empty());
+    }
+
+    #[test]
+    fn first_files_flag_clears_defaults() {
+        let a = args(&["--files", "src/a.rs"]);
+        assert_eq!(a.files, vec!["src/a.rs".to_string()]);
+    }
+
+    #[test]
+    fn later_files_flags_append() {
+        let a = args(&["--files", "src/a.rs", "--files", "src/b.rs", "src/c.rs"]);
+        assert_eq!(
+            a.files,
+            vec![
+                "src/a.rs".to_string(),
+                "src/b.rs".to_string(),
+                "src/c.rs".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn files_flag_takes_only_positional_values() {
+        let a = args(&["--files", "src/a.rs", "--max-tool-rounds", "3"]);
+        assert_eq!(a.files, vec!["src/a.rs".to_string()]);
+        assert_eq!(a.max_tool_rounds, 3);
+    }
+
+    #[test]
+    fn no_files_flag_keeps_defaults() {
+        let a = args(&["--rounds", "2"]);
+        assert_eq!(a.files.len(), 6, "defaults survive when flag absent");
+        assert_eq!(a.max_tool_rounds, 2);
+    }
 }

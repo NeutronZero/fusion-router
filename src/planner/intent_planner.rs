@@ -102,29 +102,12 @@ impl IntentPlanner {
                 required_capabilities.push("Streaming".into());
             }
         }
-        let (avg_latency_ms, error_rate, healthy_provider_count) = evidence
-            .map(|snapshot| {
-                let avg_latency_ms = if snapshot.avg_latencies.is_empty() {
-                    0
-                } else {
-                    (snapshot.avg_latencies.values().sum::<f64>()
-                        / snapshot.avg_latencies.len() as f64)
-                        .max(0.0) as u64
-                };
-                let healthy = snapshot
-                    .success_rates
-                    .values()
-                    .filter(|rate| **rate > 0.0)
-                    .count();
-                let error_rate = if snapshot.success_rates.is_empty() {
-                    0.0
-                } else {
-                    1.0 - snapshot.success_rates.values().sum::<f64>()
-                        / snapshot.success_rates.len() as f64
-                };
-                (avg_latency_ms, error_rate.clamp(0.0, 1.0), healthy)
-            })
-            .unwrap_or((0, 0.0, 0));
+        // Telemetry aggregates must be order-independent: HashMap iteration
+        // order varies per-process, and float summation is not associative, so
+        // naive `values().sum::<f64>()` fed nondeterministic rounding into the
+        // uuid-v5 identity (distinct plan_ids for identical snapshots).
+        let (avg_latency_ms, error_rate, healthy_provider_count) =
+            evidence.map(aggregate_telemetry).unwrap_or((0, 0.0, 0));
 
         let requested_strategy_str = requirements
             .requested_strategy
@@ -167,6 +150,39 @@ impl IntentPlanner {
         crate::ir::adapter::workflow_to_types(&contract)
             .map_err(|e| format!("adapter error: {}", e))
     }
+}
+
+/// Order-independent telemetry aggregation for planner identity.
+///
+/// Values are collected from the HashMaps, sorted, and accumulated exactly
+/// (integer `u128` for latencies, order-fixed float sum for rates) so the
+/// result depends only on the multiset of values — never on iteration order.
+fn aggregate_telemetry(snapshot: &EvidenceSnapshot) -> (u64, f64, usize) {
+    let mut latencies: Vec<f64> = snapshot.avg_latencies.values().copied().collect();
+    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let avg_latency_ms = if latencies.is_empty() {
+        0
+    } else {
+        let total: u128 = latencies.iter().map(|v| v.max(0.0) as u128).sum();
+        (total / latencies.len() as u128).min(u64::MAX as u128) as u64
+    };
+
+    let healthy = snapshot
+        .success_rates
+        .values()
+        .filter(|rate| **rate > 0.0)
+        .count();
+
+    let mut rates: Vec<f64> = snapshot.success_rates.values().copied().collect();
+    rates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let error_rate = if rates.is_empty() {
+        0.0
+    } else {
+        let sum: f64 = rates.iter().sum();
+        1.0 - sum / rates.len() as f64
+    };
+
+    (avg_latency_ms, error_rate.clamp(0.0, 1.0), healthy)
 }
 
 #[async_trait]
@@ -482,5 +498,97 @@ mod tests {
                 edge.to
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_different_requested_strategy_yields_distinct_plan_ids() {
+        let planner = make_planner();
+        let make_reqs = |strategy: Option<RequestStrategy>| Requirements {
+            intent_classification: Intent::General,
+            complexity: ComplexityLevel::Medium,
+            has_files: false,
+            context_window: 4096,
+            original_text: "same prompt".to_string(),
+            execution_intent: Some(ExecutionIntent::Balanced),
+            output_preferences: None,
+            model_requirements: None,
+            requested_strategy: strategy,
+            requested_model: None,
+        };
+
+        let none = planner.plan(&make_reqs(None), &[], None).await.unwrap();
+        let consensus = planner
+            .plan(
+                &make_reqs(Some(RequestStrategy {
+                    kind: "Consensus".into(),
+                    count: 3,
+                    members: vec![],
+                    max_tool_rounds: 8,
+                })),
+                &[],
+                None,
+            )
+            .await
+            .unwrap();
+        let chain = planner
+            .plan(
+                &make_reqs(Some(RequestStrategy {
+                    kind: "Chain".into(),
+                    count: 3,
+                    members: vec![],
+                    max_tool_rounds: 8,
+                })),
+                &[],
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_ne!(
+            none.plan_id, consensus.plan_id,
+            "requested_strategy must feed the workflow identity"
+        );
+        assert_ne!(consensus.plan_id, chain.plan_id);
+
+        // Repeat-call determinism: identical requests derive identical ids.
+        let repeat = planner.plan(&make_reqs(None), &[], None).await.unwrap();
+        assert_eq!(none.plan_id, repeat.plan_id);
+    }
+
+    #[test]
+    fn test_telemetry_aggregation_is_order_independent() {
+        // Values chosen so naive f64 summation order changes the low bits:
+        // (0.1 + 0.2) + 0.3 != 0.1 + (0.2 + 0.3).
+        fn evidence(insertion: [(&str, f64); 3]) -> EvidenceSnapshot {
+            EvidenceSnapshot {
+                record_count: insertion.len() as u64,
+                success_rates: insertion
+                    .iter()
+                    .map(|(k, _)| (k.to_string(), 0.9))
+                    .collect(),
+                avg_latencies: insertion.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+                avg_costs: Default::default(),
+                model_rankings: vec![],
+            }
+        }
+
+        let forward = aggregate_telemetry(&evidence([("a", 0.1), ("b", 0.2), ("c", 0.3)]));
+        let reverse = aggregate_telemetry(&evidence([("c", 0.3), ("b", 0.2), ("a", 0.1)]));
+
+        assert_eq!(forward, reverse, "aggregation must depend only on values");
+        // Exact integer math: sorted [0.1, 0.2, 0.3] truncate to [0, 0, 0].
+        assert_eq!(forward.0, 0);
+        assert!((forward.1 - (1.0 - 0.9)).abs() < 1e-12);
+        assert_eq!(forward.2, 3);
+
+        let mixed = aggregate_telemetry(&evidence([
+            ("x", 1_000_000.25),
+            ("y", 2_000_000.75),
+            ("z", 3_000_000.5),
+        ]));
+        assert_eq!(
+            mixed.0, 2_000_000,
+            "latency average must be exact integer math"
+        );
     }
 }

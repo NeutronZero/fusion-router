@@ -5,25 +5,77 @@ use std::process::Command;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
+/// True when `artifact` is missing OR any build input (Cargo.toml, src/**)
+/// was modified after the artifact was written. Gates the cargo invocation so
+/// stale artifacts are rebuilt but fresh ones are not recompiled needlessly.
+fn needs_rebuild(project_dir: &Path, artifact: &Path) -> bool {
+    let artifact_mtime = match fs::metadata(artifact).and_then(|m| m.modified()) {
+        Ok(t) => t,
+        Err(_) => return true, // no artifact yet
+    };
+
+    let mut inputs: Vec<PathBuf> = vec![project_dir.join("Cargo.toml")];
+    let src_dir = project_dir.join("src");
+    if let Ok(entries) = fs::read_dir(&src_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                inputs.push(path);
+            } else if path.is_dir() {
+                if let Ok(nested) = fs::read_dir(&path) {
+                    for n in nested.flatten() {
+                        if n.path().is_file() {
+                            inputs.push(n.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    inputs.into_iter().any(|input| {
+        fs::metadata(&input)
+            .and_then(|m| m.modified())
+            .map(|t| t > artifact_mtime)
+            .unwrap_or(false)
+    })
+}
+
+fn run_cargo_build(project_dir: &Path) -> Result<(), String> {
+    let status = Command::new("cargo")
+        .args(["build", "--target", "wasm32-wasi", "--release"])
+        .current_dir(project_dir)
+        .status()
+        .map_err(|e| format!("Failed to run cargo build: {e}"))?;
+
+    if !status.success() {
+        return Err("cargo build failed".into());
+    }
+    Ok(())
+}
+
 pub fn execute_build(project_dir: &Path, output_dir: &Path) -> Result<PathBuf, String> {
     let manifest_path = project_dir.join("Cargo.toml");
     if !manifest_path.exists() {
         return Err("No Cargo.toml found in project directory".into());
     }
 
+    let release_dir = project_dir
+        .join("target")
+        .join("wasm32-wasi")
+        .join("release");
     let wasm_file = match find_wasm_file(project_dir) {
-        Ok(f) => f,
-        Err(_) => {
-            let status = Command::new("cargo")
-                .args(["build", "--target", "wasm32-wasi", "--release"])
-                .current_dir(project_dir)
-                .status()
-                .map_err(|e| format!("Failed to run cargo build: {e}"))?;
-
-            if !status.success() {
-                return Err("cargo build failed".into());
+        Ok(f) => {
+            // An artifact exists, but it may predate recent source edits.
+            if needs_rebuild(project_dir, &release_dir.join(&f)) {
+                run_cargo_build(project_dir)?;
+                find_wasm_file(project_dir)?
+            } else {
+                f
             }
-
+        }
+        Err(_) => {
+            run_cargo_build(project_dir)?;
             find_wasm_file(project_dir)?
         }
     };
@@ -179,11 +231,9 @@ fn extract_package_version(cargo_toml: &Path) -> String {
 mod tests {
     use super::*;
     use std::fs;
+    use std::time::Duration;
 
-    #[test]
-    fn test_build_produces_fusionpkg() {
-        let dir = tempfile::tempdir().unwrap();
-
+    fn write_project(dir: &Path) {
         let cargo_toml = r#"[package]
 name = "test-cap"
 version = "0.1.0"
@@ -192,16 +242,28 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 "#;
-        fs::write(dir.path().join("Cargo.toml"), cargo_toml).unwrap();
+        fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
 
         let manifest_toml = r#"[package]
 name = "test-cap"
 version = "0.1.0"
 "#;
-        fs::write(dir.path().join("manifest.toml"), manifest_toml).unwrap();
+        fs::write(dir.join("manifest.toml"), manifest_toml).unwrap();
 
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src").join("lib.rs"), "pub fn f() {}\n").unwrap();
+    }
+
+    #[test]
+    fn test_build_produces_fusionpkg() {
+        let dir = tempfile::tempdir().unwrap();
+        write_project(dir.path());
+
+        // Artifact written after sources: considered fresh, so the decision
+        // path must NOT require a cargo invocation for this test to pass.
         let wasm_dir = dir.path().join("target/wasm32-wasi/release");
         fs::create_dir_all(&wasm_dir).unwrap();
+        std::thread::sleep(Duration::from_millis(30));
         let fake_wasm = &[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
         fs::write(wasm_dir.join("test_cap.wasm"), fake_wasm).unwrap();
 
@@ -213,5 +275,48 @@ version = "0.1.0"
         assert!(pkg_path.exists());
         assert_eq!(pkg_path.extension().unwrap(), "fusionpkg");
         assert!(pkg_path.to_string_lossy().contains("test-cap-0.1.0"));
+    }
+
+    #[test]
+    fn test_needs_rebuild_decision() {
+        let dir = tempfile::tempdir().unwrap();
+        write_project(dir.path());
+
+        let artifact = dir.path().join("target/wasm32-wasi/release/test_cap.wasm");
+
+        // No artifact yet -> must build.
+        assert!(
+            needs_rebuild(dir.path(), &artifact),
+            "missing artifact requires rebuild"
+        );
+
+        // Fresh artifact (written after all inputs) -> no rebuild.
+        fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        fs::write(&artifact, [0u8; 8]).unwrap();
+        assert!(
+            !needs_rebuild(dir.path(), &artifact),
+            "artifact newer than all sources is fresh"
+        );
+
+        // Source edited after the artifact -> stale, must rebuild.
+        std::thread::sleep(Duration::from_millis(30));
+        fs::write(dir.path().join("src").join("lib.rs"), "pub fn g() {}\n").unwrap();
+        assert!(
+            needs_rebuild(dir.path(), &artifact),
+            "source newer than artifact must trigger rebuild"
+        );
+
+        // Manifest edited after the artifact -> stale too.
+        std::thread::sleep(Duration::from_millis(30));
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test-cap\"\nversion = \"0.2.0\"\n",
+        )
+        .unwrap();
+        assert!(
+            needs_rebuild(dir.path(), &artifact),
+            "Cargo.toml newer than artifact must trigger rebuild"
+        );
     }
 }

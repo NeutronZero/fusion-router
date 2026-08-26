@@ -6,7 +6,10 @@ use fusion_router::cache::SemanticCache;
 
 fn bench_cache_hits(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let cache = Arc::new(SemanticCache::new(Arc::new(MockEmbedder), 0.9, 10_000, 384));
+    let cache = Arc::new(
+        SemanticCache::new(Arc::new(MockEmbedder), 0.9, 10_000, 384)
+            .expect("semantic cache initializes"),
+    );
 
     for i in 0..1000 {
         rt.block_on(cache.put(
@@ -35,7 +38,10 @@ fn bench_cache_hits(c: &mut Criterion) {
 
 fn bench_cache_concurrent(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let cache = Arc::new(SemanticCache::new(Arc::new(MockEmbedder), 0.9, 10_000, 384));
+    let cache = Arc::new(
+        SemanticCache::new(Arc::new(MockEmbedder), 0.9, 10_000, 384)
+            .expect("semantic cache initializes"),
+    );
 
     let mut group = c.benchmark_group("cache_concurrent");
     group.throughput(Throughput::Elements(100));
@@ -60,7 +66,10 @@ fn bench_cache_concurrent(c: &mut Criterion) {
 
 fn bench_eviction(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let cache = Arc::new(SemanticCache::new(Arc::new(MockEmbedder), 0.9, 100, 384));
+    let cache = Arc::new(
+        SemanticCache::new(Arc::new(MockEmbedder), 0.9, 100, 384)
+            .expect("semantic cache initializes"),
+    );
 
     c.bench_function("cache_eviction_100_entries", |b| {
         b.to_async(&rt).iter(|| async {

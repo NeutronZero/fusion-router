@@ -12,7 +12,10 @@ pub fn new_zen_provider_with_base_url(api_key: String, base_url: Option<String>)
         "opencode-zen-model".to_string(),
         base_url,
     ));
-    let transport = Box::new(HttpTransport::new(Duration::from_secs(300)).unwrap_or_default());
+    let transport = Box::new(
+        HttpTransport::new(Duration::from_secs(300))
+            .expect("failed to build Zen HTTP transport (hardened client required)"),
+    );
     Provider::new(model, transport, api_key)
 }
 

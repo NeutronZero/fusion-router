@@ -3,6 +3,7 @@ use fusion_core::PlatformError;
 use ring::aead::{self, BoundKey, OpeningKey, SealingKey, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::sync::Arc;
+use zeroize::Zeroizing;
 
 struct OneNonce(Option<aead::Nonce>);
 
@@ -13,14 +14,17 @@ impl aead::NonceSequence for OneNonce {
 }
 
 pub struct SecretManager {
-    key_bytes: [u8; 32],
+    /// Master key wrapped in `Zeroizing`: the buffer is wiped when the
+    /// manager (or any temporary copy produced from it) is dropped instead of
+    /// leaking key material into freed heap memory.
+    key_bytes: Zeroizing<[u8; 32]>,
     rng: SystemRandom,
 }
 
 impl SecretManager {
     pub fn new(key_bytes: [u8; 32]) -> Self {
         Self {
-            key_bytes,
+            key_bytes: Zeroizing::new(key_bytes),
             rng: SystemRandom::new(),
         }
     }
@@ -34,7 +38,8 @@ impl SecretManager {
 
     /// Builds a manager from a base64-encoded 32-byte master key.
     pub fn from_base64_key(key_b64: &str) -> Result<Self, PlatformError> {
-        let raw = BASE64
+        use zeroize::Zeroize;
+        let mut raw = BASE64
             .decode(key_b64.trim())
             .map_err(|e| PlatformError::Security {
                 code: "MASTER_KEY_DECODE".to_string(),
@@ -43,15 +48,23 @@ impl SecretManager {
                     .to_string(),
             })?;
         if raw.len() != 32 {
+            let len = raw.len();
+            raw.zeroize();
             return Err(PlatformError::Security {
                 code: "MASTER_KEY_LEN".to_string(),
-                message: format!("master key is {} bytes, expected 32", raw.len()),
+                message: format!("master key is {} bytes, expected 32", len),
                 recovery_suggestion: "Regenerate with 32 random bytes, base64-encoded".to_string(),
             });
         }
-        let mut key = [0u8; 32];
+        let mut key = Zeroizing::new([0u8; 32]);
         key.copy_from_slice(&raw);
-        Ok(Self::new(key))
+        // Wipe the caller's decoded buffer immediately; the stored copy is
+        // wiped again on drop by Zeroizing.
+        raw.zeroize();
+        Ok(Self {
+            key_bytes: key,
+            rng: SystemRandom::new(),
+        })
     }
 
     /// Builds a manager from the `FUSION_MASTER_KEY` environment variable.
@@ -68,8 +81,13 @@ impl SecretManager {
 
     /// Returns this manager's key base64-encoded, for provisioning
     /// `FUSION_MASTER_KEY` on hosts that will consume encrypted values.
+    ///
+    /// Test-only: this hands the raw master key to any caller, so production
+    /// builds must not be able to reach it. The sole caller is a cfg(test)
+    /// round-trip test in providers/factory.rs.
+    #[cfg(test)]
     pub fn export_master_key_base64(&self) -> String {
-        BASE64.encode(self.key_bytes)
+        BASE64.encode(self.key_bytes.as_slice())
     }
 
     pub fn encrypt(&self, plaintext: &str) -> Result<String, PlatformError> {
@@ -82,13 +100,14 @@ impl SecretManager {
                 recovery_suggestion: "Check system entropy source".to_string(),
             })?;
 
-        let unbound_key = UnboundKey::new(&AES_256_GCM, &self.key_bytes).map_err(|_| {
-            PlatformError::Security {
-                code: "INVALID_KEY".to_string(),
-                message: "Invalid AES-256 key".to_string(),
-                recovery_suggestion: "Provide a 32-byte secret key".to_string(),
-            }
-        })?;
+        let unbound_key =
+            UnboundKey::new(&AES_256_GCM, self.key_bytes.as_slice()).map_err(|_| {
+                PlatformError::Security {
+                    code: "INVALID_KEY".to_string(),
+                    message: "Invalid AES-256 key".to_string(),
+                    recovery_suggestion: "Provide a 32-byte secret key".to_string(),
+                }
+            })?;
 
         let nonce = aead::Nonce::try_assume_unique_for_key(&nonce_bytes).map_err(|_| {
             PlatformError::Security {
@@ -134,13 +153,14 @@ impl SecretManager {
 
         let (nonce_bytes, ciphertext) = payload.split_at(NONCE_LEN);
 
-        let unbound_key = UnboundKey::new(&AES_256_GCM, &self.key_bytes).map_err(|_| {
-            PlatformError::Security {
-                code: "INVALID_KEY".to_string(),
-                message: "Invalid AES-256 key".to_string(),
-                recovery_suggestion: "Provide a 32-byte secret key".to_string(),
-            }
-        })?;
+        let unbound_key =
+            UnboundKey::new(&AES_256_GCM, self.key_bytes.as_slice()).map_err(|_| {
+                PlatformError::Security {
+                    code: "INVALID_KEY".to_string(),
+                    message: "Invalid AES-256 key".to_string(),
+                    recovery_suggestion: "Provide a 32-byte secret key".to_string(),
+                }
+            })?;
 
         let nonce = aead::Nonce::try_assume_unique_for_key(nonce_bytes).map_err(|_| {
             PlatformError::Security {
@@ -206,5 +226,33 @@ mod tests {
             "sk-o...2345"
         );
         assert_eq!(manager.redact("short"), "********");
+    }
+
+    #[test]
+    fn test_key_material_is_zeroized_on_drop() {
+        // Type-level guarantee: the master key must be stored inside
+        // `Zeroizing`, whose Drop wipes the heap buffer before freeing.
+        let key: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let manager = SecretManager::new(key);
+        let stored: &Zeroizing<[u8; 32]> = &manager.key_bytes;
+        assert_eq!(stored[0], 0);
+
+        // The zeroization machinery itself behaves as expected on a live
+        // (safe) buffer.
+        let mut scratch = [7u8; 32];
+        use zeroize::Zeroize;
+        scratch.zeroize();
+        assert!(scratch.iter().all(|&b| b == 0), "zeroize must wipe bytes");
+
+        // Encryption behavior unchanged by the wrapper.
+        let ciphertext = manager.encrypt("payload").unwrap();
+        assert_eq!(manager.decrypt(&ciphertext).unwrap(), "payload");
+    }
+
+    #[test]
+    fn test_export_master_key_base64_round_trips_to_env_form() {
+        let key_b64 = BASE64.encode([7u8; 32]);
+        let manager = SecretManager::from_base64_key(&key_b64).unwrap();
+        assert_eq!(manager.export_master_key_base64(), key_b64);
     }
 }

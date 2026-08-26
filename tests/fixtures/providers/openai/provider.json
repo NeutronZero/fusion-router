@@ -1,0 +1,7 @@
+{
+  "name": "openai",
+  "version": "0.10.0",
+  "models": ["gpt-4o", "gpt-4o-mini"],
+  "valid_pricing_metadata": true,
+  "valid_auth_schema": true
+}

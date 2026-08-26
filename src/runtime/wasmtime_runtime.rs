@@ -9,6 +9,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use wasmtime::{Config, Engine, Linker, Memory, Module, ResourceLimiter, Store, TypedFunc};
 
+/// Hard cap on guest table growth (elements). Tables are host-allocated
+/// memory for function references; without a cap a guest can allocate GBs of
+/// host memory while staying well within its fuel budget.
+const MAX_TABLE_ELEMENTS: usize = 10_000;
+
 pub struct WasmtimeSandboxRuntime {
     engine: Engine,
     _module_cache: Arc<RuntimeModuleCache>,
@@ -38,10 +43,13 @@ impl ResourceLimiter for StoreData {
     fn table_growing(
         &mut self,
         _current: usize,
-        _desired: usize,
+        desired: usize,
         _maximum: Option<usize>,
     ) -> Result<bool, wasmtime::Error> {
-        Ok(true)
+        // Mirror the memory policy: growth beyond the fixed element cap is
+        // rejected so the guest sees a failed grow instead of pinning GBs of
+        // host memory.
+        Ok(desired <= MAX_TABLE_ELEMENTS)
     }
 }
 
@@ -75,58 +83,52 @@ impl SandboxRuntime for WasmtimeSandboxRuntime {
     async fn instantiate(
         &self,
         module_bytes: &[u8],
-        _ctx: RuntimeContext,
+        ctx: RuntimeContext,
     ) -> Result<Box<dyn SandboxInstance>, RuntimeError> {
-        let module = Module::new(&self.engine, module_bytes)
-            .map_err(|e| RuntimeError::CompilationFailed(e.to_string()))?;
+        // Compilation + instantiation are pure CPU-bound work (Cranelift);
+        // run them off the async worker threads.
+        let engine = self.engine.clone();
+        let module_bytes = module_bytes.to_vec();
+        let memory_limit = self.config.memory_limit_bytes as usize;
+        let fuel_amount = self.config.fuel_amount;
+        let max_response_bytes = self.config.max_response_bytes;
 
-        let growth_rejected = Arc::new(AtomicBool::new(false));
-        let store_data = StoreData {
-            memory_limit: self.config.memory_limit_bytes as usize,
-            growth_rejected: growth_rejected.clone(),
-        };
+        let build = tokio::task::spawn_blocking(move || {
+            build_instance(
+                &engine,
+                &module_bytes,
+                StoreData {
+                    memory_limit,
+                    growth_rejected: Arc::new(AtomicBool::new(false)),
+                },
+                fuel_amount,
+                max_response_bytes,
+            )
+        });
 
-        let mut store = Store::new(&self.engine, store_data);
-        store
-            .set_fuel(self.config.fuel_amount)
-            .map_err(|e| RuntimeError::CompilationFailed(e.to_string()))?;
+        let built = match ctx.deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline, build)
+                .await
+                .map_err(|_| RuntimeError::ExecutionTrap {
+                    message: "wasm instantiation exceeded the runtime deadline".into(),
+                })?,
+            None => build.await,
+        }
+        .map_err(|e| RuntimeError::CompilationFailed(format!("wasm setup task panicked: {e}")))?;
 
-        store.limiter(move |data: &mut StoreData| data as &mut dyn ResourceLimiter);
-
-        let linker = Linker::new(&self.engine);
-        let instance = linker
-            .instantiate(&mut store, &module)
-            .map_err(|e| RuntimeError::CompilationFailed(e.to_string()))?;
-
-        let memory = instance
-            .get_memory(&mut store, "memory")
-            .ok_or_else(|| RuntimeError::CompilationFailed("memory export not found".into()))?;
-
-        let allocate = instance
-            .get_typed_func::<i32, i32>(&mut store, "allocate")
-            .ok();
-
-        let invoke = instance
-            .get_typed_func::<(i32, i32), (i32, i32)>(&mut store, "capability_invoke")
-            .map_err(|e| {
-                RuntimeError::CompilationFailed(format!("capability_invoke export not found: {e}"))
-            })?;
-
-        let fuel_initial = store.get_fuel().unwrap_or(0);
+        let wasm_inner = built?;
 
         Ok(Box::new(WasmtimeSandboxInstance {
-            store,
-            memory,
-            allocate,
-            invoke,
-            fuel_initial,
-            growth_rejected,
-            max_response_bytes: self.config.max_response_bytes,
+            inner: Some(WasmInner {
+                deadline: ctx.deadline,
+                ..wasm_inner
+            }),
         }))
     }
 }
-
-pub struct WasmtimeSandboxInstance {
+/// Everything needed to execute a module instance; moved as a unit into
+/// `spawn_blocking` closures and back out afterwards.
+struct WasmInner {
     store: Store<StoreData>,
     memory: Memory,
     allocate: Option<TypedFunc<i32, i32>>,
@@ -134,9 +136,77 @@ pub struct WasmtimeSandboxInstance {
     fuel_initial: u64,
     growth_rejected: Arc<AtomicBool>,
     max_response_bytes: usize,
+    /// Wall-clock deadline captured from the RuntimeContext that produced
+    /// this instance; enforced on every blocking join.
+    deadline: Option<tokio::time::Instant>,
+}
+
+type BuiltInstance = Result<WasmInner, RuntimeError>;
+
+fn build_instance(
+    engine: &Engine,
+    module_bytes: &[u8],
+    store_data: StoreData,
+    fuel_amount: u64,
+    max_response_bytes: usize,
+) -> BuiltInstance {
+    let growth_rejected = store_data.growth_rejected.clone();
+
+    let module = Module::new(engine, module_bytes)
+        .map_err(|e| RuntimeError::CompilationFailed(e.to_string()))?;
+
+    let mut store = Store::new(engine, store_data);
+    store
+        .set_fuel(fuel_amount)
+        .map_err(|e| RuntimeError::CompilationFailed(e.to_string()))?;
+
+    store.limiter(move |data: &mut StoreData| data as &mut dyn ResourceLimiter);
+
+    let linker = Linker::new(engine);
+    let instance = linker
+        .instantiate(&mut store, &module)
+        .map_err(|e| RuntimeError::CompilationFailed(e.to_string()))?;
+
+    let memory = instance
+        .get_memory(&mut store, "memory")
+        .ok_or_else(|| RuntimeError::CompilationFailed("memory export not found".into()))?;
+
+    let allocate = instance
+        .get_typed_func::<i32, i32>(&mut store, "allocate")
+        .ok();
+
+    let invoke = instance
+        .get_typed_func::<(i32, i32), (i32, i32)>(&mut store, "capability_invoke")
+        .map_err(|e| {
+            RuntimeError::CompilationFailed(format!("capability_invoke export not found: {e}"))
+        })?;
+
+    let fuel_initial = store.get_fuel().unwrap_or(0);
+
+    Ok(WasmInner {
+        store,
+        memory,
+        allocate,
+        invoke,
+        fuel_initial,
+        growth_rejected,
+        max_response_bytes,
+        // Overwritten by the caller with the RuntimeContext deadline.
+        deadline: None,
+    })
+}
+
+pub struct WasmtimeSandboxInstance {
+    inner: Option<WasmInner>,
 }
 
 impl WasmtimeSandboxInstance {
+    fn inner(&self) -> &WasmInner {
+        self.inner
+            .as_ref()
+            .expect("sandbox instance inner state is only absent inside invoke()")
+    }
+
     fn map_trap_error(err: wasmtime::Error) -> RuntimeError {
         if let Some(trap) = err.downcast_ref::<wasmtime::Trap>() {
             return match trap {
@@ -155,44 +225,81 @@ impl WasmtimeSandboxInstance {
 #[async_trait]
 impl SandboxInstance for WasmtimeSandboxInstance {
     async fn invoke(&mut self, input: &[u8]) -> Result<Vec<u8>, RuntimeError> {
-        self.growth_rejected.store(false, Ordering::SeqCst);
+        // Move the whole execution environment onto a blocking thread:
+        // guest code can burn seconds of CPU under a full fuel budget.
+        let deadline = self
+            .inner
+            .as_ref()
+            .and_then(|wasm_inner| wasm_inner.deadline);
+        let mut inner = self
+            .inner
+            .take()
+            .ok_or_else(|| RuntimeError::NotSupported("invoke already in flight".into()))?;
+        let input = input.to_vec();
 
-        let len = input.len() as i32;
+        let exec = tokio::task::spawn_blocking(move || {
+            inner.growth_rejected.store(false, Ordering::SeqCst);
 
-        let ptr = if let Some(ref alloc) = self.allocate {
-            alloc
-                .call(&mut self.store, len)
-                .map_err(Self::map_trap_error)?
-        } else {
-            0
-        };
+            let len = input.len() as i32;
 
-        self.memory
-            .write(&mut self.store, ptr as usize, input)
-            .map_err(|_| RuntimeError::OutOfMemory)?;
+            let ptr = if let Some(ref alloc) = inner.allocate {
+                alloc
+                    .call(&mut inner.store, len)
+                    .map_err(Self::map_trap_error)?
+            } else {
+                0
+            };
 
-        let (out_ptr, out_len) = self
-            .invoke
-            .call(&mut self.store, (ptr, len))
-            .map_err(Self::map_trap_error)?;
+            inner
+                .memory
+                .write(&mut inner.store, ptr as usize, &input)
+                .map_err(|_| RuntimeError::OutOfMemory)?;
 
-        if self.growth_rejected.load(Ordering::SeqCst) {
-            return Err(RuntimeError::OutOfMemory);
+            let (out_ptr, out_len) = inner
+                .invoke
+                .call(&mut inner.store, (ptr, len))
+                .map_err(Self::map_trap_error)?;
+
+            if inner.growth_rejected.load(Ordering::SeqCst) {
+                return Err(RuntimeError::OutOfMemory);
+            }
+
+            // Reject guest-claimed output lengths that exceed the configured
+            // cap BEFORE allocating a host buffer: the guest controls
+            // `out_len`, so an unbounded allocation here is an OOM
+            // denial-of-service vector.
+            if out_len as usize > inner.max_response_bytes {
+                return Err(RuntimeError::OutOfMemory);
+            }
+
+            let mut output = vec![0u8; out_len as usize];
+            inner
+                .memory
+                .read(&inner.store, out_ptr as usize, &mut output)
+                .map_err(|_| RuntimeError::OutOfMemory)?;
+
+            Ok((inner, output))
+        });
+
+        let completed = match deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline, exec).await.map_err(|_| {
+                RuntimeError::ExecutionTrap {
+                    message: "wasm invocation exceeded the runtime deadline".into(),
+                }
+            })?,
+            None => exec.await,
         }
+        .map_err(|e| RuntimeError::ExecutionTrap {
+            message: format!("wasm invocation task panicked: {e}"),
+        })?;
 
-        // Reject guest-claimed output lengths that exceed the configured cap
-        // BEFORE allocating a host buffer: the guest controls `out_len`, so an
-        // unbounded allocation here is an OOM denial-of-service vector.
-        if out_len as usize > self.max_response_bytes {
-            return Err(RuntimeError::OutOfMemory);
+        match completed {
+            Ok((returned, output)) => {
+                self.inner = Some(returned);
+                Ok(output)
+            }
+            Err(e) => Err(e),
         }
-
-        let mut output = vec![0u8; out_len as usize];
-        self.memory
-            .read(&self.store, out_ptr as usize, &mut output)
-            .map_err(|_| RuntimeError::OutOfMemory)?;
-
-        Ok(output)
     }
 
     fn reset(&mut self) -> Result<(), RuntimeError> {
@@ -200,12 +307,15 @@ impl SandboxInstance for WasmtimeSandboxInstance {
     }
 
     fn memory_usage(&self) -> u64 {
-        self.memory.data_size(&self.store) as u64
+        let inner = self.inner();
+        inner.memory.data_size(&inner.store) as u64
     }
 
     fn fuel_consumed(&self) -> u64 {
-        self.fuel_initial
-            .saturating_sub(self.store.get_fuel().unwrap_or(0))
+        let inner = self.inner();
+        inner
+            .fuel_initial
+            .saturating_sub(inner.store.get_fuel().unwrap_or(0))
     }
 }
 
@@ -492,6 +602,110 @@ mod tests {
             Err(RuntimeError::CompilationFailed(_)) => {}
             Err(other) => panic!("expected CompilationFailed, got {other:?}"),
             Ok(_) => panic!("expected error, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn table_growth_beyond_cap_is_rejected() {
+        let config = SandboxConfig::default();
+        let cache = Arc::new(RuntimeModuleCache::new());
+        let runtime = WasmtimeSandboxRuntime::new(config, cache).unwrap();
+
+        // The raw table.grow result (-1 on rejection) is stored to memory so
+        // it survives the host-side response-length check.
+        let wat = r#"
+            (module
+                (memory (export "memory") 1)
+                (table $t 1 funcref)
+                (func (export "allocate") (param i32) (result i32)
+                    i32.const 0
+                )
+                (func (export "capability_invoke") (param i32 i32) (result i32 i32)
+                    (i32.store8 (i32.const 0)
+                        (table.grow $t (ref.null func) (i32.const 20000)))
+                    i32.const 0
+                    i32.const 1
+                )
+            )
+        "#;
+
+        let mut instance = runtime
+            .instantiate(wat.as_bytes(), test_context())
+            .await
+            .unwrap();
+
+        let output = instance.invoke(b"t").await.unwrap();
+        assert_eq!(
+            output[0], 255,
+            "table growth beyond MAX_TABLE_ELEMENTS must be rejected (-1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn table_growth_within_cap_is_allowed() {
+        let config = SandboxConfig::default();
+        let cache = Arc::new(RuntimeModuleCache::new());
+        let runtime = WasmtimeSandboxRuntime::new(config, cache).unwrap();
+
+        let wat = r#"
+            (module
+                (memory (export "memory") 1)
+                (table $t 1 funcref)
+                (func (export "allocate") (param i32) (result i32)
+                    i32.const 0
+                )
+                (func (export "capability_invoke") (param i32 i32) (result i32 i32)
+                    (i32.store8 (i32.const 0)
+                        (table.grow $t (ref.null func) (i32.const 5)))
+                    i32.const 0
+                    i32.const 1
+                )
+            )
+        "#;
+
+        let mut instance = runtime
+            .instantiate(wat.as_bytes(), test_context())
+            .await
+            .unwrap();
+
+        let output = instance.invoke(b"t").await.unwrap();
+        assert_eq!(
+            output[0], 1,
+            "small table growth must succeed (previous size returned)"
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_deadline_aborts_instantiation() {
+        let config = SandboxConfig::default();
+        let cache = Arc::new(RuntimeModuleCache::new());
+        let runtime = WasmtimeSandboxRuntime::new(config, cache).unwrap();
+
+        let mut ctx = test_context();
+        // Deadline already in the past: the blocking join must be cut short
+        // and mapped onto ExecutionTrap, not run to completion.
+        ctx.deadline = Some(tokio::time::Instant::now() - std::time::Duration::from_secs(1));
+
+        let wat = r#"
+            (module
+                (memory (export "memory") 1)
+                (func (export "allocate") (param i32) (result i32)
+                    i32.const 0
+                )
+                (func (export "capability_invoke") (param i32 i32) (result i32 i32)
+                    local.get 0
+                    local.get 1
+                )
+            )
+        "#;
+
+        let result = runtime.instantiate(wat.as_bytes(), ctx).await;
+        match result {
+            Err(RuntimeError::ExecutionTrap { message }) => {
+                assert!(message.contains("deadline"), "{message}");
+            }
+            Err(other) => panic!("expected deadline ExecutionTrap, got {other:?}"),
+            Ok(_) => panic!("expired deadline must not produce an instance"),
         }
     }
 

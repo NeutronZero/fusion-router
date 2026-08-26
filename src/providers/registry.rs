@@ -2,7 +2,7 @@ use super::router::ProviderTarget;
 use super::ChatProvider;
 use crate::config::error::ReloadError;
 use crate::config::manager::{ConfigSnapshot, ConfigSubscriber};
-use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk};
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk, RouterError};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use std::collections::HashMap;
@@ -14,12 +14,24 @@ pub struct ProviderRegistryConfig {
     pub targets: HashMap<String, Vec<String>>, // prefix -> target_names
 }
 
+/// Deterministic default provider selection: the lexicographically smallest
+/// configured provider name. `HashMap::keys().next()` is arbitrary hasher
+/// order and made default routing depend on process seeds.
+pub fn select_default_provider_name(names: &[String]) -> Option<String> {
+    let mut sorted = names.to_vec();
+    sorted.sort();
+    sorted.into_iter().next()
+}
+
 pub struct ProviderRegistry {
     targets: parking_lot::RwLock<HashMap<String, Arc<ProviderTarget>>>,
     prefixes: parking_lot::RwLock<Vec<(Vec<String>, Arc<ProviderTarget>)>>,
     capabilities: parking_lot::RwLock<HashMap<String, super::ModelCapabilities>>,
     pricing: parking_lot::RwLock<HashMap<String, super::ModelPricing>>,
-    default_target: Arc<ProviderTarget>,
+    default_target: parking_lot::RwLock<Arc<ProviderTarget>>,
+    /// Default target rebuilt by `prepare()` from the incoming candidate set,
+    /// swapped in by `commit()` so hot reload never leaves a stale default.
+    pending_default: parking_lot::RwLock<Option<Arc<ProviderTarget>>>,
     version: Arc<AtomicU64>,
     candidates: parking_lot::RwLock<Option<HashMap<String, Arc<ProviderTarget>>>>,
 }
@@ -31,7 +43,8 @@ impl ProviderRegistry {
             prefixes: parking_lot::RwLock::new(Vec::new()),
             capabilities: parking_lot::RwLock::new(HashMap::new()),
             pricing: parking_lot::RwLock::new(HashMap::new()),
-            default_target: Arc::new(default_target),
+            default_target: parking_lot::RwLock::new(Arc::new(default_target)),
+            pending_default: parking_lot::RwLock::new(None),
             version: Arc::new(AtomicU64::new(0)),
             candidates: parking_lot::RwLock::new(None),
         }
@@ -78,6 +91,24 @@ impl ProviderRegistry {
         self.targets.read().len()
     }
 
+    /// Name of the current default (fallback) target.
+    pub fn default_target_name(&self) -> String {
+        self.default_target.read().name.clone()
+    }
+
+    /// Sorted, de-duplicated model prefixes currently registered.
+    pub fn registered_prefixes(&self) -> Vec<String> {
+        let mut prefixes: Vec<String> = self
+            .prefixes
+            .read()
+            .iter()
+            .flat_map(|(prefixes, _)| prefixes.iter().cloned())
+            .collect();
+        prefixes.sort();
+        prefixes.dedup();
+        prefixes
+    }
+
     pub fn update_capabilities(&self, name: &str, caps: super::ModelCapabilities) {
         let mut map = self.capabilities.write();
         if map.contains_key(name) {
@@ -104,6 +135,14 @@ impl ProviderRegistry {
         removed
     }
 
+    /// Resolves the targets that may serve `model`.
+    ///
+    /// Fail-closed for multi-provider setups: when no configured prefix
+    /// matches AND more than one provider family is registered, this returns
+    /// EMPTY and the caller converts it to a typed no-route error — an
+    /// unprefixed model must never silently ride whichever provider happened
+    /// to be picked as default. Single-provider setups keep the default
+    /// fallback (the default IS the only provider).
     pub fn get_matching_targets(&self, model: &str) -> Vec<Arc<ProviderTarget>> {
         let prefix_list = self.prefixes.read();
         let mut matched = Vec::new();
@@ -115,8 +154,8 @@ impl ProviderRegistry {
                 }
             }
         }
-        if matched.is_empty() {
-            matched.push(self.default_target.clone());
+        if matched.is_empty() && prefix_list.len() <= 1 {
+            matched.push(self.default_target.read().clone());
         }
         matched
     }
@@ -172,6 +211,12 @@ impl ChatProvider for ProviderRegistry {
         request: &ChatCompletionRequest,
     ) -> anyhow::Result<ChatCompletionResponse> {
         let targets = self.get_matching_targets(&request.model);
+        if targets.is_empty() {
+            return Err(Self::no_route_error(
+                &request.model,
+                self.registered_prefixes(),
+            ));
+        }
         let mut last_err: Option<anyhow::Error> = None;
         for target in &targets {
             if !target.can_execute() {
@@ -201,6 +246,12 @@ impl ChatProvider for ProviderRegistry {
         request: &ChatCompletionRequest,
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ChatStreamChunk>>> {
         let targets = self.get_matching_targets(&request.model);
+        if targets.is_empty() {
+            return Err(Self::no_route_error(
+                &request.model,
+                self.registered_prefixes(),
+            ));
+        }
         let mut last_err: Option<anyhow::Error> = None;
         for target in &targets {
             if !target.can_execute() {
@@ -223,6 +274,17 @@ impl ChatProvider for ProviderRegistry {
         Err(last_err.unwrap_or_else(|| {
             anyhow::anyhow!("no available providers for model: {}", request.model)
         }))
+    }
+}
+
+impl ProviderRegistry {
+    fn no_route_error(model: &str, available_prefixes: Vec<String>) -> anyhow::Error {
+        let err = RouterError::NoRouteForModel {
+            model: model.to_string(),
+            available_prefixes,
+        };
+        tracing::warn!(error = %err, "routing rejected: no configured provider prefix matches");
+        anyhow::Error::new(err)
     }
 }
 
@@ -261,6 +323,14 @@ impl ConfigSubscriber for ProviderRegistry {
             let target = factory::create_reload_target(name, cfg, api_key);
             candidates.insert(name.clone(), Arc::new(target));
         }
+
+        // Rebuild the default target from the SAME resolved candidate set
+        // (same config + same resolve_api_key path as the targets themselves)
+        // so hot reload cannot leave a stale default behind.
+        let default_name =
+            select_default_provider_name(&new.config.providers.keys().cloned().collect::<Vec<_>>());
+        let pending_default = default_name.and_then(|name| candidates.get(&name).cloned());
+        *self.pending_default.write() = pending_default;
 
         *self.candidates.write() = Some(candidates);
         Ok(())
@@ -315,6 +385,30 @@ impl ConfigSubscriber for ProviderRegistry {
             drop(prefix_list);
 
             *targets = candidates;
+
+            // Swap in the rebuilt default target. If the new configuration
+            // has no providers at all there is nothing to rebuild from — keep
+            // the previous default and say so loudly (it can only be reached
+            // via the single-provider fallback path anyway).
+            match self.pending_default.write().take() {
+                Some(new_default) => {
+                    let name = new_default.name.clone();
+                    *self.default_target.write() = new_default;
+                    tracing::info!(
+                        generation,
+                        default_provider = %name,
+                        "default provider rebuilt after reload (lexicographically smallest configured provider)"
+                    );
+                }
+                None => {
+                    tracing::warn!(
+                        generation,
+                        current_default = %self.default_target.read().name,
+                        "reload produced no providers; retaining previous default target"
+                    );
+                }
+            }
+
             // Bump the version so subscribers watching `version()` (e.g. the
             // router dashboard) observe the full target replacement.
             self.version.fetch_add(1, Ordering::SeqCst);
@@ -515,5 +609,190 @@ mod tests {
         };
         let matching = registry.select_targets(&req);
         assert!(matching.is_empty());
+    }
+
+    // -- fail-closed routing -------------------------------------------------
+
+    use crate::config::manager::ConfigSnapshot;
+    use crate::config::{
+        AppConfig, AuthConfig, CorsConfig, LoggingConfig, RateLimitingConfig, ResourceConfig,
+        ServerConfig, StrategyConfig, ToolsConfig,
+    };
+    use crate::types::ModelCatalog;
+
+    fn empty_app_config() -> AppConfig {
+        AppConfig {
+            unsafe_dev: false,
+            server: ServerConfig {
+                host: "0.0.0.0".into(),
+                port: 8080,
+                shutdown_timeout_secs: 30,
+                request_timeout_secs: 300,
+                cors: CorsConfig::default(),
+            },
+            resources: ResourceConfig {
+                max_daily_cost: NanoUSD::from_nanos(100_000_000_000),
+                max_daily_tokens: 1_000_000,
+                max_concurrent: 5,
+                max_concurrent_nodes: 16,
+                provider_limits: HashMap::new(),
+            },
+            policies: Vec::new(),
+            providers: HashMap::new(),
+            strategies: StrategyConfig::default(),
+            tools: ToolsConfig::default(),
+            auth: AuthConfig::default(),
+            rate_limiting: RateLimitingConfig::default(),
+            logging: LoggingConfig::default(),
+            model_catalog: ModelCatalog::default(),
+            connectors: HashMap::new(),
+            features: HashMap::new(),
+        }
+    }
+
+    fn snapshot_with_direct_key_providers(specs: &[(&str, &str)]) -> ConfigSnapshot {
+        let mut config = empty_app_config();
+        for (name, key) in specs {
+            let mut cfg = crate::config::ProviderConfig::default();
+            cfg.api_key = Some(key.to_string());
+            config.providers.insert(name.to_string(), cfg);
+        }
+        ConfigSnapshot {
+            generation: 2,
+            config: Arc::new(config),
+        }
+    }
+
+    fn unmatched_request(model: &str) -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            model: model.into(),
+            messages: vec![],
+            stream: false,
+            temperature: None,
+            max_tokens: None,
+            tools: None,
+            files: None,
+            execution: None,
+            output: None,
+            strategy: None,
+        }
+    }
+
+    #[test]
+    fn test_multi_provider_unmatched_model_returns_empty() {
+        let registry = ProviderRegistry::new(dummy_target("default"));
+        registry.register_target(vec!["zen/".into()], dummy_target("zen-target"));
+        registry.register_target(vec!["openrouter/".into()], dummy_target("or-target"));
+
+        assert!(
+            registry.get_matching_targets("unknown/model").is_empty(),
+            "unprefixed models must NOT silently route to default in multi-provider setups"
+        );
+        assert_eq!(registry.get_matching_targets("zen/x").len(), 1);
+        assert_eq!(registry.get_matching_targets("openrouter/y").len(), 1);
+    }
+
+    #[test]
+    fn test_single_provider_unmatched_model_falls_back_to_default() {
+        let registry = ProviderRegistry::new(dummy_target("fallback"));
+        registry.register_target(vec!["zen/".into()], dummy_target("zen-target"));
+
+        let matched = registry.get_matching_targets("anything/else");
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].name, "fallback");
+    }
+
+    #[tokio::test]
+    async fn test_chat_completion_no_route_is_typed_fail_closed_error() {
+        let registry = ProviderRegistry::new(dummy_target("default"));
+        registry.register_target(vec!["zen/".into()], dummy_target("zen-a"));
+        registry.register_target(vec!["openrouter/".into()], dummy_target("or-a"));
+
+        let err = registry
+            .chat_completion(&unmatched_request("gpt-4o"))
+            .await
+            .expect_err("multi-provider unmatched model must fail closed");
+
+        let router_err = err
+            .downcast_ref::<RouterError>()
+            .expect("typed RouterError");
+        match router_err {
+            RouterError::NoRouteForModel {
+                model,
+                available_prefixes,
+            } => {
+                assert_eq!(model, "gpt-4o");
+                assert!(available_prefixes.contains(&"zen/".to_string()));
+                assert!(available_prefixes.contains(&"openrouter/".to_string()));
+            }
+            other => panic!("expected NoRouteForModel, got {other:?}"),
+        }
+
+        let msg = router_err.user_message();
+        assert!(msg.contains("zen/"), "client message must list prefixes");
+        assert!(
+            !msg.contains("sk-"),
+            "message must not leak credential material"
+        );
+    }
+
+    #[test]
+    fn test_select_default_provider_name_deterministic() {
+        for order in [
+            vec!["zeta", "alpha", "midway"],
+            vec!["midway", "zeta", "alpha"],
+            vec!["alpha", "zeta", "midway"],
+        ] {
+            let names: Vec<String> = order.into_iter().map(String::from).collect();
+            assert_eq!(
+                select_default_provider_name(&names).as_deref(),
+                Some("alpha"),
+                "selection must be lexicographically smallest regardless of input order"
+            );
+        }
+        assert_eq!(select_default_provider_name(&[]), None);
+    }
+
+    #[test]
+    fn test_commit_rebuilds_default_target_from_new_candidates() {
+        let registry = ProviderRegistry::new(dummy_target("startup-default"));
+
+        // Two providers; HashMap iteration order is arbitrary, so the choice
+        // of default after commit must be deterministic ("beta" < "gamma").
+        let snapshot =
+            snapshot_with_direct_key_providers(&[("gamma", "sk-gamma"), ("beta", "sk-beta")]);
+        registry.prepare(&snapshot, &snapshot).expect("prepare ok");
+        registry.commit(snapshot.generation);
+
+        assert_eq!(
+            registry.default_target_name(),
+            "beta",
+            "commit must rebuild the default from the new candidate set (lexicographically smallest)"
+        );
+        // Prefixes were swapped to the new candidate set.
+        assert_eq!(registry.get_matching_targets("gamma/m")[0].name, "gamma");
+    }
+
+    #[test]
+    fn test_commit_keeps_previous_default_when_reload_removes_all_providers() {
+        let registry = ProviderRegistry::new(dummy_target("startup-default"));
+
+        let with_provider = snapshot_with_direct_key_providers(&[("solo", "sk-solo")]);
+        registry
+            .prepare(&with_provider, &with_provider)
+            .expect("prepare ok");
+        registry.commit(with_provider.generation);
+
+        let empty_snapshot = snapshot_with_direct_key_providers(&[]);
+        registry
+            .prepare(&with_provider, &empty_snapshot)
+            .expect("prepare ok");
+        registry.commit(empty_snapshot.generation);
+
+        assert_eq!(
+            registry.default_target_name(),
+            "solo",
+            "empty reload must retain the most recent valid default rather than regress"
+        );
     }
 }

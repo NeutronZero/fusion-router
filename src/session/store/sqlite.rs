@@ -2,11 +2,15 @@
 //!
 //! Persistent SQLite backend for session storage. Implements `SessionStore`
 //! with real SQLite persistence, replacing the earlier in-memory stub.
+//!
+//! Concurrency note: rusqlite `Connection` is blocking; every store method
+//! moves its database work onto the dedicated blocking pool
+//! (`tokio::task::spawn_blocking`) so async worker threads are never stalled
+//! by disk I/O or lock contention (mirrors telemetry/sqlite_repo.rs).
 
 use async_trait::async_trait;
-use parking_lot::Mutex;
 use rusqlite::{params, Connection};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::SessionStore;
 use crate::session::types::{ExecutionSession, SessionId, SessionSnapshot};
@@ -67,50 +71,66 @@ impl SqliteSessionStore {
 #[async_trait]
 impl SessionStore for SqliteSessionStore {
     async fn create_session(&self, session: ExecutionSession) -> Result<(), String> {
-        let conn = self.conn.lock();
+        // Serialize outside the blocking task; only rusqlite work inside.
         let config_json = serde_json::to_string(&session.config)
             .map_err(|e| format!("failed to serialize config: {}", e))?;
-        conn.execute(
-            "INSERT INTO sessions (session_id, workflow_id, created_at_ms, owner, config) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                session.session_id.to_string(),
-                session.workflow_id.to_string(),
-                session.created_at_ms as i64,
-                session.owner,
-                config_json,
-            ],
-        )
-        .map_err(|e| format!("failed to insert session: {}", e))?;
-        Ok(())
+
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let conn = lock_conn_for(&conn)?;
+            conn.execute(
+                "INSERT INTO sessions (session_id, workflow_id, created_at_ms, owner, config) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    session.session_id.to_string(),
+                    session.workflow_id.to_string(),
+                    session.created_at_ms as i64,
+                    session.owner,
+                    config_json,
+                ],
+            )
+            .map_err(|e| format!("failed to insert session: {}", e))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("create_session task failed: {e}"))?
     }
 
     async fn load_session(
         &self,
         session_id: &SessionId,
     ) -> Result<Option<ExecutionSession>, String> {
-        let conn = self.conn.lock();
-        let mut stmt = conn
-            .prepare("SELECT session_id, workflow_id, created_at_ms, owner, config FROM sessions WHERE session_id = ?1")
-            .map_err(|e| format!("failed to prepare load_session: {}", e))?;
+        let sid = session_id.to_string();
+        let conn = self.conn.clone();
 
-        let result = stmt
-            .query_row(params![session_id.to_string()], |row| {
-                let session_id_str: String = row.get(0)?;
-                let workflow_id_str: String = row.get(1)?;
-                let created_at_ms: i64 = row.get(2)?;
-                let owner: String = row.get(3)?;
-                let config_json: String = row.get(4)?;
-                Ok((
-                    session_id_str,
-                    workflow_id_str,
-                    created_at_ms,
-                    owner,
-                    config_json,
-                ))
-            })
-            .ok();
+        let row = tokio::task::spawn_blocking(move || -> Result<Option<(String, String, i64, String, String)>, String> {
+            let conn = lock_conn_for(&conn)?;
+            let mut stmt = conn
+                .prepare("SELECT session_id, workflow_id, created_at_ms, owner, config FROM sessions WHERE session_id = ?1")
+                .map_err(|e| format!("failed to prepare load_session: {}", e))?;
 
-        match result {
+            let result = stmt
+                .query_row(params![sid], |row| {
+                    let session_id_str: String = row.get(0)?;
+                    let workflow_id_str: String = row.get(1)?;
+                    let created_at_ms: i64 = row.get(2)?;
+                    let owner: String = row.get(3)?;
+                    let config_json: String = row.get(4)?;
+                    Ok((
+                        session_id_str,
+                        workflow_id_str,
+                        created_at_ms,
+                        owner,
+                        config_json,
+                    ))
+                })
+                .ok();
+
+            Ok(result)
+        })
+        .await
+        .map_err(|e| format!("load_session task failed: {e}"))??;
+
+        match row {
             Some((sid, wf, ts, owner, cfg_json)) => {
                 let session_id = SessionId(
                     uuid::Uuid::parse_str(&sid).map_err(|e| format!("bad session_id: {}", e))?,
@@ -133,60 +153,76 @@ impl SessionStore for SqliteSessionStore {
     }
 
     async fn save_snapshot(&self, snapshot: SessionSnapshot) -> Result<(), String> {
-        let conn = self.conn.lock();
         let state_str = serde_json::to_string(&snapshot.state)
             .map_err(|e| format!("failed to serialize state: {}", e))?;
-        conn.execute(
-            "INSERT INTO snapshots (snapshot_id, session_id, current_node_id, state, execution_context_id, trace_id, checkpoint_timestamp_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                snapshot.snapshot_id.to_string(),
-                snapshot.session_id.to_string(),
-                snapshot.current_node_id.map(|u| u.to_string()),
-                state_str,
-                snapshot.execution_context_id.to_string(),
-                snapshot.trace_id.to_string(),
-                snapshot.checkpoint_timestamp_ms as i64,
-            ],
-        )
-        .map_err(|e| format!("failed to insert snapshot: {}", e))?;
-        Ok(())
+
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let conn = lock_conn_for(&conn)?;
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, session_id, current_node_id, state, execution_context_id, trace_id, checkpoint_timestamp_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    snapshot.snapshot_id.to_string(),
+                    snapshot.session_id.to_string(),
+                    snapshot.current_node_id.map(|u| u.to_string()),
+                    state_str,
+                    snapshot.execution_context_id.to_string(),
+                    snapshot.trace_id.to_string(),
+                    snapshot.checkpoint_timestamp_ms as i64,
+                ],
+            )
+            .map_err(|e| format!("failed to insert snapshot: {}", e))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("save_snapshot task failed: {e}"))?
     }
 
     async fn list_checkpoints(
         &self,
         session_id: &SessionId,
     ) -> Result<Vec<SessionSnapshot>, String> {
-        let conn = self.conn.lock();
-        let mut stmt = conn
-            .prepare("SELECT snapshot_id, session_id, current_node_id, state, execution_context_id, trace_id, checkpoint_timestamp_ms FROM snapshots WHERE session_id = ?1 ORDER BY checkpoint_timestamp_ms ASC")
-            .map_err(|e| format!("failed to prepare list_checkpoints: {}", e))?;
+        let sid = session_id.to_string();
+        let conn = self.conn.clone();
 
-        let rows = stmt
-            .query_map(params![session_id.to_string()], |row| {
-                let snapshot_id_str: String = row.get(0)?;
-                let session_id_str: String = row.get(1)?;
-                let current_node_id_str: Option<String> = row.get(2)?;
-                let state_json: String = row.get(3)?;
-                let exec_ctx_str: String = row.get(4)?;
-                let trace_id_str: String = row.get(5)?;
-                let checkpoint_ts: i64 = row.get(6)?;
-                Ok((
-                    snapshot_id_str,
-                    session_id_str,
-                    current_node_id_str,
-                    state_json,
-                    exec_ctx_str,
-                    trace_id_str,
-                    checkpoint_ts,
-                ))
-            })
-            .map_err(|e| format!("failed to query snapshots: {}", e))?;
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String, Option<String>, String, String, String, i64)>, String> {
+            let conn = lock_conn_for(&conn)?;
+            let mut stmt = conn
+                .prepare("SELECT snapshot_id, session_id, current_node_id, state, execution_context_id, trace_id, checkpoint_timestamp_ms FROM snapshots WHERE session_id = ?1 ORDER BY checkpoint_timestamp_ms ASC")
+                .map_err(|e| format!("failed to prepare list_checkpoints: {}", e))?;
 
-        let mut snapshots = Vec::new();
-        for row in rows {
-            let (sid, ssid, node_id, state_json, exec_ctx, trace_id, ts) =
-                row.map_err(|e| format!("failed to read snapshot row: {}", e))?;
+            let mapped = stmt
+                .query_map(params![sid], |row| {
+                    let snapshot_id_str: String = row.get(0)?;
+                    let session_id_str: String = row.get(1)?;
+                    let current_node_id_str: Option<String> = row.get(2)?;
+                    let state_json: String = row.get(3)?;
+                    let exec_ctx_str: String = row.get(4)?;
+                    let trace_id_str: String = row.get(5)?;
+                    let checkpoint_ts: i64 = row.get(6)?;
+                    Ok((
+                        snapshot_id_str,
+                        session_id_str,
+                        current_node_id_str,
+                        state_json,
+                        exec_ctx_str,
+                        trace_id_str,
+                        checkpoint_ts,
+                    ))
+                })
+                .map_err(|e| format!("failed to query snapshots: {}", e))?;
 
+            let mut rows = Vec::new();
+            for row in mapped {
+                rows.push(row.map_err(|e| format!("failed to read snapshot row: {}", e))?);
+            }
+            Ok(rows)
+        })
+        .await
+        .map_err(|e| format!("list_checkpoints task failed: {e}"))??;
+
+        let mut snapshots = Vec::with_capacity(rows.len());
+        for (sid, ssid, node_id, state_json, exec_ctx, trace_id, ts) in rows {
             let snapshot_id =
                 uuid::Uuid::parse_str(&ssid).map_err(|e| format!("bad snapshot_id: {}", e))?;
             let session_id = SessionId(
@@ -218,14 +254,28 @@ impl SessionStore for SqliteSessionStore {
     }
 
     async fn delete_session(&self, session_id: &SessionId) -> Result<(), String> {
-        let conn = self.conn.lock();
         let sid = session_id.to_string();
-        conn.execute("DELETE FROM snapshots WHERE session_id = ?1", params![sid])
-            .map_err(|e| format!("failed to delete snapshots: {}", e))?;
-        conn.execute("DELETE FROM sessions WHERE session_id = ?1", params![sid])
-            .map_err(|e| format!("failed to delete session: {}", e))?;
-        Ok(())
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let conn = lock_conn_for(&conn)?;
+            conn.execute("DELETE FROM snapshots WHERE session_id = ?1", params![sid])
+                .map_err(|e| format!("failed to delete snapshots: {}", e))?;
+            conn.execute("DELETE FROM sessions WHERE session_id = ?1", params![sid])
+                .map_err(|e| format!("failed to delete session: {}", e))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("delete_session task failed: {e}"))?
     }
+}
+
+/// Locks the shared connection inside a blocking task (std Mutex: no
+/// poisoning-aware parking guard across await points, mirrors telemetry).
+fn lock_conn_for(
+    conn: &Arc<Mutex<Connection>>,
+) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+    conn.lock()
+        .map_err(|e| format!("sqlite connection mutex poisoned: {}", e))
 }
 
 #[cfg(test)]
@@ -318,5 +368,31 @@ mod tests {
 
         let checkpoints = store.list_checkpoints(&session.session_id).await.unwrap();
         assert!(checkpoints.is_empty());
+    }
+
+    /// Concurrent writers + readers through the async API must all succeed:
+    /// every operation runs on the blocking pool behind the connection lock.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_concurrent_async_operations_roundtrip() {
+        let store = Arc::new(SqliteSessionStore::new(":memory:").unwrap());
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let store = Arc::clone(&store);
+            handles.push(tokio::spawn(async move {
+                let session = test_session();
+                store.create_session(session.clone()).await.unwrap();
+                for i in 0..5 {
+                    let mut snap = test_snapshot(&session.session_id);
+                    snap.checkpoint_timestamp_ms = 1000 + i;
+                    store.save_snapshot(snap).await.unwrap();
+                }
+                let checkpoints = store.list_checkpoints(&session.session_id).await.unwrap();
+                assert_eq!(checkpoints.len(), 5);
+                store.delete_session(&session.session_id).await.unwrap();
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
     }
 }

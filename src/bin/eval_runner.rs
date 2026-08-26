@@ -69,6 +69,11 @@ struct Cli {
     /// Override repeat count.
     #[arg(long)]
     repeats: Option<usize>,
+
+    /// Model used as the LLM judge for rubric-scored tasks
+    /// (`<provider>/<model>`). Required when the suite contains rubric tasks.
+    #[arg(long)]
+    judge_model: Option<String>,
 }
 
 // ── Eval config (top-level YAML) ────────────────────────────────
@@ -95,7 +100,6 @@ struct TaskSuite {
 
 #[derive(Debug, Clone, Deserialize)]
 struct BucketDef {
-    #[allow(dead_code)]
     hypothesis: String,
     #[allow(dead_code)]
     scoring: String,
@@ -359,17 +363,28 @@ os.chdir(os.environ.get('EVAL_WORKDIR', '.'))
 
     let full_code = format!("{}\n{}", preamble, code);
 
-    // Write to temp file (avoids command-line arg length limits, special chars)
-    let temp_dir_name = format!("eval_runner_{}", std::process::id());
-    let temp_dir = std::env::temp_dir().join(&temp_dir_name);
+    // Write to temp file (avoids command-line arg length limits, special
+    // chars). A random per-invocation subdirectory prevents predictable-path
+    // symlink/pre-creation attacks and cross-run clobbering; the parent
+    // pid-scoped dir is cleaned up best-effort.
+    let temp_root = std::env::temp_dir().join(format!("eval_runner_{}", std::process::id()));
+    if std::fs::create_dir_all(&temp_root).is_err() {
+        return ("TEMPDIR_NOT_AVAILABLE".to_string(), false);
+    }
+    let temp_dir = temp_root.join(Uuid::new_v4().to_string());
     if std::fs::create_dir_all(&temp_dir).is_err() {
+        let _ = std::fs::remove_dir(&temp_root);
         return ("TEMPDIR_NOT_AVAILABLE".to_string(), false);
     }
     let temp_path = temp_dir.join("eval_test.py");
     let Ok(mut file) = std::fs::File::create(&temp_path) else {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_dir(&temp_root);
         return ("TEMPFILE_NOT_AVAILABLE".to_string(), false);
     };
     if file.write_all(full_code.as_bytes()).is_err() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_dir(&temp_root);
         return ("WRITE_FAILED".to_string(), false);
     }
     drop(file);
@@ -378,6 +393,12 @@ os.chdir(os.environ.get('EVAL_WORKDIR', '.'))
 
     // Set EVAL_WORKDIR to temp dir so code can't reach real filesystem
     let workdir = temp_dir.clone();
+
+    let cleanup = || {
+        let _ = std::fs::remove_file(&temp_path);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_dir(&temp_root);
+    };
 
     let Ok(mut child) = Command::new("python3")
         .arg(&script_path)
@@ -400,7 +421,7 @@ os.chdir(os.environ.get('EVAL_WORKDIR', '.'))
                 .spawn()
         })
     else {
-        let _ = std::fs::remove_file(&temp_path);
+        cleanup();
         return ("PYTHON_NOT_AVAILABLE".to_string(), false);
     };
 
@@ -434,16 +455,129 @@ os.chdir(os.environ.get('EVAL_WORKDIR', '.'))
         }
     };
 
-    // Cleanup
-    let _ = std::fs::remove_file(&temp_path);
-    let _ = std::fs::remove_dir(&temp_dir);
+    // Cleanup (best-effort)
+    cleanup();
     result
 }
 
-fn score_output(
+/// Splits a test expression like `fib(0) == []` on its top-level `==`,
+/// returning `(lhs, rhs)` with both trimmed. Quotes and brackets are respected
+/// so `==` inside them does not split the expression.
+fn split_test_expression(test: &str) -> Option<(String, String)> {
+    let bytes = test.as_bytes();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        match c {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '(' | '[' | '{' if !in_single && !in_double => depth += 1,
+            ')' | ']' | '}' if !in_single && !in_double => depth = depth.saturating_sub(1),
+            '=' if !in_single
+                && !in_double
+                && depth == 0
+                && bytes.get(i + 1) == Some(&b'=')
+                && bytes.get(i.wrapping_sub(1)) != Some(&b'!') =>
+            {
+                let lhs = test[..i].trim().to_string();
+                let rhs = test[i + 2..].trim().to_string();
+                if lhs.is_empty() || rhs.is_empty() {
+                    return None;
+                }
+                return Some((lhs, rhs));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Escapes `s` for embedding inside single-quoted Python string literal.
+fn python_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Converts the RHS of a unit-test comparison into a Python literal
+/// expression. Handles quoted strings, integers/floats, list literals,
+/// true/false/null spellings, and falls back to a string comparison for
+/// anything else.
+fn python_literal_from_rhs(rhs: &str) -> String {
+    let rhs = rhs.trim();
+    // Quoted strings (single or double): re-emit as an escaped single-quoted
+    // Python string.
+    if (rhs.starts_with('"') && rhs.ends_with('"') && rhs.len() >= 2)
+        || (rhs.starts_with('\'') && rhs.ends_with('\'') && rhs.len() >= 2)
+    {
+        let inner = &rhs[1..rhs.len() - 1];
+        return format!("'{}'", python_escape(inner));
+    }
+    match rhs {
+        "true" | "True" => "True".to_string(),
+        "false" | "False" => "False".to_string(),
+        "null" | "None" => "None".to_string(),
+        _ => {
+            if rhs.parse::<i64>().is_ok() || rhs.parse::<f64>().is_ok() {
+                rhs.to_string()
+            } else if rhs.starts_with('[') && rhs.ends_with(']') {
+                // List literals are already valid Python expressions.
+                rhs.to_string()
+            } else if rhs.starts_with('{') && rhs.ends_with('}') {
+                rhs.to_string()
+            } else {
+                // Fallback: compare against the raw text as a string.
+                format!("'{}'", python_escape(rhs))
+            }
+        }
+    }
+}
+
+/// Builds the full Python script for UnitTest scoring: the model's code
+/// followed by one assertion per test. Only the LHS expression is evaluated
+/// into `result`; the parsed RHS literal is used for the equality check —
+/// never evaluate `lhs == rhs` into `result` itself (a bool compared to a
+/// value always fails).
+fn generate_unit_test_script(code: &str, tests: &[String]) -> String {
+    let mut script = format!("{}\n\n", code);
+    for test in tests {
+        let test = test.trim();
+        let assertion = match split_test_expression(test) {
+            Some((lhs, rhs)) => {
+                let expected = python_literal_from_rhs(&rhs);
+                // Keep the failure message free of the expected literal so
+                // embedded quotes cannot break the generated Python.
+                format!("result = {lhs}\nassert result == {expected}, f'got {{result!r}}'\n")
+            }
+            None => {
+                // No `==` comparison found: run the statement bare and only
+                // require it not to raise.
+                format!("{test}\n")
+            }
+        };
+        script.push_str(&assertion);
+    }
+    script.push_str("print('ALL_TESTS_PASSED')\n");
+    script
+}
+
+async fn score_output(
     task: &TaskDef,
     output: &str,
-    judge_provider: Option<&dyn ChatProvider>,
+    judge_provider: Option<&(dyn ChatProvider + Send + Sync)>,
 ) -> (f64, RunStatus) {
     let trimmed = output.trim();
     if trimmed.is_empty() {
@@ -514,19 +648,7 @@ fn score_output(
                 None => return (0.0, RunStatus::ScoreError),
             };
 
-            // Build a test script: define the function, then run assertions
-            let mut script = format!("{}\n\n", code);
-            for test in tests {
-                // Wrap bare assertions in a test function
-                script.push_str(&format!(
-                    "result = {}\nassert result == {} or str(result) == str({}), f'{{result}} != {}'\n",
-                    test.trim_end_matches('\n'),
-                    test.split("==").nth(1).unwrap_or("").trim(),
-                    test.split("==").nth(1).unwrap_or("").trim(),
-                    test.split("==").nth(1).unwrap_or("").trim(),
-                ));
-            }
-            script.push_str("print('ALL_TESTS_PASSED')\n");
+            let script = generate_unit_test_script(&code, tests);
 
             let (output, success) = run_python(&script, 10);
             if output.contains("PYTHON_NOT_AVAILABLE") {
@@ -594,13 +716,17 @@ fn score_output(
                 Some(r) => r,
                 None => return (0.0, RunStatus::ScoreError),
             };
-            let score = score_rubric(task, trimmed, provider);
+            let score = score_rubric(task, trimmed, provider).await;
             (score, RunStatus::Scored)
         }
     }
 }
 
-fn score_rubric(task: &TaskDef, output: &str, provider: &dyn ChatProvider) -> f64 {
+async fn score_rubric(
+    task: &TaskDef,
+    output: &str,
+    provider: &(dyn ChatProvider + Send + Sync),
+) -> f64 {
     let rubric = match &task.rubric {
         Some(r) => r,
         None => return 0.0,
@@ -637,13 +763,10 @@ fn score_rubric(task: &TaskDef, output: &str, provider: &dyn ChatProvider) -> f6
         strategy: None,
     };
 
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(r) => r,
-        Err(_) => return 0.0,
-    };
-    let response = rt.block_on(async {
-        tokio::time::timeout(Duration::from_secs(60), provider.chat_completion(&request)).await
-    });
+    // Await the provider call directly — no nested tokio runtime (a nested
+    // Runtime::new().block_on inside an async context would panic).
+    let response =
+        tokio::time::timeout(Duration::from_secs(60), provider.chat_completion(&request)).await;
     match response {
         Ok(Ok(resp)) => {
             let text = resp
@@ -726,7 +849,13 @@ fn build_provider_from_config(
 
 // ── Condition A: Direct call ────────────────────────────────────
 
-async fn run_condition_a(provider: &dyn ChatProvider, task: &TaskDef, model: &str) -> RunResult {
+async fn run_condition_a(
+    provider: &dyn ChatProvider,
+    task: &TaskDef,
+    model: &str,
+    run_index: usize,
+    judge_provider: Option<&(dyn ChatProvider + Send + Sync)>,
+) -> RunResult {
     let messages = vec![ChatMessage {
         role: "user".to_string(),
         content: task.prompt.clone().unwrap_or_default(),
@@ -760,12 +889,12 @@ async fn run_condition_a(provider: &dyn ChatProvider, task: &TaskDef, model: &st
             let usage = resp.usage.as_ref();
             let tokens = usage.map(|u| u.total_tokens as u64).unwrap_or(0);
             let cost = estimate_cost(model, usage);
-            let (quality, status) = score_output(task, &output, None);
+            let (quality, status) = score_output(task, &output, judge_provider).await;
 
             RunResult {
                 task_id: task.id.clone(),
                 condition: "A".to_string(),
-                run_index: 0,
+                run_index,
                 output: output.clone(),
                 quality_score: quality,
                 cost_usd: cost,
@@ -780,7 +909,7 @@ async fn run_condition_a(provider: &dyn ChatProvider, task: &TaskDef, model: &st
         Ok(Err(e)) => RunResult {
             task_id: task.id.clone(),
             condition: "A".to_string(),
-            run_index: 0,
+            run_index,
             output: String::new(),
             quality_score: 0.0,
             cost_usd: 0.0,
@@ -794,7 +923,7 @@ async fn run_condition_a(provider: &dyn ChatProvider, task: &TaskDef, model: &st
         Err(_elapsed) => RunResult {
             task_id: task.id.clone(),
             condition: "A".to_string(),
-            run_index: 0,
+            run_index,
             output: String::new(),
             quality_score: 0.0,
             cost_usd: 0.0,
@@ -905,6 +1034,8 @@ async fn run_condition_b(
     planner: &IntentPlanner,
     task: &TaskDef,
     baseline_model: &str,
+    run_index: usize,
+    judge_provider: Option<&(dyn ChatProvider + Send + Sync)>,
 ) -> RunResult {
     let intent = task_to_execution_intent(task);
     let requirements = Requirements {
@@ -920,11 +1051,28 @@ async fn run_condition_b(
         requested_model: None,
     };
 
-    // Let planner generate the IR (picks model, strategy structure)
-    let mut ir = planner
-        .plan(&requirements, &[], None)
-        .await
-        .expect("planning");
+    // Let planner generate the IR (picks model, strategy structure).
+    // Planning failures must not abort the whole run — record them as an
+    // ApiError result so partial results still survive to the report.
+    let mut ir = match planner.plan(&requirements, &[], None).await {
+        Ok(ir) => ir,
+        Err(e) => {
+            return RunResult {
+                task_id: task.id.clone(),
+                condition: "B".to_string(),
+                run_index,
+                output: String::new(),
+                quality_score: 0.0,
+                cost_usd: 0.0,
+                latency_ms: 0,
+                tokens: 0,
+                call_count: 0,
+                model_used: baseline_model.to_string(),
+                status: RunStatus::ApiError,
+                error: Some(format!("planning error: {}", e)),
+            };
+        }
+    };
 
     // Force all nodes to Single strategy (condition B = routing only, no multi-call)
     for node in &mut ir.nodes {
@@ -939,7 +1087,7 @@ async fn run_condition_b(
             return RunResult {
                 task_id: task.id.clone(),
                 condition: "B".to_string(),
-                run_index: 0,
+                run_index,
                 output: String::new(),
                 quality_score: 0.0,
                 cost_usd: 0.0,
@@ -994,12 +1142,12 @@ async fn run_condition_b(
             };
 
             let model_used = extract_model_from_graph(&instance.graph);
-            let (quality, status) = score_output(task, &output, None);
+            let (quality, status) = score_output(task, &output, judge_provider).await;
 
             RunResult {
                 task_id: task.id.clone(),
                 condition: "B".to_string(),
-                run_index: 0,
+                run_index,
                 output: output.clone(),
                 quality_score: quality,
                 cost_usd: exec_result.total_cost.to_usd_f64(),
@@ -1014,7 +1162,7 @@ async fn run_condition_b(
         Ok(Err(e)) => RunResult {
             task_id: task.id.clone(),
             condition: "B".to_string(),
-            run_index: 0,
+            run_index,
             output: String::new(),
             quality_score: 0.0,
             cost_usd: 0.0,
@@ -1028,7 +1176,7 @@ async fn run_condition_b(
         Err(_elapsed) => RunResult {
             task_id: task.id.clone(),
             condition: "B".to_string(),
-            run_index: 0,
+            run_index,
             output: String::new(),
             quality_score: 0.0,
             cost_usd: 0.0,
@@ -1049,6 +1197,8 @@ async fn run_condition_c(
     planner: &IntentPlanner,
     task: &TaskDef,
     baseline_model: &str,
+    run_index: usize,
+    judge_provider: Option<&(dyn ChatProvider + Send + Sync)>,
 ) -> RunResult {
     let intent = task_to_execution_intent(task);
     let requirements = Requirements {
@@ -1064,11 +1214,27 @@ async fn run_condition_c(
         requested_model: None,
     };
 
-    // Full pipeline: planner picks model AND strategy
-    let ir = planner
-        .plan(&requirements, &[], None)
-        .await
-        .expect("planning");
+    // Full pipeline: planner picks model AND strategy. Planning failures
+    // become ApiError results instead of aborting the whole run.
+    let ir = match planner.plan(&requirements, &[], None).await {
+        Ok(ir) => ir,
+        Err(e) => {
+            return RunResult {
+                task_id: task.id.clone(),
+                condition: "C".to_string(),
+                run_index,
+                output: String::new(),
+                quality_score: 0.0,
+                cost_usd: 0.0,
+                latency_ms: 0,
+                tokens: 0,
+                call_count: 0,
+                model_used: baseline_model.to_string(),
+                status: RunStatus::ApiError,
+                error: Some(format!("planning error: {}", e)),
+            };
+        }
+    };
 
     // Compile (strategy expansion happens here)
     let mut graph = match compiler.compile(ir).await {
@@ -1077,7 +1243,7 @@ async fn run_condition_c(
             return RunResult {
                 task_id: task.id.clone(),
                 condition: "C".to_string(),
-                run_index: 0,
+                run_index,
                 output: String::new(),
                 quality_score: 0.0,
                 cost_usd: 0.0,
@@ -1131,12 +1297,12 @@ async fn run_condition_c(
             };
 
             let model_used = extract_model_from_graph(&instance.graph);
-            let (quality, status) = score_output(task, &output, None);
+            let (quality, status) = score_output(task, &output, judge_provider).await;
 
             RunResult {
                 task_id: task.id.clone(),
                 condition: "C".to_string(),
-                run_index: 0,
+                run_index,
                 output: output.clone(),
                 quality_score: quality,
                 cost_usd: exec_result.total_cost.to_usd_f64(),
@@ -1151,7 +1317,7 @@ async fn run_condition_c(
         Ok(Err(e)) => RunResult {
             task_id: task.id.clone(),
             condition: "C".to_string(),
-            run_index: 0,
+            run_index,
             output: String::new(),
             quality_score: 0.0,
             cost_usd: 0.0,
@@ -1165,7 +1331,7 @@ async fn run_condition_c(
         Err(_elapsed) => RunResult {
             task_id: task.id.clone(),
             condition: "C".to_string(),
-            run_index: 0,
+            run_index,
             output: String::new(),
             quality_score: 0.0,
             cost_usd: 0.0,
@@ -1297,7 +1463,11 @@ fn compute_condition_stats(results: &[&RunResult]) -> ConditionStats {
     }
 }
 
-fn generate_report(results: &[RunResult], tasks: &[TaskDef]) -> Vec<BucketReport> {
+fn generate_report(
+    results: &[RunResult],
+    tasks: &[TaskDef],
+    buckets: &HashMap<String, BucketDef>,
+) -> Vec<BucketReport> {
     let mut by_bucket: HashMap<String, Vec<&RunResult>> = HashMap::new();
     for r in results {
         by_bucket.entry(r.task_id.clone()).or_default().push(r);
@@ -1334,10 +1504,11 @@ fn generate_report(results: &[RunResult], tasks: &[TaskDef]) -> Vec<BucketReport
             .copied()
             .collect();
 
-        let hypothesis = bucket_results
-            .first()
-            .and_then(|r| task_map.get(r.task_id.as_str()))
-            .map(|t| t.bucket.clone())
+        // Carry the declared bucket hypothesis through to the report instead
+        // of copying the bucket NAME into it.
+        let hypothesis = buckets
+            .get(bucket_name)
+            .map(|b| b.hypothesis.clone())
             .unwrap_or_default();
 
         reports.push(BucketReport {
@@ -1425,6 +1596,31 @@ fn print_condition(label: &str, stats: &ConditionStats) {
         stats.n,
         error_str,
     );
+}
+
+/// Exit-code policy for the eval run:
+///   0 — no errors and at least one scored run with a nonzero score
+///   1 — at least one run errored (ApiError / ScoreError)
+///   2 — no errors, but every scored result is zero (or nothing scored)
+fn determine_exit_code(results: &[RunResult]) -> i32 {
+    if results.is_empty() {
+        return 2;
+    }
+    let n_errors = results
+        .iter()
+        .filter(|r| matches!(r.status, RunStatus::ApiError | RunStatus::ScoreError))
+        .count();
+    if n_errors > 0 {
+        return 1;
+    }
+    let scored: Vec<&RunResult> = results
+        .iter()
+        .filter(|r| r.status == RunStatus::Scored)
+        .collect();
+    if scored.is_empty() || scored.iter().all(|r| r.quality_score == 0.0) {
+        return 2;
+    }
+    0
 }
 
 // ── Main ────────────────────────────────────────────────────────
@@ -1529,6 +1725,35 @@ async fn main() -> Result<()> {
         anyhow::bail!("no tasks matched the given filters");
     }
 
+    // Pre-flight rubric check: fail BEFORE any tokens are spent when rubric
+    // tasks exist but no judge is configured (otherwise every rubric run
+    // silently degrades to a ScoreError storm).
+    let needs_judge = tasks
+        .iter()
+        .any(|t| matches!(t.scoring, ScoringMethod::Rubric));
+    let judge_provider: Option<Arc<dyn ChatProvider + Send + Sync>> = match cli.judge_model {
+        Some(ref model) => {
+            let provider_name = model.split('/').next().unwrap_or_default().to_string();
+            if provider_name.is_empty() {
+                anyhow::bail!(
+                    "--judge-model must look like '<provider>/<model>' (e.g. zen/mimo-v2.5-free), got '{model}'"
+                );
+            }
+            println!("Judge model: {model} (provider: {provider_name})");
+            Some(build_provider_from_config(&app_config, &provider_name)?)
+        }
+        None => {
+            if needs_judge {
+                anyhow::bail!(
+                    "suite contains rubric-scored tasks but no --judge-model was configured. \
+                     Refusing to run: every rubric task would silently score 0 as ScoreError. \
+                     Pass --judge-model <provider>/<model> to enable LLM judging."
+                );
+            }
+            None
+        }
+    };
+
     // Build provider for condition A
     let provider_a = build_provider_from_config(&app_config, &suite.config.baseline_provider)?;
 
@@ -1591,10 +1816,18 @@ async fn main() -> Result<()> {
     for task in &tasks {
         eprintln!("  {} ({})", task.id, task.bucket);
 
-        for _run_idx in 0..repeats {
+        for run_idx in 0..repeats {
+            let judge = judge_provider.as_deref();
+
             // Condition A: direct call
-            let result_a =
-                run_condition_a(provider_a.as_ref(), task, &suite.config.baseline_model).await;
+            let result_a = run_condition_a(
+                provider_a.as_ref(),
+                task,
+                &suite.config.baseline_model,
+                run_idx,
+                judge,
+            )
+            .await;
             all_results.push(result_a);
 
             // Condition B: routed-single
@@ -1605,6 +1838,8 @@ async fn main() -> Result<()> {
                 &planner,
                 task,
                 &suite.config.baseline_model,
+                run_idx,
+                judge,
             )
             .await;
             all_results.push(result_b);
@@ -1617,6 +1852,8 @@ async fn main() -> Result<()> {
                 &planner,
                 task,
                 &suite.config.baseline_model,
+                run_idx,
+                judge,
             )
             .await;
             all_results.push(result_c);
@@ -1624,7 +1861,7 @@ async fn main() -> Result<()> {
     }
 
     // Generate and print report
-    let reports = generate_report(&all_results, &tasks);
+    let reports = generate_report(&all_results, &tasks, &suite.buckets);
     print_report(&reports);
 
     // Write raw results to JSON
@@ -1643,5 +1880,231 @@ async fn main() -> Result<()> {
     std::fs::write(&report_path, &report_json)?;
     println!("Report written to: {}", report_path.display());
 
-    Ok(())
+    // Non-zero exit when the run itself was unhealthy: any errored run, or a
+    // run where every scored result is zero. Results/reports are already on
+    // disk, so exiting here loses nothing.
+    let code = determine_exit_code(&all_results);
+    if code != 0 {
+        eprintln!(
+            "eval run finished with problems (exit {code}); see {} for details",
+            output_path.display()
+        );
+    }
+    std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generator_evaluates_only_lhs_for_list_expected() {
+        // The self-defeat regression: generated script must NOT evaluate
+        // `lhs == rhs` into result (bool vs [] never matches).
+        let script = generate_unit_test_script(
+            "def fib(n):\n    return []\n",
+            &["fib(0) == []".to_string()],
+        );
+        assert!(script.contains("result = fib(0)\n"), "script:\n{script}");
+        assert!(script.contains("assert result == [],"), "script:\n{script}");
+        assert!(
+            !script.contains("result = fib(0) =="),
+            "must not assign the comparison itself:\n{script}"
+        );
+        assert!(script.contains("ALL_TESTS_PASSED"));
+    }
+
+    #[test]
+    fn generator_handles_quoted_string_expected() {
+        let script = generate_unit_test_script(
+            "def greet():\n    return 'hi'\n",
+            &["greet() == \"hi there\"".to_string()],
+        );
+        assert!(script.contains("result = greet()\n"), "script:\n{script}");
+        assert!(
+            script.contains("assert result == 'hi there',"),
+            "string RHS must be re-emitted as escaped python literal:\n{script}"
+        );
+    }
+
+    #[test]
+    fn generator_handles_numeric_and_boolean_expected() {
+        let script = generate_unit_test_script(
+            "def f():\n    pass\n",
+            &[
+                "f() == 42".to_string(),
+                "g() == 3.14".to_string(),
+                "is_ready() == true".to_string(),
+                "is_broken() == false".to_string(),
+                "maybe() == null".to_string(),
+            ],
+        );
+        assert!(script.contains("assert result == 42,"), "script:\n{script}");
+        assert!(
+            script.contains("assert result == 3.14,"),
+            "script:\n{script}"
+        );
+        assert!(
+            script.contains("assert result == True,"),
+            "script:\n{script}"
+        );
+        assert!(
+            script.contains("assert result == False,"),
+            "script:\n{script}"
+        );
+        assert!(
+            script.contains("assert result == None,"),
+            "script:\n{script}"
+        );
+    }
+
+    #[test]
+    fn split_expression_respects_quotes_and_brackets() {
+        let (lhs, rhs) =
+            split_test_expression("check('a == b', [1, 2]) == [1, 2]").expect("must split");
+        assert_eq!(lhs, "check('a == b', [1, 2])");
+        assert_eq!(rhs, "[1, 2]");
+
+        assert!(split_test_expression("just_a_call()").is_none());
+    }
+
+    #[test]
+    fn rhs_literal_parsing_cases() {
+        assert_eq!(python_literal_from_rhs("[]"), "[]");
+        assert_eq!(python_literal_from_rhs("[1, 2, 3]"), "[1, 2, 3]");
+        assert_eq!(python_literal_from_rhs("\"hello\""), "'hello'");
+        assert_eq!(
+            python_literal_from_rhs("\"line1\nline2\""),
+            "'line1\\nline2'"
+        );
+        assert_eq!(python_literal_from_rhs("it's"), "'it\\'s'");
+        assert_eq!(python_literal_from_rhs("-7"), "-7");
+        assert_eq!(python_literal_from_rhs("2.5"), "2.5");
+        assert_eq!(python_literal_from_rhs("True"), "True");
+        assert_eq!(python_literal_from_rhs("False"), "False");
+        assert_eq!(python_literal_from_rhs("None"), "None");
+        assert_eq!(python_literal_from_rhs("true"), "True");
+        assert_eq!(python_literal_from_rhs("null"), "None");
+        assert_eq!(python_literal_from_rhs("bare word"), "'bare word'");
+    }
+
+    fn run(task_id: &str, condition: &str, status: RunStatus, score: f64) -> RunResult {
+        RunResult {
+            task_id: task_id.into(),
+            condition: condition.into(),
+            run_index: 0,
+            output: String::new(),
+            quality_score: score,
+            cost_usd: 0.0,
+            latency_ms: 0,
+            tokens: 0,
+            call_count: 0,
+            model_used: "m".into(),
+            status,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn exit_code_zero_only_for_healthy_runs() {
+        assert_eq!(determine_exit_code(&[]), 2);
+        assert_eq!(
+            determine_exit_code(&[run("t", "A", RunStatus::Scored, 1.0)]),
+            0
+        );
+    }
+
+    #[test]
+    fn exit_code_nonzero_when_any_run_errors() {
+        let results = vec![
+            run("t", "A", RunStatus::Scored, 1.0),
+            run("t", "B", RunStatus::ApiError, 0.0),
+            run("t", "C", RunStatus::Scored, 1.0),
+        ];
+        assert_eq!(determine_exit_code(&results), 1);
+    }
+
+    #[test]
+    fn exit_code_nonzero_when_score_error_present() {
+        let results = vec![
+            run("t", "A", RunStatus::Scored, 1.0),
+            run("t", "B", RunStatus::ScoreError, 0.0),
+        ];
+        assert_eq!(determine_exit_code(&results), 1);
+    }
+
+    #[test]
+    fn exit_code_nonzero_when_all_scores_zero() {
+        let results = vec![
+            run("t", "A", RunStatus::Scored, 0.0),
+            run("t", "B", RunStatus::Scored, 0.0),
+        ];
+        assert_eq!(determine_exit_code(&results), 2);
+    }
+
+    #[test]
+    fn exit_code_nonzero_when_nothing_scored() {
+        let results = vec![run("t", "A", RunStatus::NoOutput, 0.0)];
+        assert_eq!(determine_exit_code(&results), 2);
+    }
+
+    #[test]
+    fn report_carries_bucket_hypothesis_not_bucket_name() {
+        let mut buckets = HashMap::new();
+        buckets.insert(
+            "debate".to_string(),
+            BucketDef {
+                hypothesis: "multi-debate beats single-shot on reasoning".into(),
+                scoring: "rubric".into(),
+            },
+        );
+
+        let tasks = vec![TaskDef {
+            id: "d1".into(),
+            bucket: "debate".into(),
+            prompt: None,
+            scoring: ScoringMethod::ExactMatch,
+            ground_truth: None,
+            rubric: None,
+            reuse: None,
+            intent: None,
+        }];
+        let results = vec![
+            run("d1", "A", RunStatus::Scored, 1.0),
+            run("d1", "C", RunStatus::Scored, 1.0),
+        ];
+
+        let reports = generate_report(&results, &tasks, &buckets);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].bucket, "debate");
+        assert_eq!(
+            reports[0].hypothesis, "multi-debate beats single-shot on reasoning",
+            "hypothesis must come from BucketDef, not be a copy of the bucket name"
+        );
+    }
+
+    #[tokio::test]
+    async fn rubric_without_judge_is_detected_upfront() {
+        let task = TaskDef {
+            id: "r1".into(),
+            bucket: "rubric".into(),
+            prompt: None,
+            scoring: ScoringMethod::Rubric,
+            ground_truth: None,
+            rubric: None,
+            reuse: None,
+            intent: None,
+        };
+        let tasks = [task];
+        let needs_judge = tasks
+            .iter()
+            .any(|t| matches!(t.scoring, ScoringMethod::Rubric));
+        assert!(needs_judge, "rubric task must require judge configuration");
+
+        // With no judge configured, scoring yields ScoreError (never a
+        // silently-passing score) — exercised without touching providers.
+        let (score, status) = score_output(&tasks[0], "some output", None).await;
+        assert_eq!(score, 0.0);
+        assert_eq!(status, RunStatus::ScoreError);
+    }
 }

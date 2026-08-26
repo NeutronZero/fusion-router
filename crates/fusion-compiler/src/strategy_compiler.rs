@@ -121,6 +121,7 @@ impl crate::CompilerPass for StrategyLoweringPass {
 }
 
 fn validate_consensus_config(node: &IRNode) -> Result<(), crate::CompilerError> {
+    const MAX: u64 = crate::strategy_expansion::MAX_CONSENSUS_MEMBERS;
     if let Some(count_val) = node.config.get("count") {
         if let Some(count) = count_val.as_u64() {
             if count == 0 {
@@ -128,6 +129,27 @@ fn validate_consensus_config(node: &IRNode) -> Result<(), crate::CompilerError> 
                     pass: "strategy_lowering".into(),
                     node_id: Some(node.id),
                     message: "Consensus count must be >= 1".into(),
+                });
+            }
+            if count > MAX {
+                return Err(crate::CompilerError::ValidationError {
+                    pass: "strategy_lowering".into(),
+                    node_id: Some(node.id),
+                    message: format!("Consensus count {count} exceeds maximum of {MAX} members"),
+                });
+            }
+        }
+    }
+    if let Some(members_val) = node.config.get("members") {
+        if let Some(members) = members_val.as_array() {
+            if members.len() as u64 > MAX {
+                return Err(crate::CompilerError::ValidationError {
+                    pass: "strategy_lowering".into(),
+                    node_id: Some(node.id),
+                    message: format!(
+                        "Consensus members list length {} exceeds maximum of {MAX} members",
+                        members.len()
+                    ),
                 });
             }
         }
@@ -150,16 +172,60 @@ fn validate_reflection_config(node: &IRNode) -> Result<(), crate::CompilerError>
     Ok(())
 }
 
+/// Validates Chain config in lockstep with `expand_chain` (see
+/// [`crate::strategy_expansion::resolved_chain_steps`]):
+/// - a `stages` array (when present) drives the pipeline length and must hold
+///   `1..=MAX_CHAIN_STEPS` entries;
+/// - otherwise numeric `steps` must be >= 1 (`steps: 0` is rejected instead of
+///   producing an empty/dangling subgraph); oversized values are clamped by
+///   expansion, not rejected.
 fn validate_chain_config(node: &IRNode) -> Result<(), crate::CompilerError> {
+    const MAX_STEPS: u64 = crate::strategy_expansion::MAX_CHAIN_STEPS;
     if let Some(stages_val) = node.config.get("stages") {
-        if let Some(stages) = stages_val.as_array() {
-            if stages.is_empty() {
-                return Err(crate::CompilerError::ValidationError {
+        let stages =
+            stages_val
+                .as_array()
+                .ok_or_else(|| crate::CompilerError::ValidationError {
                     pass: "strategy_lowering".into(),
                     node_id: Some(node.id),
-                    message: "Chain stages must not be empty".into(),
-                });
-            }
+                    message: "Chain stages must be an array".into(),
+                })?;
+        if stages.is_empty() {
+            return Err(crate::CompilerError::ValidationError {
+                pass: "strategy_lowering".into(),
+                node_id: Some(node.id),
+                message: "Chain stages must not be empty".into(),
+            });
+        }
+        if stages.len() as u64 > MAX_STEPS {
+            return Err(crate::CompilerError::ValidationError {
+                pass: "strategy_lowering".into(),
+                node_id: Some(node.id),
+                message: format!(
+                    "Chain stages length {} exceeds maximum of {MAX_STEPS} steps",
+                    stages.len()
+                ),
+            });
+        }
+        return Ok(());
+    }
+
+    if let Some(steps_val) = node.config.get("steps") {
+        let steps = steps_val
+            .as_u64()
+            .ok_or_else(|| crate::CompilerError::ValidationError {
+                pass: "strategy_lowering".into(),
+                node_id: Some(node.id),
+                message: "Chain steps must be a non-negative integer".into(),
+            })?;
+        if steps == 0 {
+            return Err(crate::CompilerError::ValidationError {
+                pass: "strategy_lowering".into(),
+                node_id: Some(node.id),
+                message:
+                    "Chain steps must be >= 1; a zero-step chain would produce an empty subgraph"
+                        .into(),
+            });
         }
     }
     Ok(())
@@ -257,6 +323,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn consensus_oversized_count_rejected() {
+        let pass = StrategyLoweringPass::new();
+        let max = crate::strategy_expansion::MAX_CONSENSUS_MEMBERS;
+        let mut config = HashMap::new();
+        config.insert("count".into(), serde_json::json!(max + 1));
+        let ir = ir_with_strategy(StrategyKind::Consensus, config);
+        let err = pass.apply(ir).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("exceeds maximum"),
+            "oversized count must fail validation with a clear error: {msg}"
+        );
+        // A pathological value must also be rejected, never allocated.
+        let mut config = HashMap::new();
+        config.insert("count".into(), serde_json::json!(u64::MAX));
+        let ir = ir_with_strategy(StrategyKind::Consensus, config);
+        assert!(pass.apply(ir).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn consensus_count_at_bound_valid() {
+        let pass = StrategyLoweringPass::new();
+        let max = crate::strategy_expansion::MAX_CONSENSUS_MEMBERS;
+        let mut config = HashMap::new();
+        config.insert("count".into(), serde_json::json!(max));
+        let ir = ir_with_strategy(StrategyKind::Consensus, config);
+        assert!(pass.apply(ir).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn consensus_oversized_members_list_rejected() {
+        let pass = StrategyLoweringPass::new();
+        let max = crate::strategy_expansion::MAX_CONSENSUS_MEMBERS as usize;
+        let members: Vec<&str> = (0..max + 1).map(|_| "m").collect();
+        let mut config = HashMap::new();
+        config.insert("members".into(), serde_json::json!(members));
+        let ir = ir_with_strategy(StrategyKind::Consensus, config);
+        let err = pass.apply(ir).await.unwrap_err();
+        assert!(
+            err.to_string().contains("members list length"),
+            "oversized members list must fail validation: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn reflection_valid() {
         let pass = StrategyLoweringPass::new();
         let mut config = HashMap::new();
@@ -283,6 +394,92 @@ mod tests {
         let ir = ir_with_strategy(StrategyKind::Chain, config);
         let err = pass.apply(ir).await.unwrap_err();
         assert!(err.to_string().contains("stages"));
+    }
+
+    #[tokio::test]
+    async fn chain_non_array_stages_rejected() {
+        let pass = StrategyLoweringPass::new();
+        let mut config = HashMap::new();
+        config.insert("stages".into(), serde_json::json!("not-an-array"));
+        let ir = ir_with_strategy(StrategyKind::Chain, config);
+        let err = pass.apply(ir).await.unwrap_err();
+        assert!(
+            err.to_string().contains("must be an array"),
+            "malformed stages must be rejected: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_stages_array_valid_and_length_capped() {
+        let pass = StrategyLoweringPass::new();
+
+        let mut config = HashMap::new();
+        config.insert(
+            "stages".into(),
+            serde_json::json!(["draft", "critique", "refine"]),
+        );
+        let ir = ir_with_strategy(StrategyKind::Chain, config);
+        assert!(pass.apply(ir).await.is_ok());
+
+        let max = crate::strategy_expansion::MAX_CHAIN_STEPS as usize;
+        let stages: Vec<&str> = (0..max + 1).map(|_| "s").collect();
+        let mut config = HashMap::new();
+        config.insert("stages".into(), serde_json::json!(stages));
+        let ir = ir_with_strategy(StrategyKind::Chain, config);
+        let err = pass.apply(ir).await.unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds maximum"),
+            "stages longer than the cap must be rejected: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_zero_steps_rejected() {
+        let pass = StrategyLoweringPass::new();
+        let mut config = HashMap::new();
+        config.insert("steps".into(), serde_json::json!(0));
+        let ir = ir_with_strategy(StrategyKind::Chain, config);
+        let err = pass.apply(ir).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("steps"), "error must mention steps: {msg}");
+        assert!(
+            msg.contains(">= 1"),
+            "zero steps must be a validation error, not an empty subgraph: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_oversized_steps_accepted_then_clamped_by_expansion() {
+        // Validation accepts oversized numeric steps (they are clamped
+        // downstream by expand_chain) but still rejects zero.
+        let pass = StrategyLoweringPass::new();
+        let mut config = HashMap::new();
+        config.insert("steps".into(), serde_json::json!(u64::MAX));
+        let ir = ir_with_strategy(StrategyKind::Chain, config.clone());
+        assert!(
+            pass.apply(ir).await.is_ok(),
+            "oversized numeric steps are clamped, not rejected"
+        );
+
+        let node = ExecutionNode {
+            id: uuid::Uuid::new_v4(),
+            kind: fusion_types::ExecutionNodeKind::LLMGenerate,
+            strategy: StrategyKind::Chain,
+            model: "m".into(),
+            retry_policy: RetryPolicy {
+                max_retries: 1,
+                backoff_ms: 10,
+            },
+            fallback: None,
+            config,
+            subgraph: None,
+        };
+        let subgraph = crate::strategy_expansion::expand_chain(&node);
+        assert_eq!(
+            subgraph.nodes.len(),
+            crate::strategy_expansion::MAX_CHAIN_STEPS as usize,
+            "steps must clamp to the upper bound"
+        );
     }
 
     #[tokio::test]

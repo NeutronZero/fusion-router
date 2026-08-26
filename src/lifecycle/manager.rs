@@ -27,7 +27,9 @@ impl LifecycleManager {
         let session = ExecutionSession {
             session_id: SessionId::new(),
             workflow_id,
-            created_at_ms: 1000,
+            // Real wall-clock time (epoch ms): a constant stamp broke
+            // created-at ordering and made sessions indistinguishable.
+            created_at_ms: crate::session::checkpoint::now_epoch_ms(),
             owner: owner.into(),
             config: std::collections::HashMap::new(),
         };
@@ -62,5 +64,39 @@ mod tests {
             .unwrap();
 
         assert_eq!(session.owner, "admin");
+    }
+
+    #[tokio::test]
+    async fn test_created_at_ms_is_real_wall_clock_and_monotonic() {
+        let store = Arc::new(InMemorySessionStore::new());
+        let manager = LifecycleManager::new(store);
+
+        let first = manager.create_session("a", Uuid::new_v4()).await.unwrap();
+        // Small sleep guarantees strictly increasing stamps across sessions.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let second = manager.create_session("b", Uuid::new_v4()).await.unwrap();
+
+        assert!(
+            second.created_at_ms >= first.created_at_ms,
+            "timestamps must be monotonic: {} -> {}",
+            first.created_at_ms,
+            second.created_at_ms
+        );
+        // Sanity floor (~Sep 2020) proves a real clock, not a constant.
+        assert!(first.created_at_ms > 1_600_000_000_000);
+        let now = crate::session::checkpoint::now_epoch_ms();
+        let drift = now.abs_diff(second.created_at_ms);
+        assert!(
+            drift < 60_000,
+            "created_at_ms must track wall clock (drift {drift}ms)"
+        );
+    }
+
+    #[test]
+    fn test_now_epoch_ms_is_monotonic_per_call() {
+        let t1 = crate::session::checkpoint::now_epoch_ms();
+        let t2 = crate::session::checkpoint::now_epoch_ms();
+        assert!(t2 >= t1, "clock must not go backwards");
+        assert!(t1 > 1_600_000_000_000, "must be real epoch millis");
     }
 }

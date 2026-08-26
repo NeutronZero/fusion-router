@@ -71,6 +71,12 @@ pub enum RouterError {
         request_id: Uuid,
         rule_id: String,
     },
+    /// The requested model does not match any configured provider prefix in a
+    /// multi-provider setup. Fail-closed: no silent default substitution.
+    NoRouteForModel {
+        model: String,
+        available_prefixes: Vec<String>,
+    },
 }
 
 impl fmt::Display for RouterError {
@@ -131,6 +137,27 @@ impl fmt::Display for RouterError {
             } => {
                 write!(f, "[{}] Denied by policy rule '{}'", request_id, rule_id)
             }
+            Self::NoRouteForModel {
+                model,
+                available_prefixes,
+            } => {
+                write!(
+                    f,
+                    "no route for model '{}': no configured provider prefix matches; configured prefixes: {}",
+                    model,
+                    Self::format_prefixes(available_prefixes)
+                )
+            }
+        }
+    }
+}
+
+impl RouterError {
+    fn format_prefixes(prefixes: &[String]) -> String {
+        if prefixes.is_empty() {
+            "<none>".to_string()
+        } else {
+            prefixes.join(", ")
         }
     }
 }
@@ -148,6 +175,9 @@ impl RouterError {
             Self::MaxIterationsExceeded { request_id, .. } => *request_id,
             Self::Internal { request_id, .. } => *request_id,
             Self::PolicyDenied { request_id, .. } => *request_id,
+            // Routing rejections originate in the provider registry before a
+            // pipeline request_id exists; handlers log their own request_id.
+            Self::NoRouteForModel { .. } => Uuid::nil(),
         }
     }
 
@@ -161,6 +191,7 @@ impl RouterError {
             Self::MaxIterationsExceeded { stage, .. } => Some(*stage),
             Self::Internal { .. } => None,
             Self::PolicyDenied { .. } => Some(PipelineStage::Compilation),
+            Self::NoRouteForModel { .. } => None,
         }
     }
 
@@ -174,6 +205,8 @@ impl RouterError {
             Self::MaxIterationsExceeded { .. } => axum::http::StatusCode::TOO_MANY_REQUESTS,
             Self::Internal { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Self::PolicyDenied { .. } => axum::http::StatusCode::FORBIDDEN,
+            // Unknown model family is a client error, not a server fault.
+            Self::NoRouteForModel { .. } => axum::http::StatusCode::BAD_REQUEST,
         }
     }
 
@@ -198,6 +231,16 @@ impl RouterError {
             Self::PolicyDenied { rule_id, .. } => {
                 format!("request denied by policy rule '{rule_id}'")
             }
+            // Prefixes are public routing configuration (clients use them to
+            // address providers), so listing them is safe and actionable.
+            Self::NoRouteForModel {
+                model,
+                available_prefixes,
+            } => format!(
+                "model '{}' does not match any configured provider prefix; available prefixes: {}",
+                model,
+                Self::format_prefixes(available_prefixes)
+            ),
         }
     }
 }

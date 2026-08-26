@@ -7,6 +7,7 @@ use axum::{
 };
 use futures::stream::{self, BoxStream};
 use futures::StreamExt;
+use tracing::Instrument;
 use uuid::Uuid;
 
 use super::chat::{process_request, ChatOutcome};
@@ -20,14 +21,12 @@ pub async fn anthropic_messages(
     let request_id = Uuid::new_v4();
     let model_name = anthropic_req.model.clone();
     let is_stream = anthropic_req.stream;
-
-    let _span = tracing::info_span!(
+    let span = tracing::info_span!(
         "anthropic_messages",
         request_id = %request_id,
         model = %model_name,
         stream = %is_stream
     );
-    let _enter = _span.enter();
 
     if model_name.trim().is_empty() {
         tracing::warn!(request_id = %request_id, "request rejected: empty model");
@@ -51,7 +50,11 @@ pub async fn anthropic_messages(
     // Anthropic-format SSE events.
     tracing::info!("processing anthropic request through full pipeline");
 
-    let result = process_request(&state, &request, request_id, false).await;
+    // `Instrument` keeps span context across .await without holding an enter
+    // guard over a suspension point.
+    let result = process_request(&state, &request, request_id, false)
+        .instrument(span)
+        .await;
 
     match result {
         Ok(outcome) => {
@@ -71,6 +74,8 @@ pub async fn anthropic_messages(
             }
         }
         Err(e) => {
+            // Full detail (Display) stays server-side; clients get the same
+            // sanitized message as the OpenAI-compatible endpoint.
             let status = e.status_code();
             tracing::error!(request_id = %request_id, stage = ?e.stage(), error = %e, "anthropic pipeline failed");
             (
@@ -79,7 +84,7 @@ pub async fn anthropic_messages(
                     "type": "error",
                     "error": {
                         "type": "api_error",
-                        "message": e.to_string()
+                        "message": e.user_message()
                     }
                 })),
             )

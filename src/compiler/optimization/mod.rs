@@ -99,13 +99,43 @@ impl OptimizationPass for DeadNodeEliminationPass {
             .filter(|e| live.contains(&e.from) && live.contains(&e.to))
             .collect();
 
+        let entry_fallback = surviving_entry_root(&live_nodes, &live_edges);
+        let entry_carried = graph
+            .entry_node_id
+            .as_ref()
+            .filter(|entry| live_nodes.iter().any(|n| &n.id == *entry))
+            .cloned();
+
         let mut result = crate::compiler::ir::PrimitiveGraph::new(&graph_id);
         result.nodes = live_nodes;
         result.edges = live_edges;
         result.version = crate::compiler::ir::PRIMITIVE_GRAPH_VERSION;
+        // Idempotency: carry the original entry point across the rebuild when
+        // it survived elimination. A stale/eliminated entry falls back to the
+        // first surviving topological root so entry_node_id always references
+        // a real node (AD-008) and re-running the pass is a no-op.
+        result.entry_node_id = entry_carried.or(entry_fallback);
 
         Ok(result)
     }
+}
+
+/// Picks a deterministic entry fallback among surviving nodes: the first
+/// topological root (no incoming edges), or the first surviving node when the
+/// survivors form a cycle. Returns `None` only when nothing survived.
+fn surviving_entry_root(
+    nodes: &[crate::compiler::ir::PrimitiveNode],
+    edges: &[crate::compiler::ir::PrimitiveEdge],
+) -> Option<String> {
+    let first_node = nodes.first()?.id.clone();
+    Some(
+        nodes
+            .iter()
+            .map(|n| &n.id)
+            .find(|id| !edges.iter().any(|e| &e.to == *id))
+            .cloned()
+            .unwrap_or(first_node),
+    )
 }
 
 pub struct FanOutConsolidationPass {
@@ -255,10 +285,20 @@ impl OptimizationPass for FanOutConsolidationPass {
         nodes.retain(|n| !remove_ids.contains(&n.id));
         edges.retain(|e| !remove_ids.contains(&e.from) && !remove_ids.contains(&e.to));
 
+        let entry_fallback = surviving_entry_root(&nodes, &edges);
+        let entry_carried = graph
+            .entry_node_id
+            .as_ref()
+            .filter(|entry| nodes.iter().any(|n| &n.id == *entry))
+            .cloned();
+
         let mut result = PrimitiveGraph::new(&graph_id);
         result.nodes = nodes;
         result.edges = edges;
         result.version = crate::compiler::ir::PRIMITIVE_GRAPH_VERSION;
+        // Preserve the explicit entry point across the rebuild so idempotent
+        // pipelines keep AD-008 guarantees (see DeadNodeEliminationPass).
+        result.entry_node_id = entry_carried.or(entry_fallback);
 
         Ok(result)
     }
@@ -300,6 +340,86 @@ impl OptimizationPipeline {
 mod tests {
     use super::*;
     use crate::compiler::ir::{PrimitiveNode, PrimitiveNodeKind};
+
+    fn gen_node(id: &str) -> PrimitiveNode {
+        PrimitiveNode {
+            id: id.to_string(),
+            kind: PrimitiveNodeKind::LLMGenerate {
+                model: "gpt-4".into(),
+                role: None,
+            },
+            artifact_kind: None,
+        }
+    }
+
+    fn fanout_graph_b_e_c() -> PrimitiveGraph {
+        // Nodes [B, E, C]; edges E→B, E→C; entry=E.
+        let mut g = PrimitiveGraph::new("dne_idempotency");
+        for id in ["B", "E", "C"] {
+            g.add_node(gen_node(id));
+        }
+        g.add_edge("E", "B", None);
+        g.add_edge("E", "C", None);
+        g.entry_node_id = Some("E".into());
+        g
+    }
+
+    #[test]
+    fn test_dne_preserves_entry_node_and_is_idempotent() {
+        let pass = DeadNodeEliminationPass::new();
+
+        let once = pass.optimize(fanout_graph_b_e_c()).unwrap();
+        assert_eq!(once.nodes.len(), 3, "B, E, C are all reachable from E");
+        assert!(
+            once.nodes.iter().any(|n| n.id == "E") && once.nodes.iter().any(|n| n.id == "C"),
+            "E and C must survive"
+        );
+        assert_eq!(
+            once.entry_node_id.as_deref(),
+            Some("E"),
+            "rebuilt graph must carry over entry_node_id"
+        );
+
+        let twice = pass.optimize(once.clone()).unwrap();
+        assert_eq!(once, twice, "applying the pass twice must be a no-op");
+    }
+
+    #[test]
+    fn test_dne_replaces_stale_entry_with_surviving_root() {
+        let mut g = PrimitiveGraph::new("stale_entry");
+        g.add_node(gen_node("A"));
+        g.add_node(gen_node("B"));
+        g.add_edge("A", "B", None);
+        g.entry_node_id = Some("ghost".into());
+
+        let out = DeadNodeEliminationPass::new().optimize(g).unwrap();
+        assert_eq!(out.nodes.len(), 2);
+        assert_eq!(
+            out.entry_node_id.as_deref(),
+            Some("A"),
+            "stale entry must fall back to the first surviving topological root"
+        );
+    }
+
+    #[test]
+    fn test_fanout_consolidation_preserves_entry_node() {
+        let mut g = PrimitiveGraph::new("fanout_entry");
+        g.add_node(gen_node("A"));
+        g.add_node(PrimitiveNode {
+            id: "F".into(),
+            kind: PrimitiveNodeKind::FanOut { count: 1 },
+            artifact_kind: None,
+        });
+        g.add_node(gen_node("B"));
+        g.add_edge("A", "F", None);
+        g.add_edge("F", "B", None);
+        g.entry_node_id = Some("A".into());
+
+        let out = FanOutConsolidationPass::new().optimize(g).unwrap();
+        assert_eq!(out.nodes.len(), 2);
+        assert_eq!(out.entry_node_id.as_deref(), Some("A"));
+        assert!(out.edges.iter().any(|e| e.from == "A" && e.to == "B"));
+    }
 
     struct TestPass {
         name: &'static str,

@@ -29,6 +29,120 @@ pub struct ExecuteWorkflowRequest {
     pub workflow: WorkflowIR,
 }
 
+/// Classification of execution-plane failures. `detail` never reaches the
+/// client; it is logged server-side only. Clients receive
+/// [`ExecutionError::status_code`] + [`ExecutionError::public_message`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionErrorKind {
+    /// Malformed/invalid workflow specification (client payload problem).
+    Validation,
+    /// Live policy configuration rejected the workflow.
+    Policy,
+    /// Workflow failed to compile.
+    Compilation,
+    /// Scheduler could not run the graph.
+    Scheduling,
+    /// An upstream provider/node execution failed.
+    Upstream,
+    /// Internal infrastructure failure (session store, etc.).
+    Internal,
+}
+
+#[derive(Debug)]
+pub struct ExecutionError {
+    kind: ExecutionErrorKind,
+    detail: String,
+}
+
+impl ExecutionError {
+    pub fn validation(detail: impl Into<String>) -> Self {
+        Self {
+            kind: ExecutionErrorKind::Validation,
+            detail: detail.into(),
+        }
+    }
+    pub fn policy(detail: impl Into<String>) -> Self {
+        Self {
+            kind: ExecutionErrorKind::Policy,
+            detail: detail.into(),
+        }
+    }
+    pub fn compilation(detail: impl Into<String>) -> Self {
+        Self {
+            kind: ExecutionErrorKind::Compilation,
+            detail: detail.into(),
+        }
+    }
+    pub fn scheduling(detail: impl Into<String>) -> Self {
+        Self {
+            kind: ExecutionErrorKind::Scheduling,
+            detail: detail.into(),
+        }
+    }
+    pub fn upstream(detail: impl Into<String>) -> Self {
+        Self {
+            kind: ExecutionErrorKind::Upstream,
+            detail: detail.into(),
+        }
+    }
+    pub fn internal(detail: impl Into<String>) -> Self {
+        Self {
+            kind: ExecutionErrorKind::Internal,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn kind(&self) -> ExecutionErrorKind {
+        self.kind
+    }
+
+    /// Full internal detail — server logs only.
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    pub fn status_code(&self) -> axum::http::StatusCode {
+        use axum::http::StatusCode;
+        match self.kind {
+            // Client payload problem.
+            ExecutionErrorKind::Validation => StatusCode::BAD_REQUEST,
+            // Upstream provider failures are a gateway condition.
+            ExecutionErrorKind::Upstream => StatusCode::BAD_GATEWAY,
+            // Compilation/policy/scheduling/infrastructure faults are ours.
+            ExecutionErrorKind::Policy
+            | ExecutionErrorKind::Compilation
+            | ExecutionErrorKind::Scheduling
+            | ExecutionErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    /// Client-facing message. Validation failures describe the client's own
+    /// payload problem (they are the client's fault and actionable — Law 5
+    /// invariants require naming the violated rule). All other kinds are
+    /// opaque: internal/upstream detail must never reach clients.
+    pub fn public_message(&self) -> String {
+        match self.kind {
+            ExecutionErrorKind::Validation => {
+                let sanitized: String = self
+                    .detail
+                    .chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .collect();
+                let mut clipped: String = sanitized.chars().take(300).collect();
+                if sanitized.chars().count() > 300 {
+                    clipped.push('…');
+                }
+                format!("invalid workflow specification: {clipped}")
+            }
+            ExecutionErrorKind::Policy => "workflow rejected by policy configuration".into(),
+            ExecutionErrorKind::Compilation => "workflow failed to compile".into(),
+            ExecutionErrorKind::Scheduling => "workflow scheduling failed".into(),
+            ExecutionErrorKind::Upstream => "upstream node execution failed".into(),
+            ExecutionErrorKind::Internal => "internal execution error".into(),
+        }
+    }
+}
+
 /// Orchestrates a single workflow execution end-to-end.
 pub struct ExecutionPlane {
     bus: Arc<BroadcastEventBus>,
@@ -118,8 +232,11 @@ impl ExecutionPlane {
         }
     }
 
-    /// Runs the submitted workflow and streams events onto the bus.
-    pub async fn execute(&self, request: ExecuteWorkflowRequest) -> Result<Value, String> {
+    /// Runs the submitted workflow with typed, classifiable failures.
+    pub async fn execute_typed(
+        &self,
+        request: ExecuteWorkflowRequest,
+    ) -> Result<Value, ExecutionError> {
         let started_at = std::time::Instant::now();
         let execution_id = uuid::Uuid::new_v4().to_string();
         let workflow_id = request.workflow.plan_id.to_string();
@@ -127,7 +244,7 @@ impl ExecutionPlane {
             .lifecycle
             .create_session(&request.trigger_name, request.workflow.plan_id)
             .await
-            .map_err(|e| format!("session creation failed: {e}"))?;
+            .map_err(|e| ExecutionError::internal(format!("session creation failed: {e}")))?;
         let session_id = session.session_id.to_string();
 
         let mut seq: u64 = 0;
@@ -145,12 +262,21 @@ impl ExecutionPlane {
         let policy_ir = self
             .policy_registry
             .policy_ir()
-            .map_err(|e| format!("policy configuration rejected: {e}"))?;
+            .map_err(|e| ExecutionError::policy(format!("policy configuration rejected: {e}")))?;
         let compiler = (self.compiler_factory)(policy_ir);
         let graph = compiler
             .compile(request.workflow.clone())
             .await
-            .map_err(|e| format!("compilation failed: {e}"))?;
+            .map_err(|e| match &e {
+                // Malformed workflow structure is the caller's payload problem;
+                // anything else is a server-side compilation fault.
+                crate::types::CompilerError::ValidationError { pass, message, .. } => {
+                    ExecutionError::validation(format!(
+                        "workflow validation failed in pass '{pass}': {message}"
+                    ))
+                }
+                _ => ExecutionError::compilation(format!("compilation failed: {e}")),
+            })?;
 
         self.emit(
             &mut seq,
@@ -182,7 +308,7 @@ impl ExecutionPlane {
                 &tokio_util::sync::CancellationToken::new(),
             )
             .await
-            .map_err(|e| format!("scheduling failed: {e}"))?;
+            .map_err(|e| ExecutionError::scheduling(format!("scheduling failed: {e}")))?;
 
         let order = Self::topological_order(&graph);
         let mut outputs: HashMap<String, Value> = HashMap::new();
@@ -224,7 +350,9 @@ impl ExecutionPlane {
                 },
             )
             .await;
-            return Err(format!("node {} failed: {}", node_id, error));
+            return Err(ExecutionError::upstream(format!(
+                "node {node_id} failed: {error}"
+            )));
         }
 
         for &idx in &order {
@@ -293,7 +421,7 @@ impl ExecutionPlane {
                         },
                     )
                     .await;
-                    return Err(error);
+                    return Err(ExecutionError::upstream(error));
                 }
             }
         }
@@ -318,7 +446,20 @@ impl ExecutionPlane {
             "node_outputs": outputs,
         }))
     }
+
+    /// Legacy stringly-typed entry point retained for existing callers
+    /// (snapshot/replay tooling). New code should use [`Self::execute_typed`].
+    pub async fn execute(&self, request: ExecuteWorkflowRequest) -> Result<Value, String> {
+        self.execute_typed(request)
+            .await
+            .map_err(|e| e.detail().to_string())
+    }
 }
+
+/// Scheduler concurrency used when the caller does not plumb a configured
+/// value. Production wiring MUST use [`build_execution_plane_with_concurrency`]
+/// with `resources.max_concurrent_nodes`.
+pub const DEFAULT_EXECUTION_CONCURRENCY: u32 = 4;
 
 /// Returns the production execution plane with an in-memory session store.
 ///
@@ -326,12 +467,35 @@ impl ExecutionPlane {
 /// the same mandatory pass pipeline as every other execution endpoint, with
 /// the live policy snapshot attached per execution. An empty pass list is
 /// never accepted here.
+///
+/// Kept for existing callers (tests, snapshot tooling); delegates to
+/// [`build_execution_plane_with_concurrency`] with the default concurrency.
 pub fn build_execution_plane(
     bus: Arc<BroadcastEventBus>,
     executor: Arc<dyn Executor>,
     model_catalog: crate::types::ModelCatalog,
     resource_manager: Arc<dyn crate::resource::ResourceManager>,
     policy_registry: Arc<crate::policy::PolicyRegistry>,
+) -> Arc<ExecutionPlane> {
+    build_execution_plane_with_concurrency(
+        bus,
+        executor,
+        model_catalog,
+        resource_manager,
+        policy_registry,
+        DEFAULT_EXECUTION_CONCURRENCY,
+    )
+}
+
+/// Like [`build_execution_plane`], but honors the configured node-concurrency
+/// ceiling (`resources.max_concurrent_nodes`) instead of a hardcoded value.
+pub fn build_execution_plane_with_concurrency(
+    bus: Arc<BroadcastEventBus>,
+    executor: Arc<dyn Executor>,
+    model_catalog: crate::types::ModelCatalog,
+    resource_manager: Arc<dyn crate::resource::ResourceManager>,
+    policy_registry: Arc<crate::policy::PolicyRegistry>,
+    max_concurrent_nodes: u32,
 ) -> Arc<ExecutionPlane> {
     let lifecycle = Arc::new(LifecycleManager::new(Arc::new(InMemorySessionStore::new())));
     let compiler_factory: CompilerFactory = Arc::new(move |policy_ir| {
@@ -341,17 +505,28 @@ pub fn build_execution_plane(
             policy_ir,
         ))
     });
+    let scheduler_concurrency = (max_concurrent_nodes.max(1)) as usize;
+    tracing::debug!(
+        scheduler_concurrency,
+        "execution plane built with configured node concurrency"
+    );
     Arc::new(ExecutionPlane::new(
         bus,
         compiler_factory,
         policy_registry,
-        Arc::new(DefaultScheduler::new(4)),
+        Arc::new(DefaultScheduler::new(scheduler_concurrency)),
         executor,
         lifecycle,
     ))
 }
 
 /// HTTP handler for `POST /v1/executions`.
+///
+/// Error mapping (details logged server-side only):
+/// - malformed/invalid workflow payload → 400 with opaque validation message;
+/// - compilation / policy / scheduling / internal failures → 500 with opaque
+///   messages;
+/// - upstream provider/node failures → 502 with an opaque message.
 pub async fn execute_workflow_handler(
     axum::extract::State(plane): axum::extract::State<Arc<ExecutionPlane>>,
     axum::Json(request): axum::Json<ExecuteWorkflowRequest>,
@@ -359,7 +534,7 @@ pub async fn execute_workflow_handler(
     let metrics = crate::telemetry::metrics::FusionMetrics::instance();
     metrics.requests_total.inc();
     let start = std::time::Instant::now();
-    let result = plane.execute(request).await;
+    let result = plane.execute_typed(request).await;
     metrics
         .request_duration_seconds
         .with_label_values(&["/v1/executions"])
@@ -368,9 +543,15 @@ pub async fn execute_workflow_handler(
         Ok(result) => Ok(axum::Json(result)),
         Err(error) => {
             metrics.errors_total.inc();
+            // Internal detail stays in logs; the response body is opaque.
+            tracing::warn!(
+                status = %error.status_code(),
+                error = ?error,
+                "workflow execution failed"
+            );
             Err((
-                axum::http::StatusCode::BAD_REQUEST,
-                axum::Json(json!({ "error": error })),
+                error.status_code(),
+                axum::Json(json!({ "error": error.public_message() })),
             ))
         }
     }
@@ -548,9 +729,68 @@ mod tests {
             workflow: test_workflow(),
         };
 
-        let result = plane.execute(request).await;
+        let result = plane.execute_typed(request).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("provider exploded"));
+        let err = result.unwrap_err();
+        assert!(
+            err.detail().contains("provider exploded"),
+            "detail must carry the provider error for server logs"
+        );
+        assert_eq!(err.kind(), ExecutionErrorKind::Upstream);
+        assert_eq!(err.status_code(), axum::http::StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn test_execution_error_classification_and_opaque_messages() {
+        use axum::http::StatusCode;
+
+        let cases: Vec<(ExecutionError, StatusCode)> = vec![
+            (
+                ExecutionError::validation("workflow node 3 references unknown field 'foo'"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                ExecutionError::policy("policy configuration rejected: rule 7 malformed"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                ExecutionError::compilation("compilation failed: pass explosion panicked"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                ExecutionError::scheduling("scheduling failed: lease lost"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                ExecutionError::upstream("node abc failed: provider exploded"),
+                StatusCode::BAD_GATEWAY,
+            ),
+            (
+                ExecutionError::internal("session creation failed: db locked"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ];
+
+        for (err, expected_status) in cases {
+            assert_eq!(err.status_code(), expected_status, "kind {:?}", err.kind());
+            let public = err.public_message();
+            assert!(
+                !public.contains(&err.detail().to_lowercase()),
+                "public message must not embed internal detail"
+            );
+            assert!(!public.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_validation_error_public_message_is_opaque() {
+        let err = ExecutionError::validation(
+            "unknown strategy kind 'QuantumConsensus' on node 5 with secret sk-abcdef",
+        );
+        let public = err.public_message();
+        assert_eq!(public, "invalid workflow specification");
+        assert!(!public.contains("sk-"), "must not leak credential material");
+        assert!(!public.contains("node 5"));
     }
 
     #[tokio::test]

@@ -49,7 +49,7 @@ impl UpgradeBackend for FilesystemUpgradeBackend {
 
     fn discover_configs(&self, _ctx: &UpgradeContext) -> Result<Vec<ConfigFixture>, GateError> {
         let manifest = load_fixture_manifest(&self.loader)?;
-        let entries = discover_fixtures(&manifest, FixtureKind::Configs);
+        let entries = discover_fixtures(&manifest, FixtureKind::Configs)?;
         let mut results = Vec::new();
         for entry in &entries {
             results.push(ConfigFixture {
@@ -142,6 +142,7 @@ impl ReleaseGate for UpgradeGate {
                 Err(e) => return GateExecution::ExecutionError(e),
             };
             let parse_result: Result<AppConfig, _> = serde_yaml::from_str(&content);
+            let parse_error = parse_result.as_ref().err().map(|e| e.to_string());
             let mut validation_errors: Vec<String> = Vec::new();
             if let Ok(config) = &parse_result {
                 if let Err(errors) = config.validate() {
@@ -150,10 +151,14 @@ impl ReleaseGate for UpgradeGate {
                     }
                 }
             }
-            let has_errors = parse_result.is_err() || !validation_errors.is_empty();
+            // Gate integrity: a parse failure is never a mere "warning".
+            // ExpectedOutcome::Warning tolerates validation warnings, but an
+            // unparseable config always fails the gate case.
+            let has_validation_errors = !validation_errors.is_empty();
+            let has_errors = parse_error.is_some() || has_validation_errors;
             let check_passed = match fixture.expected {
                 ExpectedOutcome::Pass => !has_errors,
-                ExpectedOutcome::Warning => true,
+                ExpectedOutcome::Warning => parse_error.is_none(),
                 ExpectedOutcome::Fail => has_errors,
             };
             if !check_passed {
@@ -162,7 +167,9 @@ impl ReleaseGate for UpgradeGate {
             let status = if check_passed { "PASS" } else { "FAIL" };
             let detail = match fixture.expected {
                 ExpectedOutcome::Pass => {
-                    if has_errors {
+                    if let Some(err) = &parse_error {
+                        format!("expected pass but config failed to parse: {err}")
+                    } else if has_validation_errors {
                         format!(
                             "expected pass but got errors: {}",
                             validation_errors.join("; ")
@@ -172,14 +179,18 @@ impl ReleaseGate for UpgradeGate {
                     }
                 }
                 ExpectedOutcome::Warning => {
-                    if has_errors {
+                    if let Some(err) = &parse_error {
+                        format!("parse error (fatal even for warning outcomes): {err}")
+                    } else if has_validation_errors {
                         format!("warnings (expected): {}", validation_errors.join("; "))
                     } else {
                         "no warnings (expected some)".into()
                     }
                 }
                 ExpectedOutcome::Fail => {
-                    if has_errors {
+                    if let Some(err) = &parse_error {
+                        format!("expected failure (parse error): {err}")
+                    } else if has_validation_errors {
                         format!("expected failure: {}", validation_errors.join("; "))
                     } else {
                         "expected fail but passed (regression)".into()
@@ -335,6 +346,69 @@ auth:
                 content: Some("server:\n  port: 0\nresources:\n  max_daily_cost: 100.0\n  max_daily_tokens: 1000000\n".into()),
             },
         ]};
+        let gate = UpgradeGate::new(
+            Box::new(backend),
+            UpgradeGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
+        );
+        let ctx = GateContext {
+            workspace_root: PathBuf::from("."),
+            baseline_version: Some(semver::Version::new(0, 11, 0)),
+        };
+        let result = gate.run(&ctx).await;
+        assert!(result.passed());
+    }
+
+    #[tokio::test]
+    async fn test_upgrade_gate_warning_outcome_with_parse_error_fails() {
+        // Warning tolerates validation warnings — but an unparseable config
+        // must always fail the gate case.
+        let backend = MockUpgradeBackend {
+            configs: vec![ConfigFixture {
+                version: semver::Version::new(0, 9, 0),
+                path: PathBuf::from("configs/v0.9-broken"),
+                expected: ExpectedOutcome::Warning,
+                content: Some("server: [this is: not: valid yaml".into()),
+            }],
+        };
+        let gate = UpgradeGate::new(
+            Box::new(backend),
+            UpgradeGateConfig {
+                fixture_root: PathBuf::from("."),
+            },
+        );
+        let ctx = GateContext {
+            workspace_root: PathBuf::from("."),
+            baseline_version: Some(semver::Version::new(0, 11, 0)),
+        };
+        let result = gate.run(&ctx).await;
+        assert!(
+            !result.passed(),
+            "parse errors must fail even warning-outcome cases"
+        );
+        if let GateExecution::Success(res) = result {
+            let check = &res.details[0];
+            assert!(
+                check.message.contains("parse error"),
+                "detail should name the parse error: {}",
+                check.message
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_upgrade_gate_fail_outcome_with_parse_error_passes_case() {
+        // A config that was ALWAYS broken parses no better today: expected
+        // failure with a parse error is still the expected outcome.
+        let backend = MockUpgradeBackend {
+            configs: vec![ConfigFixture {
+                version: semver::Version::new(0, 8, 0),
+                path: PathBuf::from("configs/v0.8-broken"),
+                expected: ExpectedOutcome::Fail,
+                content: Some("::::".into()),
+            }],
+        };
         let gate = UpgradeGate::new(
             Box::new(backend),
             UpgradeGateConfig {

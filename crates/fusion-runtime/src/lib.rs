@@ -582,8 +582,9 @@ impl Executor for ProviderExecutor {
         let start = std::time::Instant::now();
         let mut last_error: Option<String> = None;
 
-        // Primary model attempts: 1 + max_retries
-        let mut attempts = 1 + node.retry_policy.max_retries;
+        // Primary model attempts: 1 + max_retries (saturating so u32::MAX
+        // cannot overflow).
+        let mut attempts = node.retry_policy.max_retries.saturating_add(1);
         loop {
             if attempts == 0 {
                 break;
@@ -1016,6 +1017,28 @@ mod tests {
             provider.attempt_count(),
             2,
             "2 attempts: 1 fail + 1 success"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_max_retries_u32_max_does_not_overflow_attempts() {
+        let provider = Arc::new(FlakyProvider::new(0));
+        let executor = ProviderExecutor::new(provider.clone());
+        let node = make_llm_node("primary-model", u32::MAX, None);
+        // `attempts = 1 + max_retries` used to overflow-panic in debug builds;
+        // the saturating computation must run and the first success must stop
+        // the retry loop immediately.
+        let result = executor
+            .execute_node(&node, &NodeExecContext::default())
+            .await;
+        assert!(
+            matches!(result.state, NodeState::Succeeded),
+            "immediate success must not panic on u32::MAX retries"
+        );
+        assert_eq!(
+            provider.attempt_count(),
+            1,
+            "success on the first attempt consumes exactly one attempt"
         );
     }
 

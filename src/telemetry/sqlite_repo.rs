@@ -11,6 +11,9 @@ pub struct SqliteEvidenceRepository {
     conn: Arc<Mutex<Connection>>,
     snapshot_cache: Arc<tokio::sync::Mutex<Option<(std::time::Instant, EvidenceSnapshot)>>>,
     snapshot_ttl: std::time::Duration,
+    /// Serializes cache-miss recomputation so a burst of concurrent
+    /// `snapshot()` calls cannot stampede into N full-table aggregate scans.
+    snapshot_inflight: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SqliteEvidenceRepository {
@@ -31,13 +34,16 @@ impl SqliteEvidenceRepository {
                  cost INTEGER NOT NULL,
                  success INTEGER NOT NULL,
                  timestamp INTEGER NOT NULL
-             )",
+             );
+             CREATE INDEX IF NOT EXISTS idx_execution_records_timestamp
+                 ON execution_records(timestamp)",
         )?;
         info!("SQLite evidence repository initialized at path: {}", path);
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             snapshot_cache: Arc::new(tokio::sync::Mutex::new(None)),
             snapshot_ttl: std::time::Duration::ZERO,
+            snapshot_inflight: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -124,6 +130,10 @@ impl EvidenceRepository for SqliteEvidenceRepository {
     }
 
     async fn snapshot(&self) -> anyhow::Result<EvidenceSnapshot> {
+        // Single-flight: concurrent callers queue here, so only one
+        // recomputes the aggregate while the rest reuse its result.
+        let _inflight = self.snapshot_inflight.lock().await;
+
         if !self.snapshot_ttl.is_zero() {
             let cache = self.snapshot_cache.lock().await;
             if let Some((at, snap)) = cache.as_ref() {
@@ -321,6 +331,86 @@ mod tests {
             .unwrap();
         let _ = std::fs::remove_file(&tmp);
         assert_eq!(mode, "wal", "journal_mode should be WAL");
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_index_migration() -> anyhow::Result<()> {
+        let tmp = std::env::temp_dir().join(format!("fusion_idx_test_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        let repo = SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap();
+        repo.record(make_record(
+            "gpt-4",
+            "openai",
+            Intent::Code,
+            100,
+            50,
+            NanoUSD::from_nanos(1_000),
+            true,
+        ))
+        .await
+        .unwrap();
+        drop(repo);
+
+        let check = Connection::open(&tmp).unwrap();
+        let index_name: String = check
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_execution_records_timestamp'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("timestamp index must exist after migration");
+        assert_eq!(index_name, "idx_execution_records_timestamp");
+
+        // The index must actually back timestamp window queries.
+        let mut stmt = check.prepare(
+            "SELECT model FROM execution_records
+             INDEXED BY idx_execution_records_timestamp
+             WHERE timestamp >= ?1",
+        )?;
+        let mut models: Vec<String> = Vec::new();
+        let rows = stmt.query_map([0i64], |row| row.get::<_, String>(0))?;
+        for r in rows {
+            models.push(r?);
+        }
+        assert!(models.contains(&"gpt-4".to_string()));
+        let _ = std::fs::remove_file(&tmp);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_snapshots_single_flight() {
+        let tmp = std::env::temp_dir().join(format!("fusion_sf_test_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        let repo = Arc::new(SqliteEvidenceRepository::new(tmp.to_str().unwrap()).unwrap());
+        for i in 0..5 {
+            repo.record(make_record(
+                "gpt-4",
+                "openai",
+                Intent::Code,
+                100,
+                50,
+                NanoUSD::from_nanos(1_000),
+                i % 2 == 0,
+            ))
+            .await
+            .unwrap();
+        }
+
+        // Fire a burst of concurrent snapshots: all must succeed and agree
+        // (single-flight serialization, no stampede/panic).
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let repo = repo.clone();
+            handles.push(tokio::spawn(async move { repo.snapshot().await.unwrap() }));
+        }
+        for h in handles {
+            let snap = h.await.unwrap();
+            assert_eq!(snap.record_count, 5);
+        }
+
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[tokio::test]

@@ -502,24 +502,63 @@ async fn test_concurrent_dag_workflows() {
     assert_eq!(err, 0, "All concurrent DAG workflows should succeed");
 }
 
+struct LoopStressExecutor {
+    calls: std::sync::atomic::AtomicUsize,
+    max_iterations: usize,
+}
+
+impl LoopStressExecutor {
+    fn new(max_iterations: usize) -> Self {
+        Self {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            max_iterations,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl fusion_router::executor::Executor for LoopStressExecutor {
+    async fn execute_node(
+        &self,
+        node: &fusion_router::types::ExecutionNode,
+        _ctx: &fusion_router::types::NodeExecContext,
+    ) -> fusion_router::types::NodeExecutionResult {
+        let start = Instant::now();
+        if node.kind == fusion_router::types::ExecutionNodeKind::Loop {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let should_continue = n <= self.max_iterations;
+            return fusion_router::types::NodeExecutionResult {
+                state: fusion_router::types::NodeState::Succeeded,
+                usage: None,
+                latency_ms: start.elapsed().as_millis() as u64,
+                output: Some(serde_json::json!(should_continue)),
+            };
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        fusion_router::types::NodeExecutionResult {
+            state: fusion_router::types::NodeState::Succeeded,
+            usage: Some(Usage {
+                prompt_tokens: 10,
+                completion_tokens: 10,
+                total_tokens: 20,
+            }),
+            latency_ms: start.elapsed().as_millis() as u64,
+            output: Some(serde_json::json!("iter")),
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_loop_iteration_stress() {
-    use fusion_router::executor::DefaultExecutor;
     use fusion_router::scheduler::default::DefaultScheduler;
     use fusion_router::scheduler::Scheduler;
-    use std::collections::HashMap;
-
-    use fusion_router::strategies::single::SingleStrategy;
-    use fusion_router::strategies::Strategy;
     use fusion_router::types::{
         ExecutionEdge, ExecutionGraph, ExecutionNode, ExecutionNodeKind, GraphMetadata,
         ReservationId, RetryPolicy, StrategyKind,
     };
+    use std::collections::HashMap;
 
-    let provider: Arc<dyn ChatProvider + Send + Sync> = Arc::new(LoadMockProvider);
-    let mut strategies: HashMap<StrategyKind, Box<dyn Strategy + Send + Sync>> = HashMap::new();
-    strategies.insert(StrategyKind::Single, Box::new(SingleStrategy));
-    let executor = Arc::new(DefaultExecutor::new(provider, strategies));
+    let executor = Arc::new(LoopStressExecutor::new(50));
     let scheduler = Arc::new(DefaultScheduler::new(16));
 
     let loop_id = Uuid::new_v4();
@@ -692,7 +731,10 @@ async fn test_cache_contention() {
     use fusion_router::cache::SemanticCache;
     use std::sync::Arc;
 
-    let cache = Arc::new(SemanticCache::new(Arc::new(MockEmbedder), 0.9, 5000, 384));
+    let cache = Arc::new(
+        SemanticCache::new(Arc::new(MockEmbedder), 0.9, 5000, 384)
+            .expect("semantic cache initializes"),
+    );
 
     let mut handles = Vec::new();
     for i in 0..50 {

@@ -722,16 +722,13 @@ impl CompilerEngine {
             Some(scorer) => scorer.score(provider_name, ir).await,
             None => None,
         };
+        // The IR estimate is already NanoUSD — compare nanos directly against
+        // the resource manager quota. The previous `checked_from_decimal_usd(
+        // format!("{:.9}", cost))` round-trip always failed (Display includes
+        // a '$') and the silent `unwrap_or(ZERO)` made every route affordable.
         let budget_score = if self
             .resource_manager
-            .can_afford(
-                fusion_core::NanoUSD::checked_from_decimal_usd(&format!(
-                    "{:.9}",
-                    ir.metadata.estimated_cost
-                ))
-                .unwrap_or(fusion_core::NanoUSD::ZERO),
-                ir.metadata.estimated_tokens,
-            )
+            .can_afford(ir.metadata.estimated_cost, ir.metadata.estimated_tokens)
             .await
         {
             Some(1.0)
@@ -1848,6 +1845,51 @@ mod tests {
             (score.total_score - 0.9625).abs() < 1e-9,
             "total was {}",
             score.total_score
+        );
+    }
+
+    #[tokio::test]
+    async fn test_explain_route_budget_score_tracks_estimated_cost() {
+        let ir = test_ir(); // estimated cost: 100_000_000 nanos
+
+        let generous = CompilerEngine::with_resource_manager(Arc::new(StubResourceManager::new(
+            fusion_kernel::resource::Quota {
+                max_daily_cost: NanoUSD::from_nanos(u64::MAX),
+                max_daily_tokens: u64::MAX,
+            },
+        )));
+        let within = generous
+            .explain_route("openrouter", "general question", &ir)
+            .await;
+        assert_eq!(
+            within.budget_score,
+            Some(1.0),
+            "cost under quota must score an affordable budget"
+        );
+
+        // Quota smaller than the IR's estimated cost in nanos: the real cost
+        // must be compared (the old Display-based parse always failed and fell
+        // back to ZERO, making every route look affordable).
+        let tight = CompilerEngine::with_resource_manager(Arc::new(StubResourceManager::new(
+            fusion_kernel::resource::Quota {
+                max_daily_cost: NanoUSD::from_nanos(1),
+                max_daily_tokens: u64::MAX,
+            },
+        )));
+        let over = tight
+            .explain_route("openrouter", "general question", &ir)
+            .await;
+        assert_eq!(
+            over.budget_score,
+            Some(0.0),
+            "cost exceeding budget must be detected"
+        );
+        assert_ne!(over.total_score, 0.0, "other sub-scores still contribute");
+        assert!(
+            over.total_score < within.total_score,
+            "budget-sensitive routing must change when cost exceeds budget: {} !< {}",
+            over.total_score,
+            within.total_score
         );
     }
 

@@ -8,6 +8,30 @@ use fusion_ir::{WorkflowBuilder, WorkflowIR, WorkflowMetadata, WorkflowNodeKind}
 use fusion_kernel::{CapabilityCatalog, CapabilitySystem};
 use std::collections::BTreeMap;
 
+/// Recursive canonical JSON serialization: object keys are sorted at every
+/// depth so the planner identity is immune to map iteration order (mirrors
+/// `canonical_json` in the compiler crate).
+pub(crate) fn canonical_json_value(value: &serde_json::Value) -> String {
+    fn canonicalize(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                let mut out = serde_json::Map::new();
+                for key in keys {
+                    out.insert(key.clone(), canonicalize(&map[key]));
+                }
+                serde_json::Value::Object(out)
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(canonicalize).collect())
+            }
+            other => other.clone(),
+        }
+    }
+    serde_json::to_string(&canonicalize(value)).expect("value always serializes")
+}
+
 /// Canonical Intent Planner.
 ///
 /// Single authoritative planning engine driving workflow synthesis from
@@ -130,8 +154,22 @@ impl IntentPlanner {
             };
 
         // 3. Score and select models for each stage
+        //
+        // Identity inputs must cover every request field that changes the plan
+        // shape: requested_strategy/requested_model/strategy_config alter the
+        // emitted nodes, so distinct requests must never collide on plan_id.
+        // strategy_config is hashed as canonical JSON (recursively sorted keys).
+        let strategy_config_canonical = req
+            .strategy_config
+            .as_ref()
+            .map(|map| {
+                canonical_json_value(&serde_json::Value::Object(
+                    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                ))
+            })
+            .unwrap_or_else(|| "null".to_string());
         let identity = format!(
-            "{:?}|{}|{}|{}|{}|{}|{}|{}",
+            "{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             req.intent,
             req.user_prompt,
             req.requirements.complexity,
@@ -139,7 +177,10 @@ impl IntentPlanner {
             req.policies.version,
             req.model_catalog.catalog.code,
             req.telemetry.avg_latency_ms,
-            req.telemetry.healthy_provider_count
+            req.telemetry.healthy_provider_count,
+            req.requested_strategy.as_deref().unwrap_or(""),
+            req.requested_model.as_deref().unwrap_or(""),
+            strategy_config_canonical,
         );
         let workflow_id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, identity.as_bytes());
         let mut builder = WorkflowBuilder::new().with_workflow_id(workflow_id);
@@ -403,5 +444,113 @@ mod tests {
         let first = planner.plan(&req).unwrap().to_canonical_json().unwrap();
         let second = planner.plan(&req).unwrap().to_canonical_json().unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn repeat_calls_are_fully_deterministic_including_plan_id() {
+        let planner = IntentPlanner::new(ModelCatalog::default());
+        let req = PlanningRequest {
+            intent: ExecutionIntent::Quality,
+            user_prompt: "deterministic identity".into(),
+            requested_model: None,
+            requested_strategy: Some("Consensus".into()),
+            strategy_config: Some(BTreeMap::from([
+                ("count".to_string(), serde_json::json!(3)),
+                ("members".to_string(), serde_json::json!(["a", "b"])),
+            ])),
+            requirements: RequirementsSnapshot::default(),
+            policies: PolicySnapshot::default(),
+            capability_catalog: CapabilityCatalogSnapshot::default(),
+            model_catalog: ModelCatalogSnapshot::default(),
+            telemetry: RoutingTelemetrySnapshot::default(),
+        };
+        let first = planner.plan(&req).unwrap();
+        let second = planner.plan(&req).unwrap();
+        assert_eq!(
+            first.workflow_id(),
+            second.workflow_id(),
+            "repeat call must derive the same plan_id"
+        );
+        assert_eq!(
+            first.to_canonical_json().unwrap(),
+            second.to_canonical_json().unwrap()
+        );
+    }
+
+    #[test]
+    fn different_requested_strategy_produces_different_plan_ids() {
+        let planner = IntentPlanner::new(ModelCatalog::default());
+        let make_req = |strategy: Option<String>| PlanningRequest {
+            intent: ExecutionIntent::Balanced,
+            user_prompt: "same prompt".into(),
+            requested_model: None,
+            requested_strategy: strategy.clone(),
+            strategy_config: None,
+            requirements: RequirementsSnapshot {
+                required_capabilities: vec!["CodeGeneration".into()],
+                ..Default::default()
+            },
+            policies: PolicySnapshot::default(),
+            capability_catalog: CapabilityCatalogSnapshot::default(),
+            model_catalog: ModelCatalogSnapshot::default(),
+            telemetry: RoutingTelemetrySnapshot::default(),
+        };
+
+        let without = planner.plan(&make_req(None)).unwrap();
+        let consensus = planner.plan(&make_req(Some("Consensus".into()))).unwrap();
+        let chain = planner.plan(&make_req(Some("Chain".into()))).unwrap();
+
+        assert_ne!(
+            without.workflow_id(),
+            consensus.workflow_id(),
+            "requested_strategy must be part of the workflow identity"
+        );
+        assert_ne!(consensus.workflow_id(), chain.workflow_id());
+    }
+
+    #[test]
+    fn different_requested_model_or_config_produces_different_plan_ids() {
+        let planner = IntentPlanner::new(ModelCatalog::default());
+        let base = || PlanningRequest {
+            intent: ExecutionIntent::Balanced,
+            user_prompt: "same prompt".into(),
+            requested_model: None,
+            requested_strategy: Some("Consensus".into()),
+            strategy_config: None,
+            requirements: RequirementsSnapshot::default(),
+            policies: PolicySnapshot::default(),
+            capability_catalog: CapabilityCatalogSnapshot::default(),
+            model_catalog: ModelCatalogSnapshot::default(),
+            telemetry: RoutingTelemetrySnapshot::default(),
+        };
+
+        let mut with_model = base();
+        with_model.requested_model = Some("custom-llm".into());
+
+        let mut with_config = base();
+        with_config.strategy_config = Some(BTreeMap::from([(
+            "count".to_string(),
+            serde_json::json!(5),
+        )]));
+
+        let plain = planner.plan(&base()).unwrap();
+        assert_ne!(
+            plain.workflow_id(),
+            planner.plan(&with_model).unwrap().workflow_id()
+        );
+        assert_ne!(
+            plain.workflow_id(),
+            planner.plan(&with_config).unwrap().workflow_id()
+        );
+
+        // Config key insertion order must not change the identity.
+        let mut config_reordered = base();
+        config_reordered.strategy_config = Some(BTreeMap::from([
+            ("alpha".to_string(), serde_json::json!({"z": 1, "a": 2})),
+            ("count".to_string(), serde_json::json!(5)),
+        ]));
+        let first = planner.plan(&config_reordered).unwrap();
+        let second = planner.plan(&config_reordered).unwrap();
+        assert_eq!(first.workflow_id(), second.workflow_id());
     }
 }

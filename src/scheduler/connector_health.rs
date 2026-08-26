@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -6,6 +7,21 @@ use tokio::sync::RwLock;
 
 use crate::scheduler::connector_resolver::Connector;
 use crate::scheduler::connector_resolver::ConnectorResolver;
+
+/// Warns exactly once that health checks are stubbed, so operators of the
+/// production state map are never misled silently.
+static STUB_WARNING: std::sync::Once = std::sync::Once::new();
+static STUB_WARNING_EMITTED: AtomicBool = AtomicBool::new(false);
+
+fn warn_health_stubbed_once() {
+    STUB_WARNING.call_once(|| {
+        STUB_WARNING_EMITTED.store(true, Ordering::SeqCst);
+        tracing::warn!(
+            "connector health checks are NOT implemented: published ConnectorHealth values are \
+             stubbed as Healthy with no real probing"
+        );
+    });
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HealthStatus {
@@ -57,6 +73,7 @@ impl ConnectorHealthChecker {
     }
 
     pub async fn run(&self, resolver: Arc<ConnectorResolver>) {
+        warn_health_stubbed_once();
         let mut interval = tokio::time::interval(Duration::from_secs(self.check_interval_secs));
         loop {
             interval.tick().await;
@@ -118,6 +135,15 @@ mod tests {
             .check_connector_health("mock_connector", &connector)
             .await;
         assert_eq!(health.status, HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_stub_warning_emitted_exactly_once() {
+        // Call twice: the Once guard must accept it and flip the flag exactly
+        // on first invocation; the second call must be a no-op (no panic).
+        warn_health_stubbed_once();
+        warn_health_stubbed_once();
+        assert!(STUB_WARNING_EMITTED.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

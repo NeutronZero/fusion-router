@@ -134,12 +134,19 @@ async fn main() {
 
     tracing::info!("loaded config from {}", config_path);
 
-    let default_provider_name = config
-        .providers
-        .keys()
-        .next()
-        .cloned()
-        .unwrap_or_else(|| "default".to_string());
+    // Deterministic default provider: the lexicographically smallest
+    // configured provider name. `HashMap::keys().next()` is arbitrary hasher
+    // order, which made the implicit default depend on process seeds.
+    let mut configured_names: Vec<String> = config.providers.keys().cloned().collect();
+    configured_names.sort();
+    let default_provider_name =
+        providers::registry::select_default_provider_name(&configured_names)
+            .unwrap_or_else(|| "default".to_string());
+    tracing::info!(
+        provider = %default_provider_name,
+        rule = "lexicographically smallest configured provider",
+        "default provider selected"
+    );
     let default_cfg = config
         .providers
         .get(&default_provider_name)
@@ -354,12 +361,13 @@ async fn main() {
         .with_state(ops_state);
 
     let event_bus = Arc::new(crate::events::BroadcastEventBus::new(1024));
-    let exec_plane = crate::server::execution::build_execution_plane(
+    let exec_plane = crate::server::execution::build_execution_plane_with_concurrency(
         event_bus,
         state.executor.clone(),
         state.model_catalog.clone(),
         state.resource_manager.clone(),
         state.policy_registry.clone(),
+        config.resources.max_concurrent_nodes,
     );
     let execution_routes = axum::Router::new()
         .route(

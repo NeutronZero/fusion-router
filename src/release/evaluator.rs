@@ -49,6 +49,10 @@ pub struct PolicyEvaluation {
     pub environment: ReleaseEnvironment,
     pub decision: ReleaseDecision,
     pub summary: PolicySummary,
+    /// Human-readable justification for a non-approving decision (e.g. an
+    /// unconfigured environment or named required failures).
+    #[serde(default)]
+    pub reason: Option<String>,
     pub required_failures: Vec<GateId>,
     pub waived_failures: Vec<WaiverEvaluation>,
     pub advisory_failures: Vec<GateId>,
@@ -110,13 +114,29 @@ impl PolicyEvaluator {
             })
             .collect();
 
-        let env_policy = ctx
-            .policy
-            .get_environment_policy(&ctx.environment)
-            .cloned()
-            .unwrap_or_default();
+        // Gate integrity: an environment with NO explicit policy can never
+        // approve. The previous `unwrap_or_default()` produced an empty policy
+        // under which every failed gate classified as "ignored" — approving
+        // releases on fabricated evidence. None now means Blocked.
+        let env_policy = ctx.policy.get_environment_policy(&ctx.environment);
+        let unconfigured_environment = env_policy.is_none();
 
-        let classified = EvidenceClassifier::classify(&results, &env_policy);
+        let classified = match env_policy {
+            Some(policy) => EvidenceClassifier::classify(&results, policy),
+            None => {
+                // Without a policy nothing may be ignored: failures are treated
+                // as required failures so they remain visible in the summary.
+                let mut fallback = ClassifiedEvidence::default();
+                for result in &results {
+                    if result.passed {
+                        fallback.passed.push(result.gate_id);
+                    } else {
+                        fallback.required_failed.push(result.gate_id);
+                    }
+                }
+                fallback
+            }
+        };
 
         let mut remaining_required_failures = Vec::new();
         let mut waived_failures = Vec::new();
@@ -140,12 +160,44 @@ impl PolicyEvaluator {
             // No gate evidence at all — the evaluation cannot support an
             // approval decision.
             ReleaseDecision::Blocked
+        } else if unconfigured_environment {
+            // Unknown/unconfigured environment: only an explicit policy whose
+            // rules pass may approve.
+            ReleaseDecision::Blocked
         } else if !remaining_required_failures.is_empty() {
             ReleaseDecision::Blocked
         } else if !waived_failures.is_empty() {
             ReleaseDecision::ApprovedWithWaivers
         } else {
             ReleaseDecision::Approved
+        };
+
+        let reason = match decision {
+            ReleaseDecision::Approved => None,
+            _ => {
+                let mut causes: Vec<String> = Vec::new();
+                if results.is_empty() {
+                    causes.push("no gate evidence was produced".to_string());
+                }
+                if unconfigured_environment {
+                    causes.push(format!(
+                        "environment '{}' has no configured release policy; it can never be approved without an explicit policy",
+                        ctx.environment
+                    ));
+                }
+                if !remaining_required_failures.is_empty() {
+                    let names: Vec<String> = remaining_required_failures
+                        .iter()
+                        .map(|g| format!("{g:?}"))
+                        .collect();
+                    causes.push(format!(
+                        "{} required gate(s) failed: {}",
+                        names.len(),
+                        names.join(", ")
+                    ));
+                }
+                Some(causes.join("; "))
+            }
         };
 
         let summary = PolicySummary {
@@ -160,6 +212,7 @@ impl PolicyEvaluator {
             environment: ctx.environment.clone(),
             decision,
             summary,
+            reason,
             required_failures: remaining_required_failures,
             waived_failures,
             advisory_failures: classified.advisory_failed,
@@ -275,6 +328,75 @@ mod tests {
             ReleaseDecision::Blocked,
             "no evidence must not Approve"
         );
+    }
+
+    #[test]
+    fn test_evaluator_unknown_environment_blocked_even_when_all_pass() {
+        // "canary" has no entry in the default policy — it must never approve,
+        // even with flawless gate evidence.
+        let policy = PolicyDefinition::default_policy();
+        let ctx = EvaluationContext::new(
+            ReleaseEnvironment::from_str("canary"),
+            policy,
+            WaiverSet::default(),
+        );
+        let results = vec![
+            mock_execution(GateId::Sdk1, true),
+            mock_execution(GateId::Replay1, true),
+            mock_execution(GateId::Upgrade1, true),
+            mock_execution(GateId::Determinism1, true),
+            mock_execution(GateId::Plugin1, true),
+        ];
+
+        let eval = PolicyEvaluator::evaluate(&ctx, &results);
+        assert_eq!(eval.decision, ReleaseDecision::Blocked);
+        assert_eq!(eval.summary.required_failed, 0);
+        let reason = eval.reason.expect("Blocked needs a clear reason");
+        assert!(
+            reason.contains("canary") && reason.contains("no configured release policy"),
+            "reason must name the unconfigured environment: {reason}"
+        );
+    }
+
+    #[test]
+    fn test_evaluator_unknown_environment_with_failures_blocks_and_counts_them() {
+        let policy = PolicyDefinition::default_policy();
+        let ctx = EvaluationContext::new(
+            ReleaseEnvironment::Custom("nightly".into()),
+            policy,
+            WaiverSet::default(),
+        );
+        let results = vec![
+            mock_execution(GateId::Sdk1, true),
+            mock_execution(GateId::Plugin1, false),
+        ];
+
+        let eval = PolicyEvaluator::evaluate(&ctx, &results);
+        assert_eq!(eval.decision, ReleaseDecision::Blocked);
+        assert!(
+            eval.required_failures.contains(&GateId::Plugin1),
+            "failures under an unconfigured environment must not be classified as ignored"
+        );
+        assert!(eval.reason.is_some());
+    }
+
+    #[test]
+    fn test_evaluator_configured_environment_still_approves_clean_evidence() {
+        // Staging is explicitly configured; its semantics are unchanged.
+        let policy = PolicyDefinition::default_policy();
+        let ctx = EvaluationContext::new(ReleaseEnvironment::Staging, policy, WaiverSet::default());
+        let results = vec![
+            mock_execution(GateId::Sdk1, true),
+            mock_execution(GateId::Upgrade1, true),
+            mock_execution(GateId::Plugin1, true),
+            mock_execution(GateId::Replay1, false), // advisory in staging
+            mock_execution(GateId::Connector1, false), // advisory in staging
+        ];
+
+        let eval = PolicyEvaluator::evaluate(&ctx, &results);
+        assert_eq!(eval.decision, ReleaseDecision::Approved);
+        assert_eq!(eval.summary.advisory_failed, 2);
+        assert!(eval.reason.is_none());
     }
 
     #[test]
