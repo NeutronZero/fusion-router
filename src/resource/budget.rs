@@ -113,11 +113,12 @@ mod tests {
     }
 
     #[test]
-    fn test_record_after_failure_rolls_back() {
+    fn test_record_after_failure_keeps_real_spend() {
+        // Review H4: a violating record commits real spend, then fails.
         let env = BudgetEnvelope::new(NanoUSD::from_nanos(100), 50, 5);
         assert!(env.record_and_check(NanoUSD::from_nanos(60), 30).is_ok());
         assert!(env.record_and_check(NanoUSD::from_nanos(60), 30).is_err());
-        assert_eq!(env.spent_cost().as_nanos(), 60); // rolled back, not 120
-        assert_eq!(env.spent_tokens(), 30);
+        assert_eq!(env.spent_cost().as_nanos(), 120); // recorded, not rolled back
+        assert_eq!(env.spent_tokens(), 60);
     }
 }

@@ -119,14 +119,15 @@ fn structural_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
         }
     }
 
+    // Root detection skips Loop edges (an iteration back-edge into a loop
+    // head must not make the head its own root), but reachability BELOW
+    // walks every edge kind including Loop, so nodes entered only through a
+    // loop edge are not spuriously flagged unreachable (review M7).
     let mut incoming: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     let mut adjacency: std::collections::HashMap<&str, Vec<&str>> =
         std::collections::HashMap::new();
     for e in &ir.edges {
-        if e.kind == WorkflowEdgeKind::Loop {
-            continue;
-        }
-        if seen.contains(e.to.as_str()) {
+        if e.kind != WorkflowEdgeKind::Loop && seen.contains(e.to.as_str()) {
             *incoming.entry(e.to.as_str()).or_insert(0) += 1;
         }
         adjacency
@@ -184,6 +185,19 @@ fn control_flow_marker<'a>(ir: &'a WorkflowIR, id: &str) -> Option<&'a str> {
         .and_then(|n| n.config.get("control_flow").and_then(|v| v.as_str()))
 }
 
+/// Number of DISTINCT source nodes feeding `id` via Merge edges. Duplicate
+/// parallel edges between the same pair must not satisfy merge arity on
+/// their own (review M7).
+fn merge_sources(ir: &WorkflowIR, id: &str) -> usize {
+    let mut sources: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for e in &ir.edges {
+        if e.kind == WorkflowEdgeKind::Merge && e.to == id {
+            sources.insert(e.from.as_str());
+        }
+    }
+    sources.len()
+}
+
 fn semantic_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
     let mut incoming: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     let mut outgoing: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
@@ -223,7 +237,9 @@ fn semantic_checks(ir: &WorkflowIR, report: &mut ValidationReport) {
                     });
                 }
             }
-            WorkflowEdgeKind::Merge if incoming.get(e.to.as_str()).copied().unwrap_or(0) < 2 => {
+            WorkflowEdgeKind::Merge
+                if merge_sources(ir, &e.to) < 2 =>
+            {
                 report.push(ValidationIssue {
                     node: None,
                     edge: edge_ref,
@@ -313,29 +329,35 @@ fn non_loop_cycle_back_edges(ir: &WorkflowIR) -> Vec<(String, String)> {
                 .push(e.to.as_str());
         }
     }
+    // Iterative 3-color DFS with an explicit stack: client-supplied IRs can
+    // be arbitrarily deep, and a recursive walk would overflow the thread
+    // stack long before allocation limits do (review H5).
     let mut back_edges = Vec::new();
     let mut state: std::collections::HashMap<&str, u8> = std::collections::HashMap::new(); // 0=unseen, 1=in-stack, 2=done
-    fn dfs<'a>(
-        node: &'a str,
-        adjacency: &std::collections::HashMap<&'a str, Vec<&'a str>>,
-        state: &mut std::collections::HashMap<&'a str, u8>,
-        back_edges: &mut Vec<(String, String)>,
-    ) {
-        state.insert(node, 1);
-        if let Some(nexts) = adjacency.get(node) {
-            for next in nexts {
+    for n in &ir.nodes {
+        if state.get(n.id.as_str()).copied().unwrap_or(0) != 0 {
+            continue;
+        }
+        // Stack entries: (node, next child index to visit).
+        let mut stack: Vec<(&str, usize)> = vec![(n.id.as_str(), 0)];
+        state.insert(n.id.as_str(), 1);
+        while let Some((node, child_idx)) = stack.pop() {
+            let children = adjacency.get(node).map(Vec::as_slice).unwrap_or(&[]);
+            if child_idx < children.len() {
+                let next = children[child_idx];
+                // Re-push this node to resume at the following sibling.
+                stack.push((node, child_idx + 1));
                 match state.get(next).copied().unwrap_or(0) {
-                    0 => dfs(next, adjacency, state, back_edges),
+                    0 => {
+                        state.insert(next, 1);
+                        stack.push((next, 0));
+                    }
                     1 => back_edges.push((node.to_string(), next.to_string())),
                     _ => {}
                 }
+            } else {
+                state.insert(node, 2);
             }
-        }
-        state.insert(node, 2);
-    }
-    for n in &ir.nodes {
-        if state.get(n.id.as_str()).copied().unwrap_or(0) == 0 {
-            dfs(&n.id, &adjacency, &mut state, &mut back_edges);
         }
     }
     back_edges
@@ -794,6 +816,83 @@ mod tests {
             .issues()
             .iter()
             .any(|i| i.error == ValidationError::BarrierArity("n1".into())));
+    }
+
+    #[test]
+    fn node_entered_only_via_loop_edge_is_reachable() {
+        // Review M7: reachability must walk Loop edges even though root
+        // detection skips them.
+        let ir = ir_with(
+            vec![
+                node("a", WorkflowNodeKind::Task),
+                node("b", WorkflowNodeKind::Task),
+                node("c", WorkflowNodeKind::Output),
+            ],
+            vec![
+                edge("a", "b", WorkflowEdgeKind::Sequential),
+                edge("a", "c", WorkflowEdgeKind::Sequential),
+                edge("b", "b", WorkflowEdgeKind::Loop),
+            ],
+        );
+        let report = ir.validate();
+        assert!(
+            !report
+                .issues()
+                .iter()
+                .any(|i| matches!(i.error, ValidationError::UnreachableNode(_))),
+            "loop-entered nodes must count as reachable: {:?}",
+            report.issues()
+        );
+    }
+
+    #[test]
+    fn duplicate_merge_edges_do_not_satisfy_arity() {
+        let mut n1 = node("n1", WorkflowNodeKind::Task);
+        n1.config.insert(
+            "control_flow".into(),
+            serde_json::Value::String("split".into()),
+        );
+        let m = node("m", WorkflowNodeKind::Aggregation);
+        let ir = ir_with(
+            vec![n1, m],
+            vec![
+                edge("n1", "m", WorkflowEdgeKind::Merge),
+                edge("n1", "m", WorkflowEdgeKind::Merge),
+            ],
+        );
+        let report = ir.validate();
+        assert!(report
+            .issues()
+            .iter()
+            .any(|i| i.error == ValidationError::MergeArity("m".into())));
+    }
+
+    #[test]
+    fn deep_chain_does_not_overflow_stack() {
+        // Review H5: cycle detection must be iterative; 50k chained nodes
+        // previously recursed once per level.
+        let count = 50_000usize;
+        let nodes: Vec<WorkflowNode> = (0..count)
+            .map(|i| node(&format!("n{i}"), WorkflowNodeKind::Task))
+            .chain(std::iter::once(node(
+                "out",
+                WorkflowNodeKind::Output,
+            )))
+            .collect();
+        let edges: Vec<WorkflowEdge> = (0..count)
+            .map(|i| {
+                if i + 1 < count {
+                    edge(&format!("n{i}"), &format!("n{}", i + 1), WorkflowEdgeKind::Sequential)
+                } else {
+                    edge(&format!("n{i}"), "out", WorkflowEdgeKind::Sequential)
+                }
+            })
+            .collect();
+        let ir = ir_with(nodes, edges);
+        assert!(
+            ir.validate().is_empty(),
+            "deep acyclic chain must validate cleanly"
+        );
     }
 
     #[test]

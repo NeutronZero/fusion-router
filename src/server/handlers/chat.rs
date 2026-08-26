@@ -195,6 +195,10 @@ pub(crate) async fn process_request(
 
     let cancellation_token = tokio_util::sync::CancellationToken::new();
     let mut pctx = PipelineContext::new(request_id, request.clone(), cancellation_token);
+    // Review H2: thread the operator-configured client tool permissions
+    // through the pipeline so declarations are intersected at insertion.
+    pctx.permitted_client_tools = Some(state.permitted_client_tools.clone());
+    pctx.scheduler_round_capacity = Some(state.scheduler_max_concurrent as u64);
 
     tracing::info!(
         request_id = %request_id,
@@ -364,7 +368,7 @@ pub(crate) async fn process_request(
             provider: state.provider.name().to_string(),
             intent: reqs.intent_classification,
             latency_ms: result.total_latency_ms,
-            tokens: result.total_tokens as u32,
+            tokens: result.total_tokens.min(u32::MAX as u64) as u32,
             cost: result.total_cost,
             success: result.success,
             timestamp: chrono::Utc::now().timestamp(),
@@ -480,7 +484,7 @@ async fn native_stream_sse(
         .map(|r| r.intent_classification.clone())
         .unwrap_or(crate::types::Intent::General);
     let req_model = request.model.clone();
-    let started_ms = std::time::Instant::now().elapsed().as_millis() as u64;
+    let stream_started = std::time::Instant::now();
 
     // Accounting model: the RAII guard's estimate booking is refunded when the
     // metered stream ends (release-before-hook), then actuals are recorded
@@ -496,8 +500,10 @@ async fn native_stream_sse(
                 model: req_model,
                 provider: "provider-registry".into(),
                 intent,
-                latency_ms: report.total_duration_ms.unwrap_or(started_ms),
-                tokens: report.total_tokens as u32,
+                latency_ms: report
+                    .total_duration_ms
+                    .unwrap_or_else(|| stream_started.elapsed().as_millis() as u64),
+                tokens: report.total_tokens.min(u32::MAX as u64) as u32,
                 cost: report.cost,
                 success: true,
                 timestamp: chrono::Utc::now().timestamp(),

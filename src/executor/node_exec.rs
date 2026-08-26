@@ -21,6 +21,12 @@ pub struct DefaultExecutor {
     pub cache: Option<Arc<SemanticCache>>,
     pub tool_registry: Option<Arc<ToolRegistry>>,
     pub allow_auto_exec: bool,
+    /// Operator-configured tool names a client may reach by declaring them
+    /// (review H2). `None` means unrestricted; an empty list permits none.
+    pub permitted_tools: Option<Vec<String>>,
+    /// Model-aware pricing resolver forwarded to the runtime executor so
+    /// recorded usage carries real cost (review H3).
+    pub pricing: Option<fusion_scheduler::PricingResolver>,
 }
 
 impl DefaultExecutor {
@@ -35,6 +41,8 @@ impl DefaultExecutor {
             cache: None,
             tool_registry: None,
             allow_auto_exec: false,
+            permitted_tools: None,
+            pricing: None,
         }
     }
 
@@ -52,6 +60,62 @@ impl DefaultExecutor {
         self
     }
 
+    /// Restricts client-declarable tools to the operator's permitted set.
+    pub fn with_permitted_tools(mut self, permitted: Vec<String>) -> Self {
+        self.permitted_tools = Some(permitted);
+        self
+    }
+
+    /// Installs model-aware pricing on the delegated runtime executor.
+    pub fn with_pricing(mut self, pricing: fusion_scheduler::PricingResolver) -> Self {
+        self.pricing = Some(pricing);
+        self
+    }
+
+    /// Clamps a node's `tool_allowlist` to the intersection of the
+    /// registered tools and the operator-permitted set (review H2). Returns
+    /// a cloned node only when something was actually removed. Client-
+    /// submitted workflow config can name ANY registered tool otherwise;
+    /// this is the single enforcement chokepoint on every execution path.
+    fn sanitize_tool_allowlist(&self, node: &ExecutionNode) -> ExecutionNode {
+        let Some(allowlist_value) = node.config.get("tool_allowlist") else {
+            return node.clone();
+        };
+        let Some(names) = allowlist_value.as_array() else {
+            return node.clone();
+        };
+        let filtered: Vec<serde_json::Value> = names
+            .iter()
+            .filter(|v| match v.as_str() {
+                Some(name) => {
+                    let registered = self
+                        .tool_registry
+                        .as_ref()
+                        .map(|r| r.get(name).is_some())
+                        .unwrap_or(false);
+                    match &self.permitted_tools {
+                        Some(permitted) => registered && permitted.contains(&name.to_string()),
+                        None => registered,
+                    }
+                }
+                None => false,
+            })
+            .cloned()
+            .collect();
+        if filtered.len() == names.len() {
+            return node.clone();
+        }
+        let mut sanitized = node.clone();
+        sanitized
+            .config
+            .insert("tool_allowlist".to_string(), serde_json::Value::Array(filtered));
+        tracing::warn!(
+            node_id = %node.id,
+            "tool_allowlist narrowed to operator-permitted, registered tools"
+        );
+        sanitized
+    }
+
     /// All graph semantics are executed by fusion-runtime. This adapter only
     /// translates provider ABI values at the application boundary.
     async fn execute_runtime(
@@ -67,6 +131,9 @@ impl DefaultExecutor {
             Arc::new(FusionChatProvider::new(self.provider.clone()));
         let mut exec = fusion_runtime::ProviderExecutor::new(provider)
             .with_allow_auto_exec(self.allow_auto_exec);
+        if let Some(pricing) = &self.pricing {
+            exec = exec.with_pricing(pricing.clone());
+        }
         if let Some(ref registry) = self.tool_registry {
             let mut rt_registry = fusion_runtime::ToolRegistry::new();
             for name in registry.list() {
@@ -123,7 +190,10 @@ impl Executor for DefaultExecutor {
         node: &ExecutionNode,
         ctx: &NodeExecContext,
     ) -> NodeExecutionResult {
-        self.execute_runtime(node, ctx).await
+        // Review H2 chokepoint: narrow any client-declared allowlist before
+        // the node reaches fusion-runtime.
+        let sanitized = self.sanitize_tool_allowlist(node);
+        self.execute_runtime(&sanitized, ctx).await
     }
 }
 

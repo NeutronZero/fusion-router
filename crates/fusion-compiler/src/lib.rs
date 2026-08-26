@@ -85,6 +85,12 @@ pub trait Compiler: Send + Sync {
 
 pub struct ConstraintValidationPass;
 
+/// Upper bound on nodes accepted into the compiler pipeline. Client-supplied
+/// IRs are untrusted input; without a cap, graph-sized work (validation,
+/// hashing, scheduling state) scales unboundedly with request size.
+/// 10_000 nodes is far beyond any legitimate orchestration template.
+pub const MAX_IR_NODES: usize = 10_000;
+
 #[async_trait::async_trait]
 impl CompilerPass for ConstraintValidationPass {
     fn name(&self) -> &str {
@@ -97,6 +103,16 @@ impl CompilerPass for ConstraintValidationPass {
                 pass: "constraint_validation".into(),
                 node_id: None,
                 message: "IR must have at least one node".into(),
+            });
+        }
+        if ir.nodes.len() > MAX_IR_NODES {
+            return Err(CompilerError::ValidationError {
+                pass: "constraint_validation".into(),
+                node_id: None,
+                message: format!(
+                    "IR has {} nodes, exceeding the maximum of {MAX_IR_NODES}",
+                    ir.nodes.len()
+                ),
             });
         }
         Ok(ir)
@@ -307,34 +323,32 @@ fn three_color_cycle_detect(edges: &[(uuid::Uuid, uuid::Uuid)]) -> Result<(), uu
         graph.entry(*to).or_default();
     }
 
-    fn dfs(
-        node: uuid::Uuid,
-        graph: &HashMap<uuid::Uuid, Vec<uuid::Uuid>>,
-        colors: &mut HashMap<uuid::Uuid, Color>,
-    ) -> bool {
-        colors.insert(node, Color::Grey);
-        if let Some(neighbors) = graph.get(&node) {
-            for &next in neighbors {
-                match colors.get(&next).unwrap_or(&Color::White) {
-                    Color::Grey => return true,
-                    Color::White => {
-                        if dfs(next, graph, colors) {
-                            return true;
-                        }
-                    }
-                    Color::Black => continue,
-                }
-            }
+    // Iterative DFS with an explicit stack: workflow graphs arrive from
+    // client payloads and can be arbitrarily deep; a recursive walk would
+    // overflow the stack long before any resource limit does (review H5).
+    for root in graph.keys().copied().collect::<Vec<_>>() {
+        if colors.get(&root).copied().unwrap_or(Color::White) != Color::White {
+            continue;
         }
-        colors.insert(node, Color::Black);
-        false
-    }
-
-    for node in graph.keys().copied().collect::<Vec<_>>() {
-        if colors.get(&node).unwrap_or(&Color::White) == &Color::White
-            && dfs(node, &graph, &mut colors)
-        {
-            return Err(node);
+        // Stack of (node, next-child index).
+        let mut stack: Vec<(uuid::Uuid, usize)> = vec![(root, 0)];
+        colors.insert(root, Color::Grey);
+        while let Some((node, child_idx)) = stack.pop() {
+            let children = graph.get(&node).map(Vec::as_slice).unwrap_or(&[]);
+            if child_idx < children.len() {
+                let next = children[child_idx];
+                stack.push((node, child_idx + 1));
+                match colors.get(&next).copied().unwrap_or(Color::White) {
+                    Color::Grey => return Err(node),
+                    Color::White => {
+                        colors.insert(next, Color::Grey);
+                        stack.push((next, 0));
+                    }
+                    Color::Black => {}
+                }
+            } else {
+                colors.insert(node, Color::Black);
+            }
         }
     }
 
@@ -391,6 +405,21 @@ pub fn lower_to_graph_with_compilers(
     let mut exec_edges = Vec::new();
 
     for ir_node in &ir.nodes {
+        // Per-node retry overrides when present in config; clamped to sane
+        // bounds so client config cannot request pathological retry storms
+        // (review L3). Defaults match the historical hardcoded values.
+        let max_retries = ir_node
+            .config
+            .get("max_retries")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.clamp(0, 10) as u32)
+            .unwrap_or(2);
+        let backoff_ms = ir_node
+            .config
+            .get("backoff_ms")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.clamp(0, 60_000))
+            .unwrap_or(1000);
         let mut node = ExecutionNode {
             id: ir_node.id,
             kind: match ir_node.kind {
@@ -408,8 +437,8 @@ pub fn lower_to_graph_with_compilers(
             strategy: ir_node.strategy.clone(),
             model: ir_node.model.clone().unwrap_or_default(),
             retry_policy: RetryPolicy {
-                max_retries: 2,
-                backoff_ms: 1000,
+                max_retries,
+                backoff_ms,
             },
             fallback: None,
             config: ir_node.config.clone(),
@@ -461,6 +490,52 @@ pub struct CompilerEngine {
     score_sources: score::ScoreSources,
     custom_compilers:
         std::collections::HashMap<String, std::sync::Arc<dyn strategy_compiler::StrategyCompiler>>,
+    /// Route table used for the explain/comparison report:
+    /// (provider name, representative model). Defaults to the historical
+    /// hardcoded trio; operators can replace it via [`with_route_providers`]
+    /// (review L2).
+    route_providers: Vec<(String, String)>,
+}
+
+impl CompilerEngine {
+    /// Shared pass pipeline used by every compile entry point (review L1).
+    async fn run_pass_pipeline(
+        &self,
+        ir: &WorkflowIR,
+    ) -> Result<(Vec<String>, Vec<CompilerPassDiff>, u64, WorkflowIR), PlatformError> {
+        let compile_start = std::time::Instant::now();
+        let mut current_ir = ir.clone();
+        let mut pass_names = Vec::new();
+        let mut pass_diffs = Vec::new();
+
+        for (idx, pass) in self.passes.iter().enumerate() {
+            let pass_name = pass.name().to_string();
+            let input_count = current_ir.nodes.len();
+            let pass_start = std::time::Instant::now();
+            current_ir = pass.apply(current_ir).await.map_err(|e| {
+                PlatformError::Compiler {
+                    code: "PASS_ERROR".to_string(),
+                    message: format!("Pass '{}' failed: {}", pass_name, e),
+                    recovery_suggestion: "Check IR validity and pass constraints".to_string(),
+                }
+            })?;
+            let output_count = current_ir.nodes.len();
+            let duration_ms = pass_start.elapsed().as_millis() as u64;
+
+            pass_names.push(pass_name.clone());
+            pass_diffs.push(CompilerPassDiff {
+                pass_number: idx + 1,
+                pass_name: pass_name.clone(),
+                input_nodes: input_count,
+                output_nodes: output_count,
+                transformation_summary: format!("Executed pass {pass_name}"),
+                duration_ms,
+            });
+        }
+
+        let compilation_time_ms = compile_start.elapsed().as_millis() as u64;
+        Ok((pass_names, pass_diffs, compilation_time_ms, current_ir))
+    }
 }
 
 impl CompilerEngine {
@@ -490,6 +565,7 @@ impl CompilerEngine {
             resource_manager,
             score_sources: score::ScoreSources::default(),
             custom_compilers: std::collections::HashMap::new(),
+            route_providers: Self::default_route_providers(),
         }
     }
 
@@ -513,6 +589,7 @@ impl CompilerEngine {
             resource_manager: rm,
             score_sources: score::ScoreSources::default(),
             custom_compilers: std::collections::HashMap::new(),
+            route_providers: Self::default_route_providers(),
         }
     }
 
@@ -525,7 +602,25 @@ impl CompilerEngine {
             resource_manager,
             score_sources: score::ScoreSources::default(),
             custom_compilers: std::collections::HashMap::new(),
+            route_providers: Self::default_route_providers(),
         }
+    }
+
+
+    /// Historical explain/comparison route table (review L2). Replace via
+    /// [`CompilerEngine::with_route_providers`].
+    fn default_route_providers() -> Vec<(String, String)> {
+        vec![
+            ("openrouter".to_string(), "claude-3-5-sonnet".to_string()),
+            ("zen".to_string(), "gemini-2.5-pro".to_string()),
+            ("ollama".to_string(), "llama3".to_string()),
+        ]
+    }
+
+    /// Replaces the provider/model pairs used for the explain-route report.
+    pub fn with_route_providers(mut self, routes: Vec<(String, String)>) -> Self {
+        self.route_providers = routes;
+        self
     }
 
     /// Register a custom strategy compiler delegate. The compiler is used during
@@ -555,64 +650,8 @@ impl CompilerEngine {
         intent: &str,
         ir: &WorkflowIR,
     ) -> Result<CompilerReport, PlatformError> {
-        if intent.is_empty() {
-            return Err(PlatformError::Compiler {
-                code: "EMPTY_INTENT".to_string(),
-                message: "Compiler intent cannot be empty".to_string(),
-                recovery_suggestion: "Provide valid intent string".to_string(),
-            });
-        }
-
-        let compile_start = std::time::Instant::now();
-        let mut current_ir = ir.clone();
-        let mut pass_names = Vec::new();
-        let mut pass_diffs = Vec::new();
-
-        for (idx, pass) in self.passes.iter().enumerate() {
-            let pass_name = pass.name().to_string();
-            let input_count = current_ir.nodes.len();
-            let pass_start = std::time::Instant::now();
-            current_ir = pass
-                .apply(current_ir)
-                .await
-                .map_err(|e| PlatformError::Compiler {
-                    code: "PASS_ERROR".to_string(),
-                    message: format!("Pass '{}' failed: {}", pass_name, e),
-                    recovery_suggestion: "Check IR validity and pass constraints".to_string(),
-                })?;
-            let output_count = current_ir.nodes.len();
-            let duration_ms = pass_start.elapsed().as_millis() as u64;
-
-            pass_names.push(pass_name.clone());
-            pass_diffs.push(CompilerPassDiff {
-                pass_number: idx + 1,
-                pass_name: pass_name.clone(),
-                input_nodes: input_count,
-                output_nodes: output_count,
-                transformation_summary: format!("Executed pass {pass_name}"),
-                duration_ms,
-            });
-        }
-
-        let compilation_time_ms = compile_start.elapsed().as_millis() as u64;
-
-        let route_scores = vec![
-            self.explain_route("openrouter", intent, &current_ir).await,
-            self.explain_route("zen", intent, &current_ir).await,
-            self.explain_route("ollama", intent, &current_ir).await,
-        ];
-
-        let provider_comparison = Self::build_provider_comparison(&route_scores);
-
-        Ok(CompilerReport {
-            intent: intent.to_string(),
-            passes_executed: pass_names,
-            pass_diffs,
-            graph_id: format!("graph_{}", ir.plan_id),
-            compilation_time_ms,
-            route_scores,
-            provider_comparison,
-        })
+        let (report, _graph) = self.compile_and_lower(intent, ir).await?;
+        Ok(report)
     }
 
     /// Compile the IR through all passes, then lower to an ExecutionGraph.
@@ -629,47 +668,23 @@ impl CompilerEngine {
                 recovery_suggestion: "Provide valid intent string".to_string(),
             });
         }
+        let mut comparison_models: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
 
-        let compile_start = std::time::Instant::now();
-        let mut current_ir = ir.clone();
-        let mut pass_names = Vec::new();
-        let mut pass_diffs = Vec::new();
 
-        for (idx, pass) in self.passes.iter().enumerate() {
-            let pass_name = pass.name().to_string();
-            let input_count = current_ir.nodes.len();
-            let pass_start = std::time::Instant::now();
-            current_ir = pass
-                .apply(current_ir)
-                .await
-                .map_err(|e| PlatformError::Compiler {
-                    code: "PASS_ERROR".to_string(),
-                    message: format!("Pass '{}' failed: {}", pass_name, e),
-                    recovery_suggestion: "Check IR validity and pass constraints".to_string(),
-                })?;
-            let output_count = current_ir.nodes.len();
-            let duration_ms = pass_start.elapsed().as_millis() as u64;
+        let (pass_names, pass_diffs, compilation_time_ms, current_ir) =
+            self.run_pass_pipeline(ir).await?;
 
-            pass_names.push(pass_name.clone());
-            pass_diffs.push(CompilerPassDiff {
-                pass_number: idx + 1,
-                pass_name: pass_name.clone(),
-                input_nodes: input_count,
-                output_nodes: output_count,
-                transformation_summary: format!("Executed pass {pass_name}"),
-                duration_ms,
-            });
+        let mut route_scores = Vec::with_capacity(self.route_providers.len());
+        for (provider_name, model_name) in &self.route_providers {
+            route_scores.push(self.explain_route(provider_name, intent, &current_ir).await);
+            // Remember the display model per provider for the comparison table.
+            comparison_models
+                .insert(provider_name.clone(), model_name.clone());
         }
-
-        let compilation_time_ms = compile_start.elapsed().as_millis() as u64;
-
-        let route_scores = vec![
-            self.explain_route("openrouter", intent, &current_ir).await,
-            self.explain_route("zen", intent, &current_ir).await,
-            self.explain_route("ollama", intent, &current_ir).await,
-        ];
-
-        let provider_comparison = Self::build_provider_comparison(&route_scores);
+        let provider_comparison =
+            Self::build_provider_comparison_with_models(&route_scores, &comparison_models);
+        drop(comparison_models);
 
         let graph =
             lower_to_graph_with_compilers(current_ir, &self.custom_compilers).map_err(|e| {
@@ -755,7 +770,16 @@ impl CompilerEngine {
         }
     }
 
-    fn build_provider_comparison(scores: &[ExplainRouteScore]) -> Vec<ProviderComparisonCandidate> {
+    fn build_provider_comparison(
+        scores: &[ExplainRouteScore],
+    ) -> Vec<ProviderComparisonCandidate> {
+        Self::build_provider_comparison_with_models(scores, &Default::default())
+    }
+
+    fn build_provider_comparison_with_models(
+        scores: &[ExplainRouteScore],
+        models: &std::collections::HashMap<String, String>,
+    ) -> Vec<ProviderComparisonCandidate> {
         if scores.is_empty() {
             return Vec::new();
         }
@@ -816,12 +840,10 @@ impl CompilerEngine {
                     }
                 };
 
-                let model_name = match score.provider_name.as_str() {
-                    "openrouter" => "claude-3-5-sonnet",
-                    "zen" => "gemini-2.5-pro",
-                    "ollama" => "llama3",
-                    _ => "unknown",
-                };
+                let model_name = models
+                    .get(&score.provider_name)
+                    .map(String::as_str)
+                    .unwrap_or("unknown");
 
                 ProviderComparisonCandidate {
                     provider_name: score.provider_name.clone(),
@@ -875,12 +897,14 @@ impl CompilerPass for BudgetOptimisationPass {
 // Dead-node elimination (Phase 3.3)
 // ---------------------------------------------------------------------------
 
-/// Removes nodes unreachable from any edge source.
+/// Removes nodes unreachable from any entry point.
 ///
-/// **Root semantics:** roots are nodes that appear as `from` in at least one
-/// edge — NOT "nodes with no incoming edges." This means isolated nodes (no
-/// incoming or outgoing edges) are always eliminated when the graph has edges.
-/// Edgeless graphs (single-node templates, etc.) keep all nodes unchanged.
+/// **Root semantics:** roots are entry points — nodes with no incoming edges
+/// that still have at least one outgoing edge (review M1). Everything not
+/// reachable from an entry point is dead code: isolated orphans, detached
+/// chains, and unreachable cycles. Edgeless graphs (single-node templates)
+/// keep all nodes unchanged. A graph whose edges form only cycles (no
+/// discoverable entry) is left untouched rather than guessed at.
 pub struct DeadNodeEliminationPass;
 
 #[async_trait::async_trait]
@@ -899,12 +923,30 @@ impl CompilerPass for DeadNodeEliminationPass {
             return Ok(ir);
         }
 
-        // Roots = nodes that are sources of at least one edge.
-        // Isolated nodes (no incoming or outgoing edges) are NOT roots and will
-        // be eliminated when the graph has edges.
-        let roots: HashSet<uuid::Uuid> = ir.edges.iter().map(|e| e.from).collect();
+        // Roots = entry points: no incoming edges AND at least one outgoing
+        // edge (review M1). Fully isolated nodes therefore do NOT count as
+        // entries — nothing can flow through them, so they are eliminated
+        // along with any region unreachable from a real entry (detached
+        // chains, unreachable cycles).
+        let mut has_incoming: HashSet<uuid::Uuid> = HashSet::new();
+        let mut has_outgoing: HashSet<uuid::Uuid> = HashSet::new();
+        for e in &ir.edges {
+            has_incoming.insert(e.to);
+            has_outgoing.insert(e.from);
+        }
+        let roots: HashSet<uuid::Uuid> = ir
+            .nodes
+            .iter()
+            .map(|n| n.id)
+            .filter(|id| !has_incoming.contains(id) && has_outgoing.contains(id))
+            .collect();
 
-        // BFS from roots to find reachable nodes
+        if roots.is_empty() {
+            // Fully cyclic graph with no discoverable entry: refuse to guess.
+            return Ok(ir);
+        }
+
+        // Iterative BFS from roots to find reachable nodes
         let mut reachable: HashSet<uuid::Uuid> = HashSet::new();
         let mut queue: std::collections::VecDeque<uuid::Uuid> = roots.into_iter().collect();
         while let Some(current) = queue.pop_front() {
@@ -967,15 +1009,37 @@ impl CompilerPass for PolicyCompilerPass {
 
         for node in &ir.nodes {
             // Symbol key resolution: config["capability"] > model > "general"
-            let symbol_key = node
+            let capability = node
                 .config
                 .get("capability")
-                .and_then(|v| v.as_str())
-                .or(node.model.as_deref())
-                .unwrap_or("general");
+                .and_then(|v| v.as_str());
+            let symbol_key = capability.or(node.model.as_deref()).unwrap_or("general");
+            let strategy_label = node.strategy.as_label();
+            let kind_tag = match node.kind {
+                IRNodeKind::Generate => "Generate",
+                IRNodeKind::Review => "Review",
+                IRNodeKind::Judge => "Judge",
+                IRNodeKind::Transform => "Transform",
+                IRNodeKind::Gate => "Gate",
+                IRNodeKind::Conditional => "Conditional",
+                IRNodeKind::Loop => "Loop",
+                IRNodeKind::Split => "Split",
+                IRNodeKind::Join => "Join",
+                IRNodeKind::Barrier => "Barrier",
+            };
+            let facts = policy::PolicyFacts {
+                model: node.model.as_deref().unwrap_or(""),
+                strategy: strategy_label.as_ref(),
+                node_kind: Some(kind_tag),
+                capability,
+            };
 
             if let Some(rule) =
-                policy::PolicyPrecedenceEngine::evaluate_matching_rule(&self.policy_ir, symbol_key)
+                policy::PolicyPrecedenceEngine::evaluate_matching_rule(
+                    &self.policy_ir,
+                    symbol_key,
+                    &facts,
+                )
             {
                 trace.record(policy::PolicyMatchEvent::RuleMatched {
                     rule_id: rule.rule_id.clone(),
@@ -1680,6 +1744,41 @@ mod tests {
         assert_eq!(result.nodes.len(), 2, "orphan node should be eliminated");
         assert!(result.nodes.iter().all(|n| n.id != id_orphan));
         assert_eq!(result.edges.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_dead_node_elimination_removes_detached_cycle_and_chain() {
+        // Review M1: regions unreachable from any real entry — here a
+        // two-node cycle and a downstream leaf — must be eliminated even
+        // though their local sources appear as `from` endpoints.
+        let pass = DeadNodeEliminationPass;
+        let id_a = uuid::Uuid::new_v4();
+        let id_b = uuid::Uuid::new_v4();
+        let x = uuid::Uuid::new_v4();
+        let y = uuid::Uuid::new_v4();
+        let ir = WorkflowIR {
+            plan_id: uuid::Uuid::new_v4(),
+            nodes: vec![
+                IRNode { id: id_a, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+                IRNode { id: id_b, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+                IRNode { id: x, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+                IRNode { id: y, kind: IRNodeKind::Generate, strategy: StrategyKind::Single, model: None, config: HashMap::new() },
+            ],
+            edges: vec![
+                IREdge { from: id_a, to: id_b, condition: None },
+                IREdge { from: x, to: y, condition: Some("loop".into()) },
+                IREdge { from: y, to: x, condition: None },
+            ],
+            metadata: IRMetadata {
+                policy_applied: vec![],
+                policy_version: 0,
+                estimated_cost: NanoUSD::ZERO,
+                estimated_tokens: 0,
+            },
+        };
+        let result = pass.apply(ir).await.expect("pass should succeed");
+        assert_eq!(result.nodes.len(), 2, "detached cycle must be eliminated");
+        assert!(result.nodes.iter().all(|n| n.id == id_a || n.id == id_b));
     }
 
     #[tokio::test]

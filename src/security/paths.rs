@@ -17,6 +17,8 @@ pub enum PathError {
     Escape(String),
     #[error("path is hard-linked from outside the trust root ({nlink} links): {path}")]
     Hardlink { path: String, nlink: u64 },
+    #[error("hard-link count could not be determined for {0}; refusing (fail closed)")]
+    LinkCountUnavailable(String),
 }
 
 /// Canonicalizes `candidate` and verifies the result lies within the
@@ -144,16 +146,66 @@ pub fn ensure_not_hardlinked(path: &Path) -> Result<(), PathError> {
 }
 
 /// Shared rejection policy over an opened handle's link count.
+///
+/// When the platform cannot report a link count (e.g. the Win32 query
+/// fails), the check FAILS CLOSED instead of assuming single-linked:
+/// an undetectable hard link is exactly the alias this guard exists to
+/// catch (review M9).
 pub(crate) fn check_not_hardlinked(file: &std::fs::File, display: &Path) -> Result<(), PathError> {
-    if let Some(nlink) = handle_link_count(file) {
-        if nlink > 1 {
-            return Err(PathError::Hardlink {
-                path: display.display().to_string(),
-                nlink,
-            });
-        }
+    match handle_link_count(file) {
+        Some(nlink) if nlink > 1 => Err(PathError::Hardlink {
+            path: display.display().to_string(),
+            nlink,
+        }),
+        Some(_) => Ok(()),
+        None => Err(PathError::LinkCountUnavailable(display.display().to_string())),
     }
-    Ok(())
+}
+
+/// Stable file identity from an opened handle: `(volume serial, file index)`
+/// on Windows; `(dev, ino)` on Unix. Returns `None` when the platform query
+/// fails. Used to strengthen validate-vs-open TOCTOU comparisons on Windows,
+/// where timestamp+size identity is collidable (review M9).
+#[allow(unused_variables)]
+pub fn handle_file_id(file: &std::fs::File) -> Option<(u32, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = file.metadata().ok()?;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        let mut info = ByHandleFileInformation {
+            file_attributes: 0,
+            creation_time_lo: 0,
+            creation_time_hi: 0,
+            last_access_lo: 0,
+            last_access_hi: 0,
+            last_write_lo: 0,
+            last_write_hi: 0,
+            volume_serial_number: 0,
+            file_size_high: 0,
+            file_size_low: 0,
+            number_of_links: 0,
+            file_index_high: 0,
+            file_index_low: 0,
+        };
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as isize, &mut info) };
+        if ok == 0 {
+            return None;
+        }
+        Some((
+            info.volume_serial_number,
+            ((info.file_index_high as u64) << 32) | info.file_index_low as u64,
+        ))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = file;
+        None
+    }
 }
 
 /// True when `candidate` canonicalizes inside `root` (see `canonicalize_within`).

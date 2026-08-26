@@ -106,34 +106,26 @@ impl ExecutionError {
         match self.kind {
             // Client payload problem.
             ExecutionErrorKind::Validation => StatusCode::BAD_REQUEST,
+            // Live policy enforcement is a client-actionable denial, not a
+            // server fault — surface as 403 so callers can react instead of
+            // retrying against a "500" (review M5; aligns with the chat
+            // path's PolicyDenied status).
+            ExecutionErrorKind::Policy => StatusCode::FORBIDDEN,
             // Upstream provider failures are a gateway condition.
             ExecutionErrorKind::Upstream => StatusCode::BAD_GATEWAY,
-            // Compilation/policy/scheduling/infrastructure faults are ours.
-            ExecutionErrorKind::Policy
-            | ExecutionErrorKind::Compilation
+            // Compilation/scheduling/infrastructure faults are ours.
+            ExecutionErrorKind::Compilation
             | ExecutionErrorKind::Scheduling
             | ExecutionErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
-    /// Client-facing message. Validation failures describe the client's own
-    /// payload problem (they are the client's fault and actionable — Law 5
-    /// invariants require naming the violated rule). All other kinds are
-    /// opaque: internal/upstream detail must never reach clients.
+    /// Client-facing message. All kinds are opaque: internal detail, secrets,
+    /// and node identifiers in `detail` must never reach clients (review M5).
+    /// `detail` is retained server-side for logs only.
     pub fn public_message(&self) -> String {
         match self.kind {
-            ExecutionErrorKind::Validation => {
-                let sanitized: String = self
-                    .detail
-                    .chars()
-                    .map(|c| if c.is_control() { ' ' } else { c })
-                    .collect();
-                let mut clipped: String = sanitized.chars().take(300).collect();
-                if sanitized.chars().count() > 300 {
-                    clipped.push('…');
-                }
-                format!("invalid workflow specification: {clipped}")
-            }
+            ExecutionErrorKind::Validation => "invalid workflow specification".into(),
             ExecutionErrorKind::Policy => "workflow rejected by policy configuration".into(),
             ExecutionErrorKind::Compilation => "workflow failed to compile".into(),
             ExecutionErrorKind::Scheduling => "workflow scheduling failed".into(),
@@ -751,7 +743,7 @@ mod tests {
             ),
             (
                 ExecutionError::policy("policy configuration rejected: rule 7 malformed"),
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::FORBIDDEN,
             ),
             (
                 ExecutionError::compilation("compilation failed: pass explosion panicked"),

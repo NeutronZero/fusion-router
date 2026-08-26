@@ -20,6 +20,12 @@ pub struct FusionChatProvider {
     inner: Arc<dyn ChatProvider + Send + Sync>,
     #[cfg(feature = "semantic-cache")]
     cache: Option<Arc<crate::cache::SemanticCache>>,
+    /// Cache isolation namespace (review M4). Entries are keyed under this
+    /// namespace so deployments serving multiple trust domains can scope
+    /// caches per tenant; the default "global" is only appropriate for
+    /// single-tenant operation.
+    #[cfg(feature = "semantic-cache")]
+    cache_namespace: String,
 }
 
 impl FusionChatProvider {
@@ -28,6 +34,8 @@ impl FusionChatProvider {
             inner,
             #[cfg(feature = "semantic-cache")]
             cache: None,
+            #[cfg(feature = "semantic-cache")]
+            cache_namespace: "global".to_string(),
         }
     }
 
@@ -37,8 +45,16 @@ impl FusionChatProvider {
         self
     }
 
+    /// Scopes all cache lookups/writes to this namespace (review M4).
+    #[cfg(feature = "semantic-cache")]
+    pub fn with_cache_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.cache_namespace = namespace.into();
+        self
+    }
+
     #[cfg(feature = "semantic-cache")]
     fn cache_key(
+        namespace: &str,
         model: &str,
         messages: &[fusion_runtime::ChatMessage],
         temperature: Option<f32>,
@@ -49,6 +65,7 @@ impl FusionChatProvider {
         // Sampling params change outputs, so they are part of the key
         // material. Hash the canonical JSON to keep keys bounded.
         let canonical = serde_json::json!({
+            "namespace": namespace,
             "model": model,
             "messages": messages,
             "temperature": temperature,
@@ -111,6 +128,7 @@ impl fusion_runtime::ChatProvider for FusionChatProvider {
         #[cfg(feature = "semantic-cache")]
         if let Some(ref cache) = self.cache {
             let key = Self::cache_key(
+                &self.cache_namespace,
                 &request.model,
                 &request.messages,
                 request.temperature,
@@ -150,6 +168,7 @@ impl fusion_runtime::ChatProvider for FusionChatProvider {
                         .unwrap_or_default();
                     if !content.trim().is_empty() {
                         let key = Self::cache_key(
+                            &self.cache_namespace,
                             &request.model,
                             &request.messages,
                             request.temperature,
@@ -274,8 +293,8 @@ mod tests {
             role: "user".into(),
             content: "hi".into(),
         }];
-        let cold = FusionChatProvider::cache_key("m", &messages, Some(0.0), Some(64));
-        let warm = FusionChatProvider::cache_key("m", &messages, Some(0.7), Some(64));
+        let cold = FusionChatProvider::cache_key("ns", "m", &messages, Some(0.0), Some(64));
+        let warm = FusionChatProvider::cache_key("ns", "m", &messages, Some(0.7), Some(64));
         assert_ne!(cold, warm, "temperature must be part of the cache key");
     }
 
@@ -286,8 +305,8 @@ mod tests {
             role: "user".into(),
             content: "hi".into(),
         }];
-        let short = FusionChatProvider::cache_key("m", &messages, Some(0.5), Some(16));
-        let long = FusionChatProvider::cache_key("m", &messages, Some(0.5), Some(4096));
+        let short = FusionChatProvider::cache_key("ns", "m", &messages, Some(0.5), Some(16));
+        let long = FusionChatProvider::cache_key("ns", "m", &messages, Some(0.5), Some(4096));
         assert_ne!(short, long, "max_tokens must be part of the cache key");
     }
 
@@ -298,8 +317,8 @@ mod tests {
             role: "user".into(),
             content: "deterministic".into(),
         }];
-        let a = FusionChatProvider::cache_key("m", &messages, None, None);
-        let b = FusionChatProvider::cache_key("m", &messages, None, None);
+        let a = FusionChatProvider::cache_key("ns", "m", &messages, None, None);
+        let b = FusionChatProvider::cache_key("ns", "m", &messages, None, None);
         assert_eq!(a, b, "same inputs must produce identical keys");
         assert_eq!(a.len(), 64, "key is a hex sha256 digest");
     }

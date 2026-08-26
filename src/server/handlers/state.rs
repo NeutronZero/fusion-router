@@ -47,6 +47,10 @@ pub struct AppState {
     pub model_catalog: crate::types::ModelCatalog,
     /// Concrete provider registry enabling native upstream streaming.
     pub provider_registry: Option<Arc<crate::providers::registry::ProviderRegistry>>,
+    /// Operator-configured tool names a client may declare (review H2).
+    pub permitted_client_tools: Vec<String>,
+    /// Scheduler dispatch capacity, mirrored for envelope sizing (H4b).
+    pub scheduler_max_concurrent: usize,
     planner_capability_snapshot: Arc<RwLock<fusion_kernel::CapabilityCatalog>>,
 }
 
@@ -142,12 +146,12 @@ impl AppState {
         let executor = Arc::new(
             DefaultExecutor::new(provider.clone(), strategies)
                 .with_tool_registry(tool_registry.clone())
-                .with_allow_auto_exec(config.tools.allow_auto_exec),
+                .with_allow_auto_exec(config.tools.allow_auto_exec)
+                .with_permitted_tools(config.tools.permitted_client_tools.clone()),
         );
 
-        let scheduler = Arc::new(DefaultScheduler::new(
-            (config.resources.max_concurrent_nodes as usize).max(1),
-        ));
+        let scheduler_max_concurrent = (config.resources.max_concurrent_nodes as usize).max(1);
+        let scheduler = Arc::new(DefaultScheduler::new(scheduler_max_concurrent));
 
         let config_manager = Arc::new(ConfigManager::new(config_path, config.clone(), vec![]));
         let policy_registry = Arc::new(crate::policy::PolicyRegistry::new());
@@ -168,6 +172,8 @@ impl AppState {
             capability_registry: Arc::new(crate::capability::InMemoryCapabilityRegistry::new()),
             model_catalog: config.model_catalog.clone(),
             provider_registry: None,
+            permitted_client_tools: config.tools.permitted_client_tools.clone(),
+            scheduler_max_concurrent,
             planner_capability_snapshot,
         }
     }
@@ -199,11 +205,41 @@ impl AppState {
 
     /// Attaches the concrete provider registry, enabling native upstream
     /// streaming for eligible single-node graphs.
+    ///
+    /// Also installs model-aware pricing on the scheduler and executor
+    /// (review H3): budget accounting now reflects real per-model prices;
+    /// models without registered pricing fall back to the conservative flat
+    /// rate inside fusion-scheduler/runtime.
     pub fn with_provider_registry(
         mut self,
         registry: Arc<crate::providers::registry::ProviderRegistry>,
     ) -> Self {
+        let resolver: fusion_scheduler::PricingResolver = {
+            let registry = registry.clone();
+            Arc::new(move |model: &str| match registry.get_pricing(model) {
+                Some(pricing) => fusion_scheduler::TokenPricing {
+                    input_nanos_per_token: pricing.input_cost_per_1k.as_nanos() / 1000,
+                    output_nanos_per_token: pricing.output_cost_per_1k.as_nanos() / 1000,
+                },
+                None => fusion_scheduler::TokenPricing::flat_fallback(),
+            })
+        };
         self.provider_registry = Some(registry);
+        // Install pricing on the shared scheduler/executor. This runs during
+        // server assembly while both Arcs are still exclusively owned.
+        match Arc::get_mut(&mut self.scheduler) {
+            Some(scheduler) => scheduler.set_pricing(resolver.clone()),
+            None => tracing::warn!(
+                "scheduler already shared; model-aware budget pricing not installed"
+            ),
+        }
+        match Arc::get_mut(&mut self.executor) {
+            // `pricing` is a pub field on the src executor.
+            Some(executor) => executor.pricing = Some(resolver),
+            None => tracing::warn!(
+                "executor already shared; model-aware usage pricing not installed"
+            ),
+        }
         self
     }
 

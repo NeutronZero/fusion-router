@@ -92,6 +92,7 @@ const VOLATILE_FIELDS: &[&str] = &[
     "duration_ms",
     "total_duration_ms",
     "cost",
+    "total_cost",
     "prompt_tokens",
     "completion_tokens",
     "input_tokens",

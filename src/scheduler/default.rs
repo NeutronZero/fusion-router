@@ -27,19 +27,38 @@ const DEFAULT_MAX_CONCURRENT: usize = 16;
 
 pub struct DefaultScheduler {
     max_concurrent: usize,
+    /// Optional model-aware pricing resolver forwarded to the crates
+    /// scheduler so budget accounting reflects real per-model prices
+    /// (review H3).
+    pricing: Option<fusion_scheduler::PricingResolver>,
 }
 
 impl Default for DefaultScheduler {
     fn default() -> Self {
         Self {
             max_concurrent: DEFAULT_MAX_CONCURRENT,
+            pricing: None,
         }
     }
 }
 
 impl DefaultScheduler {
     pub fn new(max_concurrent: usize) -> Self {
-        Self { max_concurrent }
+        Self {
+            max_concurrent,
+            pricing: None,
+        }
+    }
+
+    pub fn with_pricing(mut self, pricing: fusion_scheduler::PricingResolver) -> Self {
+        self.pricing = Some(pricing);
+        self
+    }
+
+    /// In-place variant for assembly-time wiring on a uniquely-owned
+    /// scheduler (see `AppState::with_provider_registry`).
+    pub fn set_pricing(&mut self, pricing: fusion_scheduler::PricingResolver) {
+        self.pricing = Some(pricing);
     }
 }
 
@@ -99,8 +118,11 @@ impl DefaultScheduler {
         cancel: Option<&CancellationToken>,
     ) -> Result<ExecutionResult, SchedulerError> {
         let (adapter, tracker) = CratesExecutorAdapter::new(executor);
-        let crates_scheduler =
+        let mut crates_scheduler =
             fusion_scheduler::DefaultScheduler::with_max_concurrent(self.max_concurrent);
+        if let Some(pricing) = &self.pricing {
+            crates_scheduler = crates_scheduler.with_pricing(pricing.clone());
+        }
         let graph = Arc::clone(&instance.graph);
 
         let outcome = match (cancel, instance.budget_envelope.as_ref()) {

@@ -122,8 +122,22 @@ mod tests {
 
     #[test]
     fn ir_rejects_provider_fields_at_serde_level() {
+        // Float money amounts deserialize via the checked NanoUSD f64 path;
+        // the rejection here must come from the reserved `provider` key.
         let json = r#"{"version":1,"workflow_id":"00000000-0000-0000-0000-000000000000","nodes":[],"edges":[],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0},"provider":"openai"}"#;
-        assert!(serde_json::from_str::<WorkflowIR>(json).is_err());
+        let err = serde_json::from_str::<WorkflowIR>(json).unwrap_err().to_string();
+        assert!(
+            err.contains("unknown field") && err.contains("provider"),
+            "expected unknown-field rejection, got: {err}"
+        );
+        // A client-supplied selected_model is rejected at the untrusted
+        // intake boundary even though the structure is otherwise valid.
+        let pinned = r#"{"version":1,"workflow_id":"00000000-0000-0000-0000-000000000000","nodes":[{"id":"a","kind":"Task","capability":"CodeGeneration","selected_model":"gpt-4o","config":{}}],"edges":[],"metadata":{"policy_applied":[],"estimated_cost":0,"estimated_tokens":0}}"#;
+        let intake_err = WorkflowIR::from_json(pinned).unwrap_err();
+        assert!(
+            intake_err.to_string().contains("selected_model"),
+            "expected selected_model rejection, got: {intake_err}"
+        );
     }
 
     #[test]
@@ -213,7 +227,16 @@ mod tests {
 
     #[test]
     fn from_json_rejects_invalid_workflow() {
+        // Self-edge a->a must be the reason this fails (not a serde type
+        // error on the float cost, which now parses).
         let json = r#"{"version":1,"workflow_id":"00000000-0000-0000-0000-000000000000","nodes":[{"id":"a","kind":"Task","capability":null,"config":{}}],"edges":[{"from":"a","to":"a","kind":"Sequential","condition":null}],"metadata":{"policy_applied":[],"estimated_cost":0.0,"estimated_tokens":0}}"#;
+        let ir: WorkflowIR = serde_json::from_str(json)
+            .expect("float costs deserialize; structure is well-formed");
+        let report = ir.validate();
+        assert!(
+            !report.is_empty(),
+            "self-edge must produce a validation issue"
+        );
         assert!(WorkflowIR::from_json(json).is_err());
     }
 }

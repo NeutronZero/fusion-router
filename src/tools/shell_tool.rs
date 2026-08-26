@@ -156,12 +156,26 @@ impl StagingSession {
                 handle_meta.len()
             ));
         }
+        // TOCTOU guard via stable handle identity (dev/ino on Unix, volume
+        // serial + file index on Windows). The previous Windows check used
+        // creation time + size + mtime, which is collidable; review M9.
         let path_meta = std::fs::metadata(canonical)
             .map_err(|e| format!("re-stat of validated path failed: {e}"))?;
-        if !same_file_identity(&handle_meta, &path_meta) {
-            return Err(
-                "path changed between validation and open (TOCTOU guard); refusing".to_string(),
-            );
+        let handle_id = crate::security::paths::handle_file_id(&handle);
+        match handle_id {
+            Some(id) => {
+                if !same_file_identity(&id, &path_meta, canonical)? {
+                    return Err(
+                        "path changed between validation and open (TOCTOU guard); refusing"
+                            .to_string(),
+                    );
+                }
+            }
+            None => {
+                return Err(
+                    "file identity could not be determined for TOCTOU guard; refusing".to_string(),
+                )
+            }
         }
 
         let ext = canonical
@@ -206,23 +220,37 @@ impl Drop for StagingSession {
     }
 }
 
-#[cfg(unix)]
-fn same_file_identity(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
-}
-
-#[cfg(windows)]
-fn same_file_identity(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    a.creation_time() == b.creation_time()
-        && a.len() == b.len()
-        && a.last_write_time() == b.last_write_time()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn same_file_identity(_a: &std::fs::Metadata, _b: &std::fs::Metadata) -> bool {
-    true
+/// Compares the opened handle's identity against the freshly-statted path
+/// identity. On Unix both are `(dev, ino)`; on Windows the stat side is
+/// reconstructed from the Win32 file index when available and falls back to
+/// failing closed (the caller refuses on any mismatch or unknown).
+#[allow(unused_variables)]
+fn same_file_identity(
+    handle_id: &(u32, u64),
+    path_meta: &std::fs::Metadata,
+    display: &std::path::Path,
+) -> Result<bool, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(*handle_id == (path_meta.dev(), path_meta.ino()))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // Stable std does not expose the NTFS file index from `Metadata`;
+        // open a second handle on the re-statted path so both sides come
+        // from GetFileInformationByHandle and compare like-for-like.
+        let reopened =
+            std::fs::File::open(display).map_err(|e| format!("identity reopen failed: {e}"))?;
+        let path_id = crate::security::paths::handle_file_id(&reopened)
+            .ok_or_else(|| "file identity unavailable on re-open; refusing".to_string())?;
+        Ok(path_id == *handle_id)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Ok(false)
+    }
 }
 
 /// Removes staging directories left behind by crashed processes (ADR-041).

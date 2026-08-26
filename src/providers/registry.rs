@@ -261,8 +261,25 @@ impl ChatProvider for ProviderRegistry {
             let provider = target.get_or_init().await?;
             match provider.chat_stream(request).await {
                 Ok(stream) => {
+                    // Review L8: failures that arrive MID-STREAM previously
+                    // never touched the circuit breaker because the connect
+                    // path had already returned Ok. Observe the first item
+                    // error so repeated upstream stream failures open the
+                    // circuit like any other provider failure.
+                    use futures::StreamExt;
+                    let target_for_errors = target.clone();
+                    let mut seen_error = false;
+                    let monitored = stream.map(move |item| {
+                        if !seen_error {
+                            if item.is_err() {
+                                seen_error = true;
+                                target_for_errors.record_failure();
+                            }
+                        }
+                        item
+                    });
                     target.record_success();
-                    return Ok(stream);
+                    return Ok(Box::pin(monitored) as BoxStream<'static, _>);
                 }
                 Err(e) => {
                     tracing::warn!(provider = %target.name, error = %e, "provider stream failed, trying next");

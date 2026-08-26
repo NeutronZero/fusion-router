@@ -25,6 +25,12 @@ pub struct PipelineContext {
     pub execution_result: Option<ExecutionResult>,
     pub response: Option<ChatCompletionResponse>,
     pub budget_envelope: Option<BudgetEnvelope>,
+    /// Operator-configured tool names a client may declare (review H2).
+    /// `None` means unrestricted; an empty list permits no client tools.
+    pub permitted_client_tools: Option<Vec<String>>,
+    /// Dispatch capacity of the scheduler, used to size the per-request
+    /// envelope's scheduling-round budget (review H4b). Defaults to 16.
+    pub scheduler_round_capacity: Option<u64>,
 }
 
 impl PipelineContext {
@@ -45,6 +51,8 @@ impl PipelineContext {
             execution_result: None,
             response: None,
             budget_envelope: None,
+            permitted_client_tools: None,
+            scheduler_round_capacity: None,
         }
     }
 }
@@ -232,10 +240,19 @@ impl PipelineStep<WorkflowIR, ExecutionGraph> for CompilationStep {
                 // per-request tool allowlist. The provider is only ever shown
                 // the allowlisted definitions and nothing is auto-executed
                 // unless `tools.allow_auto_exec` is enabled server-side.
+                // Review H2: client declarations are additionally intersected
+                // with the OPERATOR-configured permitted set so a request can
+                // never reach a tool (e.g. shell_command) by simply naming it.
+                let permitted: Option<&Vec<String>> =
+                    ctx.permitted_client_tools.as_ref();
                 if let Some(tools) = &ctx.request.tools {
                     if !tools.is_empty() {
                         let allowlist: Vec<serde_json::Value> = tools
                             .iter()
+                            .filter(|t| match permitted {
+                                Some(list) => list.contains(&t.name),
+                                None => true,
+                            })
                             .map(|t| serde_json::Value::String(t.name.clone()))
                             .collect();
                         let allowlist = serde_json::Value::Array(allowlist);
@@ -283,9 +300,19 @@ impl PipelineStep<ExecutionGraph, ResourceGuard> for ResourceReservationStep {
             });
         }
 
-        // Initialize per-request budget envelope from global quota
+        // Initialize per-request budget envelope from global quota.
+        // Review H4b: the envelope is bounded BOTH by a share of the daily
+        // quota and by what this graph plausibly needs (estimated cost with
+        // headroom), so a single request cannot reserve 20% of the daily
+        // budget for a trivial workflow.
         let q = self.resource_manager.quota();
-        let max_cost = NanoUSD::from_nanos((q.max_daily_cost.as_nanos() / 5).max(10_000));
+        let estimate_with_headroom = graph
+            .metadata
+            .estimated_cost
+            .saturating_mul(3)
+            .max(NanoUSD::from_nanos(10_000));
+        let max_cost =
+            NanoUSD::from_nanos((q.max_daily_cost.as_nanos() / 5)).min(estimate_with_headroom);
         // The envelope must never be smaller than the request itself needs:
         // every LLM node re-sends the full assembled context, so the minimum
         // workable budget is (input + output) x number of LLM nodes.
@@ -315,7 +342,15 @@ impl PipelineStep<ExecutionGraph, ResourceGuard> for ResourceReservationStep {
         let max_output = ctx.request.max_tokens.unwrap_or(4096) as u64;
         let request_min = (input_tokens + max_output).saturating_mul(llm_node_count);
         let max_tokens = (q.max_daily_tokens / 5).max(request_min).max(10_000);
-        ctx.budget_envelope = Some(BudgetEnvelope::new(max_cost, max_tokens, 100));
+        // Review H4b: the iteration ceiling counts SCHEDULER ROUNDS (batched
+        // dispatch waves), not loop-node iterations. Derive it from the graph
+        // shape with generous loop slack instead of a hardcoded 100 that
+        // aborted long graphs mid-run.
+        let rounds_needed = (graph.nodes.len() as u64)
+            .div_ceil(ctx.scheduler_round_capacity.unwrap_or(16))
+            .max(1);
+        let max_iterations = (rounds_needed.saturating_mul(4)).saturating_add(64) as u32;
+        ctx.budget_envelope = Some(BudgetEnvelope::new(max_cost, max_tokens, max_iterations));
 
         let guard = ResourceGuard::new(ctx.request_id, graph, self.resource_manager.clone());
         Ok(guard)
@@ -415,7 +450,7 @@ impl PipelineStep<ExecutionResult, ChatCompletionResponse> for ResponseBuilderSt
             usage: Some(Usage {
                 prompt_tokens: 0,
                 completion_tokens: 0,
-                total_tokens: result.total_tokens as u32,
+                total_tokens: result.total_tokens.min(u32::MAX as u64) as u32,
             }),
         };
 

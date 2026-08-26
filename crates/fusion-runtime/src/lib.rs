@@ -141,6 +141,48 @@ pub trait Tool: Send + Sync {
     async fn execute(&self, arguments: serde_json::Value) -> Result<serde_json::Value, String>;
 }
 
+/// Authority consulted before a policy-inserted `Gate` node may pass
+/// (review H1). Gates previously succeeded instantly, making the policy
+/// `Approval` effect a no-op. With no store configured the gate FAILS
+/// CLOSED: execution cannot proceed past an unapproved gate.
+#[async_trait]
+pub trait ApprovalGate: Send + Sync {
+    async fn is_approved(&self, gate_id: uuid::Uuid) -> bool;
+}
+
+/// Simple shared-memory approval store. Hosts can pre-register approvals
+/// (e.g. from an operations API), keyed by the deterministic gate id that
+/// `PolicyCompilerPass` derives via
+/// `Uuid::new_v5(target_node_id, b"policy_approval_gate")`.
+#[derive(Default, Clone)]
+pub struct InMemoryApprovalStore {
+    approved: std::collections::HashSet<uuid::Uuid>,
+}
+
+impl InMemoryApprovalStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn approve(&mut self, gate_id: uuid::Uuid) {
+        self.approved.insert(gate_id);
+    }
+
+    /// Convenience for hosts approving the gate a policy pass created for
+    /// `target_node_id`, without re-deriving the namespace constant.
+    pub fn approve_target(&mut self, target_node_id: uuid::Uuid) {
+        self.approved
+            .insert(uuid::Uuid::new_v5(&target_node_id, b"policy_approval_gate"));
+    }
+}
+
+#[async_trait]
+impl ApprovalGate for InMemoryApprovalStore {
+    async fn is_approved(&self, gate_id: uuid::Uuid) -> bool {
+        self.approved.contains(&gate_id)
+    }
+}
+
 /// In-memory tool registry.
 #[derive(Default, Clone)]
 pub struct ToolRegistry {
@@ -178,6 +220,13 @@ pub struct ProviderExecutor {
     /// Optional budget envelope (Phase 4.6). When set, each node's provider
     /// calls are gated by `can_afford` and actual usage is recorded.
     resource_manager: Option<Arc<dyn ResourceManager>>,
+    /// Model-aware pricing used to record REAL cost against the resource
+    /// manager (review H3b: previously recorded `NanoUSD::ZERO`, so daily
+    /// cost quotas never accrued on this path).
+    pricing: Option<fusion_scheduler::PricingResolver>,
+    /// Approval authority for policy-inserted `Gate` nodes (review H1).
+    /// `None` means fail closed: every gate blocks.
+    approvals: Option<std::sync::Arc<dyn ApprovalGate>>,
 }
 
 impl ProviderExecutor {
@@ -187,6 +236,8 @@ impl ProviderExecutor {
             tools: ToolRegistry::new(),
             allow_auto_exec: false,
             resource_manager: None,
+            pricing: None,
+            approvals: None,
         }
     }
 
@@ -205,6 +256,29 @@ impl ProviderExecutor {
         self
     }
 
+    /// Installs model-aware pricing so recorded usage carries real cost.
+    pub fn with_pricing(
+        mut self,
+        resolver: fusion_scheduler::PricingResolver,
+    ) -> Self {
+        self.pricing = Some(resolver);
+        self
+    }
+
+    /// Installs an approval authority for policy `Gate` nodes. Without one,
+    /// gates fail closed (review H1).
+    pub fn with_approvals(mut self, approvals: std::sync::Arc<dyn ApprovalGate>) -> Self {
+        self.approvals = Some(approvals);
+        self
+    }
+
+    fn price_for(&self, model: &str) -> fusion_scheduler::TokenPricing {
+        match &self.pricing {
+            Some(resolve) => resolve(model),
+            None => fusion_scheduler::TokenPricing::flat_fallback(),
+        }
+    }
+
     /// Builds a `ChatRequest` from node config and execution context.
     ///
     /// Order:
@@ -212,12 +286,19 @@ impl ProviderExecutor {
     /// 2. System prompt injected by kind (Judge) / strategy (Reflection) when
     ///    no system message exists
     /// 3. Parent outputs appended as user messages (Judge / Review / Generate)
-    pub fn build_request(&self, node: &ExecutionNode, ctx: &NodeExecContext) -> ChatRequest {
-        let mut messages: Vec<ChatMessage> = node
-            .config
-            .get("messages")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+    /// Errors when `config["messages"]` is present but malformed: silently
+    /// executing with an empty prompt previously swallowed operator mistakes
+    /// and sent context-free requests upstream (review L4).
+    pub fn build_request(
+        &self,
+        node: &ExecutionNode,
+        ctx: &NodeExecContext,
+    ) -> Result<ChatRequest, String> {
+        let mut messages: Vec<ChatMessage> = match node.config.get("messages") {
+            Some(v) => serde_json::from_value(v.clone())
+                .map_err(|e| format!("node {}: invalid 'messages' config: {e}", node.id))?,
+            None => Vec::new(),
+        };
 
         let temperature = node
             .config
@@ -273,12 +354,12 @@ impl ProviderExecutor {
             }
         }
 
-        ChatRequest {
+        Ok(ChatRequest {
             model: node.model.clone(),
             messages,
             temperature,
             max_tokens,
-        }
+        })
     }
 
     /// Executes a prebuilt `ExecutionSubgraph` in topological order.
@@ -297,8 +378,11 @@ impl ProviderExecutor {
 
         let mut outputs: StdHashMap<uuid::Uuid, serde_json::Value> = StdHashMap::new();
         let mut completed: HashSet<uuid::Uuid> = HashSet::new();
-        let mut total_tokens: u64 = 0;
-        let mut total_cost = NanoUSD::ZERO;
+        // Review H3c: track prompt/completion separately so the aggregate
+        // usage is truthful (previously everything landed in prompt_tokens,
+        // completion was hardcoded 0, and a computed cost was discarded).
+        let mut total_prompt_tokens: u64 = 0;
+        let mut total_completion_tokens: u64 = 0;
         let start = std::time::Instant::now();
 
         // Topological execution loop
@@ -348,10 +432,8 @@ impl ProviderExecutor {
                             outputs.insert(sub_node.id, out);
                         }
                         if let Some(ref usage) = result.usage {
-                            total_tokens += usage.total_tokens as u64;
-                            total_cost = total_cost.saturating_add(NanoUSD::from_nanos(
-                                usage.total_tokens as u64 * 1_000,
-                            ));
+                            total_prompt_tokens += usage.prompt_tokens as u64;
+                            total_completion_tokens += usage.completion_tokens as u64;
                         }
                     }
                     NodeState::Failed(msg) => {
@@ -377,12 +459,13 @@ impl ProviderExecutor {
             .cloned()
             .unwrap_or_else(|| serde_json::json!({"subgraph": "complete"}));
 
+        let total_tokens = total_prompt_tokens.saturating_add(total_completion_tokens);
         NodeExecutionResult {
             state: NodeState::Succeeded,
             usage: Some(Usage {
-                prompt_tokens: total_tokens as u32,
-                completion_tokens: 0,
-                total_tokens: total_tokens as u32,
+                prompt_tokens: total_prompt_tokens.min(u32::MAX as u64) as u32,
+                completion_tokens: total_completion_tokens.min(u32::MAX as u64) as u32,
+                total_tokens: total_tokens.min(u32::MAX as u64) as u32,
             }),
             latency_ms: start.elapsed().as_millis() as u64,
             output: Some(serde_json::json!({
@@ -452,8 +535,20 @@ impl ProviderExecutor {
             let response = self.provider.chat_completion(&request).await?;
             if let Some(rm) = &self.resource_manager {
                 if let Some(usage) = &response.usage {
-                    rm.record_usage(fusion_core::NanoUSD::ZERO, usage.total_tokens as u64)
-                        .await;
+                    // Record REAL cost (review H3b): pricing is model-aware
+                    // when installed, conservative flat otherwise. Zero-cost
+                    // recording previously meant daily cost quotas never
+                    // accrued from this path.
+                    let price = self.price_for(&request.model);
+                    let cost = fusion_core::NanoUSD::from_nanos(
+                        (usage.prompt_tokens as u64)
+                            .saturating_mul(price.input_nanos_per_token)
+                            .saturating_add(
+                                (usage.completion_tokens as u64)
+                                    .saturating_mul(price.output_nanos_per_token),
+                            ),
+                    );
+                    rm.record_usage(cost, usage.total_tokens as u64).await;
                 }
             }
             if response.tool_calls.is_empty() {
@@ -557,10 +652,41 @@ impl Executor for ProviderExecutor {
             return self.execute_subgraph(node, subgraph, ctx).await;
         }
 
+        if matches!(node.kind, ExecutionNodeKind::Gate) {
+            // Policy approval gate: FAIL CLOSED unless an approval authority
+            // explicitly approves this gate/target pair (review H1). Gates
+            // previously succeeded instantly, making the policy `Approval`
+            // effect a silent no-op.
+            let approved = match &self.approvals {
+                Some(store) => store.is_approved(node.id).await,
+                None => false,
+            };
+            return if approved {
+                NodeExecutionResult {
+                    state: NodeState::Succeeded,
+                    usage: None,
+                    latency_ms: 0,
+                    output: Some(serde_json::json!({
+                        "kind": "Gate",
+                        "node_id": node.id.to_string(),
+                        "approved": true,
+                    })),
+                }
+            } else {
+                NodeExecutionResult {
+                    state: NodeState::Failed(
+                        "policy approval required: gate not approved (fail closed)".into(),
+                    ),
+                    usage: None,
+                    latency_ms: 0,
+                    output: None,
+                }
+            };
+        }
+
         if matches!(
             node.kind,
-            ExecutionNodeKind::Gate
-                | ExecutionNodeKind::Transform
+            ExecutionNodeKind::Transform
                 | ExecutionNodeKind::Conditional
                 | ExecutionNodeKind::Loop
                 | ExecutionNodeKind::Split
@@ -591,7 +717,17 @@ impl Executor for ProviderExecutor {
             }
             attempts -= 1;
 
-            let request = self.build_request(node, ctx);
+            let request = match self.build_request(node, ctx) {
+                Ok(r) => r,
+                Err(e) => {
+                    return NodeExecutionResult {
+                        state: NodeState::Failed(e),
+                        usage: None,
+                        latency_ms: start.elapsed().as_millis() as u64,
+                        output: None,
+                    };
+                }
+            };
             match self.roundtrip(node, request).await {
                 Ok(response) => {
                     let mut output = serde_json::json!({
@@ -622,7 +758,17 @@ impl Executor for ProviderExecutor {
 
         // Fallback model attempts (1 try)
         if let Some(fallback) = &node.fallback {
-            let mut fallback_request = self.build_request(node, ctx);
+            let mut fallback_request = match self.build_request(node, ctx) {
+                Ok(r) => r,
+                Err(e) => {
+                    return NodeExecutionResult {
+                        state: NodeState::Failed(e),
+                        usage: None,
+                        latency_ms: start.elapsed().as_millis() as u64,
+                        output: None,
+                    };
+                }
+            };
             fallback_request.model = fallback.model.clone();
             match self.roundtrip(node, fallback_request).await {
                 Ok(response) => {
@@ -659,6 +805,8 @@ pub struct RuntimeEngine {
     tools: ToolRegistry,
     allow_auto_exec: bool,
     resource_manager: Option<Arc<dyn ResourceManager>>,
+    pricing: Option<fusion_scheduler::PricingResolver>,
+    approvals: Option<Arc<dyn ApprovalGate>>,
 }
 
 impl RuntimeEngine {
@@ -669,6 +817,8 @@ impl RuntimeEngine {
             tools: ToolRegistry::new(),
             allow_auto_exec: false,
             resource_manager: None,
+            pricing: None,
+            approvals: None,
         }
     }
 
@@ -679,6 +829,8 @@ impl RuntimeEngine {
             tools: ToolRegistry::new(),
             allow_auto_exec: false,
             resource_manager: None,
+            pricing: None,
+            approvals: None,
         }
     }
 
@@ -701,6 +853,26 @@ impl RuntimeEngine {
         self
     }
 
+    /// Installs model-aware pricing so recorded usage carries real cost.
+    pub fn with_pricing(mut self, resolver: fusion_scheduler::PricingResolver) -> Self {
+        self.pricing = Some(resolver);
+        self
+    }
+
+    /// Installs an approval authority for policy `Gate` nodes (fail closed
+    /// without one).
+    pub fn with_approvals(mut self, approvals: Arc<dyn ApprovalGate>) -> Self {
+        self.approvals = Some(approvals);
+        self
+    }
+
+    fn price_for(&self, model: &str) -> fusion_scheduler::TokenPricing {
+        match &self.pricing {
+            Some(resolve) => resolve(model),
+            None => fusion_scheduler::TokenPricing::flat_fallback(),
+        }
+    }
+
     /// Execute a full execution graph to completion.
     pub async fn run(&self, graph: Arc<ExecutionGraph>) -> Result<ExecutionOutcome, String> {
         let executor = ProviderExecutor {
@@ -708,6 +880,8 @@ impl RuntimeEngine {
             tools: self.tools.clone(),
             allow_auto_exec: self.allow_auto_exec,
             resource_manager: self.resource_manager.clone(),
+            pricing: self.pricing.clone(),
+            approvals: self.approvals.clone(),
         };
         self.scheduler
             .run(graph, &executor)
@@ -834,7 +1008,7 @@ mod tests {
             ]),
             subgraph: None,
         };
-        let request = executor.build_request(&node, &NodeExecContext::default());
+        let request = executor.build_request(&node, &NodeExecContext::default()).unwrap();
         assert_eq!(request.messages.len(), 1);
         assert_eq!(request.messages[0].role, "user");
         assert_eq!(request.messages[0].content, "hello from config");
@@ -863,7 +1037,7 @@ mod tests {
             parent_outputs: HashMap::from([(parent_id, serde_json::json!({"answer": "42"}))]),
             graph_outputs: HashMap::new(),
         };
-        let request = executor.build_request(&node, &ctx);
+        let request = executor.build_request(&node, &ctx).unwrap();
         // system + 1 parent context message
         assert_eq!(request.messages.len(), 2);
         assert_eq!(request.messages[0].role, "system");
@@ -895,7 +1069,7 @@ mod tests {
             )]),
             subgraph: None,
         };
-        let request = executor.build_request(&node, &NodeExecContext::default());
+        let request = executor.build_request(&node, &NodeExecContext::default()).unwrap();
         assert_eq!(
             request
                 .messages
@@ -1271,7 +1445,6 @@ mod tests {
     #[tokio::test]
     async fn test_gate_node_does_not_call_provider() {
         let spy = Arc::new(SpyProvider::new());
-        let executor = ProviderExecutor::new(spy.clone());
         let node = ExecutionNode {
             id: uuid::Uuid::new_v4(),
             kind: ExecutionNodeKind::Gate,
@@ -1285,6 +1458,9 @@ mod tests {
             config: HashMap::new(),
             subgraph: None,
         };
+        let mut store = InMemoryApprovalStore::new();
+        store.approve(node.id);
+        let executor = ProviderExecutor::new(spy.clone()).with_approvals(Arc::new(store));
         let result = executor
             .execute_node(&node, &NodeExecContext::default())
             .await;
@@ -1792,9 +1968,11 @@ mod tests {
     #[tokio::test]
     async fn test_golden_gate_path_runs_without_llm_on_gate() {
         let provider = Arc::new(SpyProvider::new());
-        let engine = RuntimeEngine::new(provider.clone());
         let n1 = uuid::Uuid::new_v4();
         let n2 = uuid::Uuid::new_v4();
+        let mut store = InMemoryApprovalStore::new();
+        store.approve(n2);
+        let engine = RuntimeEngine::new(provider.clone()).with_approvals(Arc::new(store));
         let graph = Arc::new(ExecutionGraph {
             graph_id: uuid::Uuid::new_v4(),
             nodes: vec![

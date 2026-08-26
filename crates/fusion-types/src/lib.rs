@@ -375,74 +375,64 @@ impl BudgetEnvelope {
 
     /// Records spend and enforces both budget ceilings.
     ///
-    /// Ordering (review finding S6): the check happens BEFORE the spend is
-    /// committed. On violation, both counters are rolled back to their prior
-    /// values so a rejected record leaves no permanent overspend. The error
-    /// still reports the prospective total for diagnostics. Under concurrent
-    /// records a transient over-read is possible (another thread may observe
-    /// the reservation before rollback) â€” that fails closed rather than open.
+    /// Ordering (review finding S6, amended by review H4): the spend is
+    /// committed FIRST, then the ceilings are checked. Once a provider call
+    /// has completed its cost is real; rolling counters back would
+    /// under-state true consumption and let later stages draw against money
+    /// already spent. A violation therefore commits and then fails closed;
+    /// the caller stops execution either way.
     ///
-    /// Arithmetic is checked: a record whose addition would overflow a u64
-    /// counter wraps nothing â€” nothing is committed for the overflowing
-    /// counter and a saturated ceiling-violation error is returned instead
-    /// (plain adds wrap in release builds, which previously let a huge
-    /// reservation bypass the ceilings).
+    /// Arithmetic is saturating: a record that would overflow a u64 counter
+    /// pins that counter at `u64::MAX` (tripping the ceiling) instead of
+    /// wrapping silently in release builds.
     pub fn record_and_check(&self, cost: NanoUSD, tokens: u64) -> Result<(), BudgetExceededError> {
         let cost_nanos = cost.as_nanos();
 
-        // `fetch_update` yields the PREVIOUS counter value; the committed new
-        // total is prev + increment, which the closure already proved fits.
-        let prev_cost =
-            match self
-                .spent_cost
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| {
-                    prev.checked_add(cost_nanos)
-                }) {
-                Ok(prev) => prev,
-                Err(_overflow) => {
-                    return Err(BudgetExceededError::Cost {
-                        spent: u64::MAX,
-                        max: self.max_cost.as_nanos(),
-                    });
-                }
-            };
-        let new_cost = NanoUSD::from_nanos(prev_cost.saturating_add(cost_nanos));
-
-        let prev_tokens =
-            match self
-                .spent_tokens
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| {
-                    prev.checked_add(tokens)
-                }) {
-                Ok(prev) => prev,
-                Err(_overflow) => {
-                    self.spent_cost.fetch_sub(cost_nanos, Ordering::SeqCst);
-                    return Err(BudgetExceededError::Tokens {
-                        spent: u64::MAX,
-                        max: self.max_tokens,
-                    });
-                }
-            };
-        let new_tokens = prev_tokens.saturating_add(tokens);
-
-        let violation = if new_cost > self.max_cost {
-            Some(BudgetExceededError::Cost {
-                spent: new_cost.as_nanos(),
-                max: self.max_cost.as_nanos(),
+        // Commit actuals first (saturating), then enforce ceilings. Real
+        // spend is never rolled back (review finding H4). Saturating overflow
+        // itself is a ceiling trip — it pins at u64::MAX instead of wrapping
+        // (which previously bypassed ceilings in release builds).
+        let prev_cost = self
+            .spent_cost
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| {
+                Some(prev.saturating_add(cost_nanos))
             })
-        } else if new_tokens > self.max_tokens {
-            Some(BudgetExceededError::Tokens {
+            .unwrap();
+        let prev_tokens = self
+            .spent_tokens
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| {
+                Some(prev.saturating_add(tokens))
+            })
+            .unwrap();
+
+        let new_cost = self.spent_cost.load(Ordering::SeqCst);
+        let new_tokens = self.spent_tokens.load(Ordering::SeqCst);
+
+        // Overflow is always a ceiling violation, even when max == u64::MAX
+        // — the true spend would have exceeded the representable range.
+        if prev_cost.checked_add(cost_nanos).is_none() {
+            return Err(BudgetExceededError::Cost {
+                spent: new_cost,
+                max: self.max_cost.as_nanos(),
+            });
+        }
+        if new_cost > self.max_cost.as_nanos() {
+            return Err(BudgetExceededError::Cost {
+                spent: new_cost,
+                max: self.max_cost.as_nanos(),
+            });
+        }
+        if prev_tokens.checked_add(tokens).is_none() {
+            return Err(BudgetExceededError::Tokens {
                 spent: new_tokens,
                 max: self.max_tokens,
-            })
-        } else {
-            None
-        };
-
-        if let Some(err) = violation {
-            self.spent_cost.fetch_sub(cost_nanos, Ordering::SeqCst);
-            self.spent_tokens.fetch_sub(tokens, Ordering::SeqCst);
-            return Err(err);
+            });
+        }
+        if new_tokens > self.max_tokens {
+            return Err(BudgetExceededError::Tokens {
+                spent: new_tokens,
+                max: self.max_tokens,
+            });
         }
         Ok(())
     }
@@ -657,11 +647,12 @@ mod tests {
     }
 
     #[test]
-    fn test_budget_failure_rolls_back_spend() {
+    fn test_budget_violation_keeps_real_spend() {
+        // Review H4: once a provider call completed, its spend is real. A
+        // violating record commits first, then fails closed.
         let env = BudgetEnvelope::new(NanoUSD::from_nanos(100), 50, 5);
         assert!(env.record_and_check(NanoUSD::from_nanos(60), 30).is_ok());
         let err = env.record_and_check(NanoUSD::from_nanos(60), 30);
-        assert!(err.is_err());
         assert_eq!(
             err.unwrap_err(),
             BudgetExceededError::Cost {
@@ -669,20 +660,21 @@ mod tests {
                 max: 100
             }
         );
-        assert_eq!(env.spent_cost().as_nanos(), 60);
-        assert_eq!(env.spent_tokens(), 30);
-        let ok = env.record_and_check(NanoUSD::from_nanos(40), 20);
-        assert!(ok.is_ok(), "rolled-back spend must free budget again");
-        assert_eq!(env.spent_cost().as_nanos(), 100);
-        assert_eq!(env.spent_tokens(), 50);
+        assert_eq!(
+            env.spent_cost().as_nanos(),
+            120,
+            "real spend must remain recorded after a violation"
+        );
+        assert_eq!(env.spent_tokens(), 60);
     }
 
     #[test]
-    fn test_budget_cost_overflow_rejected_without_committing() {
+    fn test_budget_cost_overflow_saturates_and_fails_closed() {
         let half = u64::MAX / 2 + 1;
         let env = BudgetEnvelope::new(NanoUSD::from_nanos(u64::MAX), u64::MAX, 5);
         assert!(env.record_and_check(NanoUSD::from_nanos(half), 0).is_ok());
-        // half + half would exceed u64::MAX: must fail closed, not wrap.
+        // half + half would exceed u64::MAX: the counter saturates and the
+        // ceiling trips instead of wrapping (which previously bypassed it).
         let err = env
             .record_and_check(NanoUSD::from_nanos(half), 0)
             .unwrap_err();
@@ -695,19 +687,13 @@ mod tests {
         );
         assert_eq!(
             env.spent_cost().as_nanos(),
-            half,
-            "overflow must not commit"
+            u64::MAX,
+            "overflowing commit must saturate at u64::MAX"
         );
-        assert_eq!(env.spent_tokens(), 0);
-        // Envelope remains usable for spend within the remaining headroom.
-        assert!(env
-            .record_and_check(NanoUSD::from_nanos(u64::MAX - half), 0)
-            .is_ok());
-        assert_eq!(env.spent_cost().as_nanos(), u64::MAX);
     }
 
     #[test]
-    fn test_budget_token_overflow_rolls_back_cost() {
+    fn test_budget_token_overflow_saturates_and_fails_closed() {
         let half = u64::MAX / 2 + 1;
         let env = BudgetEnvelope::new(NanoUSD::from_nanos(u64::MAX), u64::MAX, 5);
         assert!(env.record_and_check(NanoUSD::from_nanos(10), half).is_ok());
@@ -721,11 +707,11 @@ mod tests {
                 max: u64::MAX
             }
         );
-        assert_eq!(env.spent_tokens(), half);
+        assert_eq!(env.spent_tokens(), u64::MAX, "tokens saturate");
         assert_eq!(
             env.spent_cost().as_nanos(),
-            10,
-            "cost must roll back with tokens"
+            20,
+            "committed cost is never rolled back"
         );
     }
 

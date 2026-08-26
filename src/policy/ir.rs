@@ -216,6 +216,12 @@ mod tests {
         let rule = fusion_compiler::policy::PolicyPrecedenceEngine::evaluate_matching_rule(
             &bridged,
             "shell.exec",
+            &fusion_compiler::policy::PolicyFacts {
+                model: "test-model",
+                strategy: "Single",
+                node_kind: Some("Task"),
+                capability: None,
+            },
         )
         .expect("rule must match target");
         assert_eq!(rule.effect, fusion_compiler::policy::PolicyEffect::Deny);

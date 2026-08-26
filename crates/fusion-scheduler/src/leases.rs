@@ -38,6 +38,9 @@ impl ExecutionLeaseManager {
     }
 
     /// Grants an exclusive, single-worker lease under Invariant 12.
+    ///
+    /// Expired lease records are pruned opportunistically on every grant so
+    /// the map cannot grow without bound (review M10).
     pub fn grant_lease(
         &self,
         exec_id: &str,
@@ -45,13 +48,14 @@ impl ExecutionLeaseManager {
         worker_id: &str,
         ttl_ms: u64,
     ) -> Result<ExecutionLease, PlatformError> {
-        let lease_key = format!("lease:{}:{}:{}", exec_id, node_id, worker_id);
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
 
         let mut map = self.leases.write().unwrap_or_else(|e| e.into_inner());
+        // Opportunistic pruning of expired entries (review M10).
+        map.retain(|_, lease| !lease.is_expired(now_ms));
         let mut prev_epoch = 0u64;
 
         // Enforce Invariant 12: Single-Worker Lease Exclusivity & Expiration
@@ -78,7 +82,7 @@ impl ExecutionLeaseManager {
         }
 
         let lease = ExecutionLease {
-            lease_key: lease_key.clone(),
+            lease_key: format!("lease:{}:{}:{}", exec_id, node_id, worker_id),
             execution_id: exec_id.to_string(),
             node_id: node_id.to_string(),
             worker_id: worker_id.to_string(),
@@ -88,7 +92,7 @@ impl ExecutionLeaseManager {
             is_revoked: false,
         };
 
-        map.insert(lease_key, lease.clone());
+        map.insert(lease.lease_key.clone(), lease.clone());
         Ok(lease)
     }
 

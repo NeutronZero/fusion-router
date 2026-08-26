@@ -7,9 +7,79 @@ use std::ops::{Add, AddAssign, Sub, SubAssign};
 /// 1 MicroUSD = 1,000 NanoUSD.
 /// 1 USD = 1,000,000,000 NanoUSD.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Default,
 )]
 pub struct NanoUSD(pub u64);
+
+impl NanoUSD {
+    /// Convert a finite, non-negative f64 USD amount into exact NanoUSD.
+    ///
+    /// Accepts the float representations that appear in JSON produced by
+    /// external tools (`"estimated_cost": 0.05`). The value is rounded to
+    /// the nearest nano; anything negative, non-finite, overflowing u64
+    /// nanos, or beyond 9 decimal places of significance fails closed.
+    pub fn checked_from_f64_usd(usd: f64) -> Result<Self, String> {
+        if !usd.is_finite() {
+            return Err(format!("non-finite USD amount: {usd}"));
+        }
+        if usd < 0.0 {
+            return Err(format!("negative USD amount: {usd}"));
+        }
+        let nanos = usd * 1_000_000_000.0;
+        if nanos >= u64::MAX as f64 {
+            return Err(format!("USD amount overflows NanoUSD: {usd}"));
+        }
+        let rounded = nanos.round();
+        // Reject values whose float representation cannot plausibly carry
+        // 9 significant decimals (e.g. 1e30 dollars) — they would silently
+        // round to a coarse multiple of nanos.
+        if (rounded - nanos).abs() > 1e-3 {
+            return Err(format!("USD amount exceeds nano precision: {usd}"));
+        }
+        Ok(Self(rounded as u64))
+    }
+}
+
+// Custom deserialization: integers deserialize natively; JSON floats (the
+// common external representation for money) go through the checked f64
+// conversion instead of failing with `invalid type: floating point`.
+impl<'de> Deserialize<'de> for NanoUSD {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct NanoUSDVisitor;
+        impl serde::de::Visitor<'_> for NanoUSDVisitor {
+            type Value = NanoUSD;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "a u64 nano count or a non-negative USD float")
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                Ok(NanoUSD(v))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                if v < 0 {
+                    return Err(E::custom(format!("negative NanoUSD: {v}")));
+                }
+                Ok(NanoUSD(v as u64))
+            }
+            fn visit_u128<E: serde::de::Error>(self, v: u128) -> Result<Self::Value, E> {
+                u64::try_from(v)
+                    .map(NanoUSD)
+                    .map_err(|_| E::custom(format!("NanoUSD overflow: {v}")))
+            }
+            fn visit_i128<E: serde::de::Error>(self, v: i128) -> Result<Self::Value, E> {
+                u64::try_from(v)
+                    .map(NanoUSD)
+                    .map_err(|_| E::custom(format!("negative or overflowing NanoUSD: {v}")))
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Self::Value, E> {
+                NanoUSD::checked_from_f64_usd(v).map_err(E::custom)
+            }
+        }
+        deserializer.deserialize_any(NanoUSDVisitor)
+    }
+}
 
 impl NanoUSD {
     pub const ZERO: NanoUSD = NanoUSD(0);
@@ -190,5 +260,19 @@ mod tests {
         assert_eq!(NanoUSD(50_000_000).to_decimal_usd(), "0.05");
         assert_eq!(NanoUSD(1_000_000_000).to_decimal_usd(), "1.00");
         assert_eq!(NanoUSD(12345).to_decimal_usd(), "0.000012345");
+    }
+
+    #[test]
+    fn test_nanousd_float_deserialization() {
+        // External JSON commonly writes money as floats; these must parse.
+        assert_eq!(serde_json::from_str::<NanoUSD>("0.05").unwrap(), NanoUSD(50_000_000));
+        assert_eq!(serde_json::from_str::<NanoUSD>("1.0").unwrap(), NanoUSD(1_000_000_000));
+        assert_eq!(serde_json::from_str::<NanoUSD>("0.0").unwrap(), NanoUSD::ZERO);
+        // Integers keep their exact path.
+        assert_eq!(serde_json::from_str::<NanoUSD>("12345").unwrap(), NanoUSD(12345));
+        // Fail closed on negatives and non-finite values.
+        assert!(serde_json::from_str::<NanoUSD>("-1.0").is_err());
+        assert!(serde_json::from_str::<NanoUSD>("NaN").is_err());
+        assert!(serde_json::from_str::<NanoUSD>("Infinity").is_err());
     }
 }

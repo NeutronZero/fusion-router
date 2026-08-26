@@ -108,8 +108,17 @@ mod tests {
             ],
         };
         let converted: fcp::PolicyIR = src_ir.into();
-        let matched = fcp::PolicyPrecedenceEngine::evaluate_matching_rule(&converted, "shell.exec")
-            .expect("rule must match");
+        let matched = fcp::PolicyPrecedenceEngine::evaluate_matching_rule(
+            &converted,
+            "shell.exec",
+            &fcp::PolicyFacts {
+                model: "test-model",
+                strategy: "Single",
+                node_kind: Some("Task"),
+                capability: None,
+            },
+        )
+        .expect("rule must match");
         assert_eq!(
             matched.effect,
             fcp::PolicyEffect::Deny,

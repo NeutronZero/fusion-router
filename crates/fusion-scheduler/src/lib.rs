@@ -25,8 +25,34 @@ use tokio_util::sync::CancellationToken;
 pub mod work_queue;
 pub use work_queue::WorkQueue;
 
-const COST_PER_INPUT_TOKEN_NANOS: u64 = 2_000_000; // $0.002 per 1k tokens = 2M NanoUSD per 1k tokens
-const COST_PER_OUTPUT_TOKEN_NANOS: u64 = 10_000_000; // $0.01 per 1k tokens = 10M NanoUSD per 1k tokens
+/// Per-token price in NanoUSD for a single model (review H3: the scheduler
+/// previously priced EVERY node at one hardcoded flat rate, so budget
+/// enforcement diverged wildly from actual provider pricing).
+#[derive(Debug, Clone, Copy)]
+pub struct TokenPricing {
+    pub input_nanos_per_token: u64,
+    pub output_nanos_per_token: u64,
+}
+
+impl TokenPricing {
+    /// Historical flat fallback: $0.002/1k input, $0.01/1k output.
+    pub fn flat_fallback() -> Self {
+        Self {
+            input_nanos_per_token: 2_000,
+            output_nanos_per_token: 10_000,
+        }
+    }
+}
+
+/// Resolves pricing for a model name. Implementations should fall back to
+/// [`TokenPricing::flat_fallback`] for unknown models rather than erroring:
+/// budget enforcement must remain conservative, not fail requests.
+pub type PricingResolver = std::sync::Arc<dyn Fn(&str) -> TokenPricing + Send + Sync>;
+
+#[allow(dead_code)] // retained as documented fallback constants
+const COST_PER_INPUT_TOKEN_NANOS: u64 = 2_000_000; // $0.002 per 1k tokens
+#[allow(dead_code)]
+const COST_PER_OUTPUT_TOKEN_NANOS: u64 = 10_000_000; // $0.01 per 1k tokens
 
 /// Trait for executing a single node. Implementors provide the actual
 /// LLM/provider dispatch. The scheduler calls this for each ready node,
@@ -54,15 +80,38 @@ pub struct ExecutionOutcome {
 /// DAG scheduler that executes nodes respecting dependency order.
 pub struct DefaultScheduler {
     max_concurrent: usize,
+    /// Optional model-aware pricing. When absent, the historical flat rate
+    /// applies to every node (review H3).
+    pricing: Option<PricingResolver>,
 }
 
 impl DefaultScheduler {
     pub fn new() -> Self {
-        Self { max_concurrent: 16 }
+        Self {
+            max_concurrent: 16,
+            pricing: None,
+        }
     }
 
     pub fn with_max_concurrent(max_concurrent: usize) -> Self {
-        Self { max_concurrent }
+        Self {
+            max_concurrent,
+            pricing: None,
+        }
+    }
+
+    /// Installs a model-aware pricing resolver used for cost accounting and
+    /// budget-envelope enforcement.
+    pub fn with_pricing(mut self, resolver: PricingResolver) -> Self {
+        self.pricing = Some(resolver);
+        self
+    }
+
+    fn price_for(&self, model: &str) -> TokenPricing {
+        match &self.pricing {
+            Some(resolve) => resolve(model),
+            None => TokenPricing::flat_fallback(),
+        }
     }
 
     /// Execute a graph to completion using the provided executor.
@@ -168,7 +217,10 @@ impl DefaultScheduler {
             let ready = queue.get_ready(&node_states);
             if ready.is_empty() {
                 if queue.any_in_progress() {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    // Short poll while in-flight nodes finish (review M8):
+                    // 2ms keeps added latency negligible without a busy spin;
+                    // a Notify-driven wakeup is queued for v0.15.
+                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
                     continue;
                 }
                 break;
@@ -247,14 +299,21 @@ impl DefaultScheduler {
                 // then the budget envelope is checked after accumulation.
                 if let Some(ref usage) = result.usage {
                     total_tokens += usage.total_tokens as u64;
-                    // NanoUSD: cost per token in nanos = nanos_per_1k / 1000
+                    // Model-aware per-token pricing (review H3): the node's
+                    // model drives input/output rates; unknown models fall
+                    // back to the conservative flat rate.
+                    let model = graph
+                        .nodes
+                        .get(node_index[&node_id])
+                        .map(|n| n.model.as_str())
+                        .unwrap_or("");
+                    let price = self.price_for(model);
                     let input_cost = NanoUSD::from_nanos(
-                        (usage.prompt_tokens as u64)
-                            .saturating_mul(COST_PER_INPUT_TOKEN_NANOS / 1000),
+                        (usage.prompt_tokens as u64).saturating_mul(price.input_nanos_per_token),
                     );
                     let output_cost = NanoUSD::from_nanos(
                         (usage.completion_tokens as u64)
-                            .saturating_mul(COST_PER_OUTPUT_TOKEN_NANOS / 1000),
+                            .saturating_mul(price.output_nanos_per_token),
                     );
                     let node_cost = input_cost.saturating_add(output_cost);
                     total_cost = total_cost.saturating_add(node_cost);
@@ -1222,7 +1281,8 @@ mod tests {
         let scheduler = DefaultScheduler::new();
         let outcome = scheduler.run(graph, &PricingExecutor).await.unwrap();
         let expected = NanoUSD::from_nanos(
-            1000 * COST_PER_INPUT_TOKEN_NANOS / 1000 + 500 * COST_PER_OUTPUT_TOKEN_NANOS / 1000,
+            1000 * TokenPricing::flat_fallback().input_nanos_per_token
+                + 500 * TokenPricing::flat_fallback().output_nanos_per_token,
         );
         assert_eq!(
             outcome.total_cost, expected,
@@ -1316,7 +1376,8 @@ mod tests {
         assert_eq!(
             outcome.total_cost,
             NanoUSD::from_nanos(
-                10 * COST_PER_INPUT_TOKEN_NANOS / 1000 + 10 * COST_PER_OUTPUT_TOKEN_NANOS / 1000
+                10 * TokenPricing::flat_fallback().input_nanos_per_token
+                    + 10 * TokenPricing::flat_fallback().output_nanos_per_token
             )
         );
         assert!(

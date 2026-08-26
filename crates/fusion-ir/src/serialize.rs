@@ -27,6 +27,18 @@ pub(crate) fn to_canonical_json(ir: &WorkflowIR) -> Result<String, WorkflowIrErr
 
 pub(crate) fn from_json(s: &str) -> Result<WorkflowIR, WorkflowIrError> {
     let ir: WorkflowIR = serde_json::from_str(s)?;
+    // Provider-free law at the untrusted intake boundary: `selected_model`
+    // is a sanctioned binding channel for INTERNAL producers (the planner
+    // and compiler set it after validation). A serialized plan that arrives
+    // with models pre-pinned is rejected so external callers cannot skip
+    // model resolution or capability-based policy evaluation by submitting
+    // a pre-bound IR (review M2). Use `WorkflowBuilder` + the compiler
+    // pipeline instead.
+    if ir.nodes.iter().any(|n| n.selected_model.is_some()) {
+        return Err(WorkflowIrError::Validation(
+            crate::validate::ValidationError::ProviderField("selected_model".to_string()),
+        ));
+    }
     let report = ir.validate();
     if let Some(first) = report.first_error() {
         return Err(WorkflowIrError::Validation(first.clone()));

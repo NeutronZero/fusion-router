@@ -414,6 +414,14 @@ pub struct ToolsConfig {
     /// closed instead of being streamed to the child.
     #[serde(default = "default_max_staged_input_bytes")]
     pub max_staged_input_bytes: usize,
+    /// Tools a client may reach by DECLARING them in a request
+    /// (`tools: [...]`) or embedding a `tool_allowlist` in submitted
+    /// workflow config (review H2). Requests are intersected with this list
+    /// at both the pipeline and executor chokepoints. Defaults to the safe
+    /// read/compute set; `shell_command` and `http_request` must be added
+    /// explicitly by operators who accept the risk.
+    #[serde(default = "default_permitted_client_tools")]
+    pub permitted_client_tools: Vec<String>,
 }
 
 pub fn default_shell_path_mode() -> String {
@@ -422,6 +430,13 @@ pub fn default_shell_path_mode() -> String {
 
 pub fn default_max_staged_input_bytes() -> usize {
     64 * 1024 * 1024
+}
+
+fn default_permitted_client_tools() -> Vec<String> {
+    ["calculator", "search", "file_read"]
+        .into_iter()
+        .map(String::from)
+        .collect()
 }
 
 impl Default for ToolsConfig {
@@ -435,6 +450,7 @@ impl Default for ToolsConfig {
             allow_unrestricted_args: default_allow_unrestricted_args(),
             shell_path_mode: default_shell_path_mode(),
             max_staged_input_bytes: default_max_staged_input_bytes(),
+            permitted_client_tools: default_permitted_client_tools(),
         }
     }
 }
