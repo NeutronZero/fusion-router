@@ -64,7 +64,7 @@ fn minimal_index_options(dimensions: usize) -> IndexOptions {
 pub struct SemanticCache {
     embedder: Arc<dyn Embedder + Send + Sync>,
     entries: RwLock<HashMap<u64, CacheEntry>>,
-    index: Arc<std::sync::Mutex<Index>>,
+    index: Arc<parking_lot::Mutex<Index>>,
     similarity_threshold: f32,
     max_entries: usize,
     next_label: AtomicU64,
@@ -89,7 +89,7 @@ impl SemanticCache {
         Ok(Self {
             embedder,
             entries: RwLock::new(HashMap::new()),
-            index: Arc::new(std::sync::Mutex::new(index)),
+            index: Arc::new(parking_lot::Mutex::new(index)),
             similarity_threshold,
             max_entries,
             next_label: AtomicU64::new(0),
@@ -131,7 +131,7 @@ impl SemanticCache {
             Ok(Self {
                 embedder,
                 entries: RwLock::new(HashMap::new()),
-                index: Arc::new(std::sync::Mutex::new(index)),
+                index: Arc::new(parking_lot::Mutex::new(index)),
                 similarity_threshold,
                 max_entries,
                 next_label: AtomicU64::new(0),
@@ -162,7 +162,7 @@ impl SemanticCache {
         let index = self.index.clone();
         let emb = query_embedding.clone();
         let results = tokio::task::spawn_blocking(move || {
-            let idx = index.lock().unwrap_or_else(|e| e.into_inner());
+            let idx = index.lock();
             idx.search(&emb, 1)
         })
         .await
@@ -192,7 +192,7 @@ impl SemanticCache {
             if removed {
                 let index = self.index.clone();
                 let remove_result = tokio::task::spawn_blocking(move || {
-                    let idx = index.lock().unwrap_or_else(|e| e.into_inner());
+                    let idx = index.lock();
                     idx.remove(label)
                 })
                 .await;
@@ -238,7 +238,7 @@ impl SemanticCache {
             let index = self.index.clone();
             let emb = embedding.clone();
             let add_result = tokio::task::spawn_blocking(move || {
-                let idx = index.lock().unwrap_or_else(|e| e.into_inner());
+                let idx = index.lock();
                 idx.add(label, &emb)
             })
             .await;
@@ -266,7 +266,7 @@ impl SemanticCache {
             if let Some(oldest) = oldest_to_remove {
                 let index = self.index.clone();
                 let remove_result = tokio::task::spawn_blocking(move || {
-                    let idx = index.lock().unwrap_or_else(|e| e.into_inner());
+                    let idx = index.lock();
                     idx.remove(oldest)
                 })
                 .await;
@@ -318,7 +318,7 @@ impl SemanticCache {
             .reserve(self.max_entries)
             .map_err(|e| format!("Failed to reserve index capacity: {}", e))?;
         self.entries.write().clear();
-        *self.index.lock().unwrap_or_else(|e| e.into_inner()) = new_index;
+        *self.index.lock() = new_index;
         self.next_label.store(0, Ordering::Relaxed);
         Ok(())
     }

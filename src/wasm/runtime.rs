@@ -140,8 +140,8 @@ impl WasmModule {
 }
 
 /// Wall-clock hang-guard for generic runtime instances (see instantiate):
-/// 30_000 ticks x 20ms tick = ~10 minutes; fuel still bounds CPU first.
-const RUNTIME_EPOCH_DEADLINE_TICKS: u64 = 30_000;
+/// 1_500 ticks x 20ms tick = ~30 seconds; fuel still bounds CPU first.
+const RUNTIME_EPOCH_DEADLINE_TICKS: u64 = 1_500;
 
 pub struct WasmInstance {
     instance: Instance,

@@ -43,6 +43,33 @@ pub async fn anthropic_messages(
             .into_response();
     }
 
+    const MAX_MESSAGES: usize = 200;
+    const MAX_CONTENT_CHARS: usize = 100_000;
+    if anthropic_req.messages.len() > MAX_MESSAGES {
+        tracing::warn!(request_id = %request_id, messages = anthropic_req.messages.len(), "anthropic rejected: too many messages");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "type": "error",
+                "error": { "type": "invalid_request_error", "message": "too many messages" }
+            })),
+        )
+            .into_response();
+    }
+    for msg in &anthropic_req.messages {
+        if msg.content.to_text().len() > MAX_CONTENT_CHARS {
+            tracing::warn!(request_id = %request_id, "anthropic rejected: message too large");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "type": "error",
+                    "error": { "type": "invalid_request_error", "message": "message content too large" }
+                })),
+            )
+                .into_response();
+        }
+    }
+
     let request = anthropic_req.into_chat_completion_request();
 
     // Phase F: all Anthropic requests — streaming and non-streaming — execute

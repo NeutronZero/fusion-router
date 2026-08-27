@@ -19,7 +19,8 @@
 //! per node and sets `Failed("Cancelled by client")` itself), so the adapter
 //! needs no special casing.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -73,7 +74,6 @@ impl fusion_scheduler::Executor for CratesExecutorAdapter<'_> {
         if result.state == NodeState::Succeeded {
             self.tracker
                 .lock()
-                .unwrap()
                 .record_success(node.id, result.output.as_ref());
         }
         result
@@ -155,7 +155,7 @@ mod tests {
         adapter.execute_node(&n1, &NodeExecContext::default()).await;
         adapter.execute_node(&n2, &NodeExecContext::default()).await;
 
-        let t = tracker.lock().unwrap();
+        let t = tracker.lock();
         assert_eq!(
             t.terminal_node_id,
             Some(n2.id),
@@ -191,7 +191,7 @@ mod tests {
             .execute_node(&make_node(), &NodeExecContext::default())
             .await;
 
-        let t = tracker.lock().unwrap();
+        let t = tracker.lock();
         assert_eq!(t.terminal_node_id, None);
         assert_eq!(t.final_output, None);
     }

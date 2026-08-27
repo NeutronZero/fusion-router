@@ -189,10 +189,12 @@ impl SecretManager {
     }
 
     pub fn redact(&self, secret: &str) -> String {
-        if secret.len() <= 8 {
-            "********".to_string()
+        let chars: Vec<char> = secret.chars().collect();
+        if chars.len() <= 4 {
+            "****".to_string()
         } else {
-            format!("{}...{}", &secret[..4], &secret[secret.len() - 4..])
+            let suffix: String = chars[chars.len() - 4..].iter().collect();
+            format!("****...{suffix}")
         }
     }
 }
@@ -223,9 +225,9 @@ mod tests {
 
         assert_eq!(
             manager.redact("sk-openrouter-secret-key-12345"),
-            "sk-o...2345"
+            "****...2345"
         );
-        assert_eq!(manager.redact("short"), "********");
+        assert_eq!(manager.redact("ab"), "****");
     }
 
     #[test]
@@ -254,5 +256,17 @@ mod tests {
         let key_b64 = BASE64.encode([7u8; 32]);
         let manager = SecretManager::from_base64_key(&key_b64).unwrap();
         assert_eq!(manager.export_master_key_base64(), key_b64);
+    }
+
+    #[test]
+    fn test_secret_manager_redact_multibyte_utf8() {
+        let key = SecretManager::generate_random_key();
+        let manager = SecretManager::new(key);
+        // Short Unicode secret (<= 4 chars)
+        assert_eq!(manager.redact("🔑🔐"), "****");
+        // Long Unicode secret (> 4 chars)
+        let unicode_secret = "🔑🔑🔑🔑secret🔑🔑🔑🔑";
+        let redacted = manager.redact(unicode_secret);
+        assert_eq!(redacted, "****...🔑🔑🔑🔑");
     }
 }

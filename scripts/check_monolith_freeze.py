@@ -61,6 +61,32 @@ def check_gate_02_compiler_authority():
     if strategy_expansion.exists():
         return False, "Host strategy expansion still in src/compiler"
 
+    # Hardened (audit H2): production path is crates/fusion-compiler;
+    # src/compiler/ir and src/strategies are retained only for devex/benches
+    # and must be isolated from the production pipeline.
+    # Ensure hot-path handlers do not lower via host strategies/IR
+    for handler in [
+        ROOT / "src" / "server" / "handlers" / "chat.rs",
+        ROOT / "src" / "server" / "pipeline.rs",
+        ROOT / "src" / "main.rs",
+    ]:
+        if handler.exists():
+            c = handler.read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]
+            if "crate::strategies" in c or "crate::compiler::ir::" in c:
+                return False, f"Production file {handler.relative_to(ROOT)} imports host compiler/strategies"
+
+    # Report residual files as informational debt (AD-005) but keep gate PASS
+    # because they are not on the hot path; strict removal is tracked as debt.
+    residual_count = 0
+    for sub in [src_compiler / "ir", src_compiler / "optimization"]:
+        if sub.exists():
+            residual_count += len(list(sub.rglob("*.rs")))
+    strat_dir = ROOT / "src" / "strategies"
+    if strat_dir.exists():
+        residual_count += len(list(strat_dir.rglob("*.rs")))
+    if residual_count:
+        return True, f"No host compiler passes on hot path (host IR/strategies isolated as devex-only, {residual_count} files tracked as AD-005)"
+
     return True, "No host compiler passes"
 
 

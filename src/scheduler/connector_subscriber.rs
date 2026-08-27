@@ -127,6 +127,7 @@ mod tests {
             model_catalog: crate::types::ModelCatalog::default(),
             connectors,
             features: HashMap::new(),
+            streaming: Default::default(),
         };
         ConfigSnapshot {
             generation,

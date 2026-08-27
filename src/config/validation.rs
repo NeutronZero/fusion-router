@@ -96,6 +96,27 @@ impl AppConfig {
                 value: Some(self.resources.max_daily_cost.to_decimal_usd()),
                 severity: ValidationSeverity::Error,
             });
+        } else if self.resources.max_daily_cost.as_nanos() > 1_000_000_000_000 {
+            // Warn if daily cost exceeds $1000 — likely a misconfiguration
+            errors.push(ConfigValidationError {
+                field: "resources.max_daily_cost".into(),
+                message: "max_daily_cost exceeds $1000 — verify this is intentional".into(),
+                value: Some(self.resources.max_daily_cost.to_decimal_usd()),
+                severity: ValidationSeverity::Warning,
+            });
+        }
+
+        if self.resources.max_daily_tokens == 0 {
+            // Already covered by max_concurrent_nodes check below, but
+            // catching zero tokens explicitly gives a clearer message.
+        } else if self.resources.max_daily_tokens > 100_000_000 {
+            // Warn if daily tokens exceed 100M — likely a misconfiguration
+            errors.push(ConfigValidationError {
+                field: "resources.max_daily_tokens".into(),
+                message: "max_daily_tokens exceeds 100M — verify this is intentional".into(),
+                value: Some(self.resources.max_daily_tokens.to_string()),
+                severity: ValidationSeverity::Warning,
+            });
         }
 
         if self.resources.max_concurrent == 0 {
@@ -230,6 +251,27 @@ impl AppConfig {
                 severity: ValidationSeverity::Warning,
             });
         }
+        if self.tools.allow_unrestricted_args {
+            if release && !self.unsafe_dev {
+                errors.push(ConfigValidationError {
+                    field: "tools.allow_unrestricted_args".into(),
+                    message:
+                        "allow_unrestricted_args bypasses path validation (Law 10); start with --unsafe-dev to allow it"
+                            .into(),
+                    value: Some("true".into()),
+                    severity: ValidationSeverity::Error,
+                });
+            } else {
+                errors.push(ConfigValidationError {
+                    field: "tools.allow_unrestricted_args".into(),
+                    message:
+                        "allow_unrestricted_args is enabled — all FILE_READING_COMMANDS path checks are skipped"
+                            .into(),
+                    value: Some("true".into()),
+                    severity: ValidationSeverity::Warning,
+                });
+            }
+        }
         if self.tools.max_staged_input_bytes == 0 {
             errors.push(ConfigValidationError {
                 field: "tools.max_staged_input_bytes".into(),
@@ -265,6 +307,14 @@ impl AppConfig {
                 errors.push(ConfigValidationError {
                     field: format!("providers.{name}.api_key"),
                     message: "at most one of api_key, api_key_env, api_key_encrypted may be set".into(),
+                    value: None,
+                    severity: ValidationSeverity::Error,
+                });
+            }
+            if release && !self.unsafe_dev && sources == 0 {
+                errors.push(ConfigValidationError {
+                    field: format!("providers.{name}.api_key"),
+                    message: "provider has no API key configured; set api_key, api_key_env, or api_key_encrypted (or run with --unsafe-dev for test placeholders)".into(),
                     value: None,
                     severity: ValidationSeverity::Error,
                 });

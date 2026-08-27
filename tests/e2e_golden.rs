@@ -44,10 +44,10 @@ async fn test_e2e_golden_workflow() {
 
     assert_eq!(
         report.passes_executed.len(),
-        5,
-        "Must execute exactly 5 compiler passes"
+        6,
+        "Must execute exactly 6 compiler passes (incl strategy_lowering)"
     );
-    assert_eq!(report.pass_diffs.len(), 5);
+    assert_eq!(report.pass_diffs.len(), 6);
     for diff in &report.pass_diffs {
         let _ = diff.duration_ms;
     }
@@ -91,7 +91,7 @@ async fn test_e2e_golden_speed_workflow() {
         .await
         .expect("Compiler");
 
-    assert_eq!(report.passes_executed.len(), 5);
+    assert_eq!(report.passes_executed.len(), 6);
     assert_eq!(graph.nodes.len(), 1);
 
     let provider: Arc<dyn fusion_runtime::ChatProvider> =
@@ -124,7 +124,7 @@ async fn test_e2e_golden_quality_workflow() {
         .await
         .expect("Compiler");
 
-    assert_eq!(report.passes_executed.len(), 5);
+    assert_eq!(report.passes_executed.len(), 6);
     assert_eq!(graph.nodes.len(), 5);
 
     let provider: Arc<dyn fusion_runtime::ChatProvider> =

@@ -57,10 +57,10 @@ tools:
 model_catalog:
   code: "zen/laguna-s-2.1-free"
   debug: "zen/laguna-s-2.1-free"
-  architecture: "zen/laguna-s-2.1-free"
+  architecture: "zen/hy3-free"
   general: "zen/laguna-s-2.1-free"
-  creative: "zen/nemotron-3-ultra-free"
+  creative: "zen/hy3-free"
   analysis: "zen/laguna-s-2.1-free"
-  fast: "zen/nemotron-3.5-lightning-free"
-  cheap: "zen/x-preview-f-free"
+  fast: "zen/hy3-free"
+  cheap: "zen/laguna-s-2.1-free"
 

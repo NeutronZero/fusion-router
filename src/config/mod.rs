@@ -43,6 +43,7 @@ mod tests {
             model_catalog: crate::types::ModelCatalog::default(),
             connectors: HashMap::new(),
             features: HashMap::new(),
+            streaming: Default::default(),
         }
     }
 

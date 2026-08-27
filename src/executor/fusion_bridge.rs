@@ -47,6 +47,7 @@ impl FusionChatProvider {
 
     /// Scopes all cache lookups/writes to this namespace (review M4).
     #[cfg(feature = "semantic-cache")]
+    #[allow(dead_code)]
     pub fn with_cache_namespace(mut self, namespace: impl Into<String>) -> Self {
         self.cache_namespace = namespace.into();
         self

@@ -87,6 +87,7 @@ fn empty_config() -> AppConfig {
         model_catalog: ModelCatalog::default(),
         connectors: HashMap::new(),
         features: HashMap::new(),
+        streaming: Default::default(),
     }
 }
 

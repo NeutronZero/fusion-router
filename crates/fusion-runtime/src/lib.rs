@@ -6,7 +6,6 @@
 //! - `RuntimeEngine` that integrates scheduler + provider
 
 use async_trait::async_trait;
-use fusion_core::NanoUSD;
 use fusion_kernel::resource::ResourceManager;
 use fusion_scheduler::{DefaultScheduler, ExecutionOutcome, Executor};
 use fusion_types::{
@@ -337,7 +336,9 @@ impl ProviderExecutor {
             }
         }
 
-        // Append parent outputs as user context
+        // Append parent outputs as user context (P2 indirect prompt injection:
+        // wrap untrusted content with delimiters so judge/reviewer prompts can
+        // instruct the model to treat it as data, not instruction).
         if !ctx.parent_outputs.is_empty() {
             match node.kind {
                 ExecutionNodeKind::LLMJudge
@@ -346,7 +347,10 @@ impl ProviderExecutor {
                     for (parent_id, output) in &ctx.parent_outputs {
                         messages.push(ChatMessage {
                             role: "user".into(),
-                            content: format!("Context from parent node {}:\n{}", parent_id, output),
+                            content: format!(
+                                "Context from parent node {}:\n<<BEGIN_UNTRUSTED_CONTEXT>>\n{}\n<<END_UNTRUSTED_CONTEXT>>",
+                                parent_id, output
+                            ),
                         });
                     }
                 }
@@ -865,13 +869,6 @@ impl RuntimeEngine {
     pub fn with_approvals(mut self, approvals: Arc<dyn ApprovalGate>) -> Self {
         self.approvals = Some(approvals);
         self
-    }
-
-    fn price_for(&self, model: &str) -> fusion_scheduler::TokenPricing {
-        match &self.pricing {
-            Some(resolve) => resolve(model),
-            None => fusion_scheduler::TokenPricing::flat_fallback(),
-        }
     }
 
     /// Execute a full execution graph to completion.

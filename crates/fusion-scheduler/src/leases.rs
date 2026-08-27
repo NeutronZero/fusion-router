@@ -3,9 +3,10 @@
 //! crate; the fake placement engine around it was deleted.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use fusion_core::PlatformError;
+use parking_lot::RwLock;
 
 #[derive(Debug, Clone)]
 pub struct ExecutionLease {
@@ -28,19 +29,22 @@ impl ExecutionLease {
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionLeaseManager {
     leases: Arc<RwLock<HashMap<String, ExecutionLease>>>,
+    epochs: Arc<RwLock<HashMap<(String, String), u64>>>,
 }
 
 impl ExecutionLeaseManager {
     pub fn new() -> Self {
         Self {
             leases: Arc::new(RwLock::new(HashMap::new())),
+            epochs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     /// Grants an exclusive, single-worker lease under Invariant 12.
     ///
     /// Expired lease records are pruned opportunistically on every grant so
-    /// the map cannot grow without bound (review M10).
+    /// the map cannot grow without bound (review M10). Epoch monotonicity is
+    /// maintained across renewals, revokes, and worker failovers.
     pub fn grant_lease(
         &self,
         exec_id: &str,
@@ -53,40 +57,41 @@ impl ExecutionLeaseManager {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        let mut map = self.leases.write().unwrap_or_else(|e| e.into_inner());
-        // Opportunistic pruning of expired entries (review M10).
+        let mut map = self.leases.write();
+        // Opportunistic pruning BEFORE exclusivity check (fix H1 TOCTOU:
+        // expired leases must not block failover until next grant).
         map.retain(|_, lease| !lease.is_expired(now_ms));
-        let mut prev_epoch = 0u64;
 
-        // Enforce Invariant 12: Single-Worker Lease Exclusivity & Expiration
+        // Enforce Invariant 12: Single-Worker Lease Exclusivity on active leases
         for existing in map.values() {
-            if existing.execution_id == exec_id && existing.node_id == node_id {
-                if !existing.is_expired(now_ms) {
-                    if existing.worker_id != worker_id {
-                        return Err(PlatformError::Runtime {
-                            code: "ERR_LEASE_VIOLATION".into(),
-                            message: format!(
-                                "Node {} already leased to worker {}",
-                                node_id, existing.worker_id
-                            ),
-                            recovery_suggestion:
-                                "Wait for existing lease to expire or revoke it before reissuing"
-                                    .into(),
-                        });
-                    }
-                    prev_epoch = existing.epoch;
-                } else if existing.epoch > prev_epoch {
-                    prev_epoch = existing.epoch;
+            if existing.execution_id == exec_id && existing.node_id == node_id && !existing.is_expired(now_ms) {
+                if existing.worker_id != worker_id {
+                    return Err(PlatformError::Runtime {
+                        code: "ERR_LEASE_VIOLATION".into(),
+                        message: format!(
+                            "Node {} already leased to worker {}",
+                            node_id, existing.worker_id
+                        ),
+                        recovery_suggestion:
+                            "Wait for existing lease to expire or revoke it before reissuing"
+                                .into(),
+                    });
                 }
             }
         }
+        let mut epochs_map = self.epochs.write();
+
+        let epoch_key = (exec_id.to_string(), node_id.to_string());
+        let prev_epoch = epochs_map.get(&epoch_key).copied().unwrap_or(0);
+        let next_epoch = prev_epoch + 1;
+        epochs_map.insert(epoch_key, next_epoch);
 
         let lease = ExecutionLease {
             lease_key: format!("lease:{}:{}:{}", exec_id, node_id, worker_id),
             execution_id: exec_id.to_string(),
             node_id: node_id.to_string(),
             worker_id: worker_id.to_string(),
-            epoch: prev_epoch + 1,
+            epoch: next_epoch,
             granted_at_ms: now_ms,
             ttl_ms,
             is_revoked: false,
@@ -97,7 +102,7 @@ impl ExecutionLeaseManager {
     }
 
     pub fn renew_lease(&self, lease_key: &str) -> bool {
-        let mut map = self.leases.write().unwrap_or_else(|e| e.into_inner());
+        let mut map = self.leases.write();
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -107,6 +112,9 @@ impl ExecutionLeaseManager {
             if !lease.is_expired(now_ms) {
                 lease.epoch += 1;
                 lease.granted_at_ms = now_ms;
+                let epoch_key = (lease.execution_id.clone(), lease.node_id.clone());
+                let mut epochs_map = self.epochs.write();
+                epochs_map.insert(epoch_key, lease.epoch);
                 return true;
             }
         }
@@ -114,7 +122,7 @@ impl ExecutionLeaseManager {
     }
 
     pub fn revoke_lease(&self, lease_key: &str) -> bool {
-        let mut map = self.leases.write().unwrap_or_else(|e| e.into_inner());
+        let mut map = self.leases.write();
         if let Some(lease) = map.get_mut(lease_key) {
             lease.is_revoked = true;
             return true;

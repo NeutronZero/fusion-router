@@ -157,20 +157,13 @@ impl DefaultExecutor {
                 .and_then(|v| v.get("content"))
                 .and_then(|v| v.as_str())
             {
-                if result
+                if let Some(tool_calls) = result
                     .output
                     .as_ref()
                     .and_then(|v| v.get("tool_calls"))
-                    .is_some()
                 {
                     let mut new_output = serde_json::json!({ "content": content.to_string() });
-                    new_output["tool_calls"] = result
-                        .output
-                        .as_ref()
-                        .unwrap()
-                        .get("tool_calls")
-                        .unwrap()
-                        .clone();
+                    new_output["tool_calls"] = tool_calls.clone();
                     result.output = Some(new_output);
                 } else {
                     result.output = Some(serde_json::Value::String(content.to_string()));

@@ -18,6 +18,12 @@ pub struct WasmtimeCapabilityHost {
     execution_id: Uuid,
     workflow_id: Uuid,
     correlation_id: Option<String>,
+    /// Caller-bound permissions (ADR-036). When set, host functions enforce
+    /// against this list only — registry is not scanned (fixes C1 confused
+    /// deputy). When None, behavior falls back to deny (fail-closed) rather
+    /// than scanning the whole registry.
+    caller_permissions: Option<Vec<fusion_plugin_api::Permission>>,
+    caller_id: Option<fusion_plugin_api::CapabilityId>,
 }
 
 impl WasmtimeCapabilityHost {
@@ -38,7 +44,56 @@ impl WasmtimeCapabilityHost {
             execution_id,
             workflow_id,
             correlation_id,
+            caller_permissions: None,
+            caller_id: None,
         }
+    }
+
+    /// Create a host bound to a specific capability's permissions (ADR-036).
+    /// All `fetch_secret` / `http_request` checks are scoped to `contract.permissions`.
+    pub fn with_caller(
+        registry: Arc<dyn CapabilityRegistry>,
+        event_bus: Arc<dyn EventBus>,
+        http_client: reqwest::Client,
+        metrics: &'static FusionMetrics,
+        execution_id: Uuid,
+        workflow_id: Uuid,
+        correlation_id: Option<String>,
+        caller_contract: fusion_plugin_api::CapabilityContract,
+    ) -> Self {
+        let perms = caller_contract.permissions.clone();
+        let id = caller_contract.id.clone();
+        Self {
+            registry,
+            event_bus,
+            http_client,
+            metrics,
+            execution_id,
+            workflow_id,
+            correlation_id,
+            caller_permissions: Some(perms),
+            caller_id: Some(id),
+        }
+    }
+
+    /// Override caller permissions directly (testing / non-contract callers).
+    pub fn with_caller_permissions(
+        mut self,
+        perms: Vec<fusion_plugin_api::Permission>,
+    ) -> Self {
+        self.caller_permissions = Some(perms);
+        self
+    }
+
+    fn effective_permissions(&self) -> Result<Vec<fusion_plugin_api::Permission>, GateError> {
+        if let Some(perms) = &self.caller_permissions {
+            return Ok(perms.clone());
+        }
+        // Fail-closed: no caller identity -> no permissions. Previously this
+        // scanned the registry for ANY contract holding the permission (C1).
+        Err(GateError::PermissionDenied(
+            "no caller identity bound to host — call denied (ADR-036)".into(),
+        ))
     }
 }
 
@@ -67,19 +122,8 @@ impl CapabilityHostServices for WasmtimeCapabilityHost {
     }
 
     async fn fetch_secret(&self, secret_name: &str) -> Result<String, GateError> {
-        let contract = self
-            .registry
-            .list()
-            .into_iter()
-            .find(|c| {
-                c.permissions
-                    .iter()
-                    .any(|p| matches!(p, fusion_plugin_api::Permission::Secrets(_)))
-            })
-            .ok_or_else(|| {
-                GateError::PermissionDenied("no capability with secret permissions".into())
-            })?;
-        check_secret_access(&contract.permissions, secret_name)?;
+        let perms = self.effective_permissions()?;
+        check_secret_access(&perms, secret_name)?;
         std::env::var(secret_name).map_err(|_| {
             GateError::PermissionDenied(format!(
                 "secret '{}' not found in environment",
@@ -90,19 +134,8 @@ impl CapabilityHostServices for WasmtimeCapabilityHost {
 
     async fn http_request(&self, req: Request) -> Result<reqwest::Response, GateError> {
         let url_str = req.url().to_string();
-        let contract = self
-            .registry
-            .list()
-            .into_iter()
-            .find(|c| {
-                c.permissions
-                    .iter()
-                    .any(|p| matches!(p, fusion_plugin_api::Permission::Http(_)))
-            })
-            .ok_or_else(|| {
-                GateError::PermissionDenied("no capability with HTTP permissions".into())
-            })?;
-        check_http_access(&contract.permissions, &url_str)?;
+        let perms = self.effective_permissions()?;
+        check_http_access(&perms, &url_str)?;
         self.http_client
             .execute(req)
             .await
@@ -180,7 +213,8 @@ mod tests {
             Uuid::new_v4(),
             Uuid::new_v4(),
             None,
-        );
+        )
+        .with_caller_permissions(vec![Permission::Network]);
         let result = host.fetch_secret("db_password").await;
         assert!(matches!(result, Err(GateError::PermissionDenied(_))));
     }
@@ -195,11 +229,84 @@ mod tests {
             Uuid::new_v4(),
             Uuid::new_v4(),
             None,
-        );
+        )
+        .with_caller_permissions(vec![Permission::Secrets("x".into())]);
         let req =
             reqwest::Request::new(reqwest::Method::GET, "https://example.com".parse().unwrap());
         let result = host.http_request(req).await;
         assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_secret_denied_without_caller_identity_even_if_registry_has_perm() {
+        // C1 confused deputy: registry has broad Secrets perm but caller has none.
+        let mut reg = InMemoryCapabilityRegistry::new();
+        let broad = CapabilityContract {
+            id: CapabilityId::new("broad.cap"),
+            version: semver::Version::parse("0.1.0").unwrap(),
+            description: "broad".into(),
+            inputs_schema: serde_json::json!({}),
+            outputs_schema: serde_json::json!({}),
+            permissions: vec![Permission::Secrets("API_KEY".into())],
+            dependencies: vec![],
+            estimated_cost: fusion_core::NanoUSD::ZERO,
+            estimated_latency_ms: 0,
+            reliability_score: 1.0,
+            supports_streaming: false,
+            traits: vec![],
+        };
+        reg.register(broad).unwrap();
+        let registry = Arc::new(reg);
+        // caller has no Secrets perm -> must deny even though registry contains it
+        let host = WasmtimeCapabilityHost::new(
+            registry,
+            Arc::new(BroadcastEventBus::new(16)),
+            reqwest::Client::new(),
+            FusionMetrics::instance(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            None,
+        )
+        .with_caller_permissions(vec![Permission::Network]);
+        let result = host.fetch_secret("API_KEY").await;
+        assert!(
+            matches!(result, Err(GateError::PermissionDenied(_))),
+            "confused deputy: caller without Secrets must not inherit registry's broad perm"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_secret_allowed_with_caller_perm() {
+        let host = WasmtimeCapabilityHost::new(
+            make_registry(vec![Permission::Secrets("TEST_SECRET_FOO".into())]),
+            Arc::new(BroadcastEventBus::new(16)),
+            reqwest::Client::new(),
+            FusionMetrics::instance(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            None,
+        )
+        .with_caller_permissions(vec![Permission::Secrets("TEST_SECRET_FOO".into())]);
+        // env var not set -> PermissionDenied with "not found in environment"
+        let result = host.fetch_secret("TEST_SECRET_FOO").await;
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+        assert!(result.unwrap_err().to_string().contains("not found in environment"));
+    }
+
+    #[tokio::test]
+    async fn test_no_caller_identity_is_fail_closed() {
+        let host = WasmtimeCapabilityHost::new(
+            make_registry(vec![Permission::Secrets("API_KEY".into())]),
+            Arc::new(BroadcastEventBus::new(16)),
+            reqwest::Client::new(),
+            FusionMetrics::instance(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            None,
+        );
+        let result = host.fetch_secret("API_KEY").await;
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+        assert!(result.unwrap_err().to_string().contains("no caller identity"));
     }
 
     #[tokio::test]

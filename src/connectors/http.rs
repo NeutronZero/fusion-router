@@ -6,10 +6,72 @@ use fusion_plugin_api::{
 };
 use serde_json::json;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 /// Maximum response body size kept in `outputs.body` (bytes).
 const MAX_BODY_BYTES: usize = 64 * 1024;
+
+/// Validates that a URL is safe to fetch (SSRF protection).
+/// Rejects loopback, private, and link-local addresses.
+fn validate_url_for_ssrf(url_str: &str) -> Result<(), String> {
+    let url = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
+    let scheme = url.scheme().to_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return Err(format!("URL scheme '{scheme}' not allowed (use http or https)"));
+    }
+    let host_str = url
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+    // Block obvious loopback hostnames
+    if host_str == "localhost"
+        || host_str == "127.0.0.1"
+        || host_str == "::1"
+        || host_str == "0.0.0.0"
+    {
+        return Err("URL targets loopback address".to_string());
+    }
+    // Try to parse as IP and check private/link-local ranges
+    if let Ok(ip) = host_str.parse::<IpAddr>() {
+        if ip.is_loopback() || ip.is_unspecified() {
+            return Err(format!("URL targets reserved IP address {ip}"));
+        }
+        match ip {
+            IpAddr::V4(v4) => {
+                if v4.is_link_local() {
+                    return Err(format!("URL targets link-local address {v4}"));
+                }
+                let octets = v4.octets();
+                if octets[0] == 10
+                    || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+                    || (octets[0] == 192 && octets[1] == 168)
+                {
+                    return Err(format!("URL targets private IP address {v4}"));
+                }
+            }
+            IpAddr::V6(v6) => {
+                let segments = v6.segments();
+                // fc00::/7 (unique local), fe80::/10 (link-local)
+                if (segments[0] & 0xfe00) == 0xfc00 || (segments[0] & 0xffc0) == 0xfe80 {
+                    return Err(format!("URL targets reserved IPv6 address {v6}"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Redacts a URL for safe error messages (keeps scheme + host only).
+fn redact_url(url_str: &str) -> String {
+    match url::Url::parse(url_str) {
+        Ok(u) => {
+            let host = u.host_str().unwrap_or("???");
+            let path = if u.path() == "/" { "" } else { "..." };
+            format!("{}://{host}{path}", u.scheme())
+        }
+        Err(_) => "<invalid-url>".to_string(),
+    }
+}
 
 /// Makes real HTTP requests (GET/POST) via `reqwest`.
 pub struct HttpPlugin {
@@ -72,6 +134,15 @@ impl CapabilityExecutor for HttpPlugin {
                 retryable: false,
             })?;
 
+        // SSRF protection: reject loopback, private, and link-local addresses
+        #[cfg(not(test))]
+        validate_url_for_ssrf(url).map_err(|msg| ExecutionError {
+            connector: "http".into(),
+            capability: instance.contract.id.clone(),
+            reason: msg,
+            retryable: false,
+        })?;
+
         let _method = input
             .get("method")
             .and_then(|v| v.as_str())
@@ -96,7 +167,7 @@ impl CapabilityExecutor for HttpPlugin {
         let response = request.send().await.map_err(|err| ExecutionError {
             connector: "http".into(),
             capability: instance.contract.id.clone(),
-            reason: format!("request to {url} failed: {err}"),
+            reason: format!("request to {} failed: {err}", redact_url(url)),
             retryable: true,
         })?;
 

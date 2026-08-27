@@ -205,6 +205,13 @@ impl NanoUSD {
 impl Add for NanoUSD {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
+        if self.checked_add(rhs).is_none() {
+            tracing::warn!(
+                lhs = self.0,
+                rhs = rhs.0,
+                "NanoUSD saturating add: overflow clamped to MAX"
+            );
+        }
         self.saturating_add(rhs)
     }
 }
@@ -218,6 +225,13 @@ impl AddAssign for NanoUSD {
 impl Sub for NanoUSD {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
+        if self.checked_sub(rhs).is_none() {
+            tracing::warn!(
+                lhs = self.0,
+                rhs = rhs.0,
+                "NanoUSD saturating sub: underflow clamped to ZERO"
+            );
+        }
         self.saturating_sub(rhs)
     }
 }

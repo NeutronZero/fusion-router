@@ -41,6 +41,47 @@ pub async fn chat_completions(
             .into_response();
     }
 
+    // Payload size guard (H4): DefaultBodyLimit caps raw bytes, but deserialized
+    // collections can still OOM via huge arrays — enforce counts/lengths.
+    const MAX_MESSAGES: usize = 200;
+    const MAX_TOOLS: usize = 64;
+    const MAX_FILES: usize = 20;
+    const MAX_CONTENT_CHARS: usize = 100_000;
+    if request.messages.len() > MAX_MESSAGES {
+        tracing::warn!(request_id = %request_id, messages = request.messages.len(), "request rejected: too many messages");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_response(request_id, "", "too many messages")),
+        )
+            .into_response();
+    }
+    if request.tools.as_ref().map(|t| t.len() > MAX_TOOLS).unwrap_or(false) {
+        tracing::warn!(request_id = %request_id, "request rejected: too many tools");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_response(request_id, "", "too many tools")),
+        )
+            .into_response();
+    }
+    if request.files.as_ref().map(|f| f.len() > MAX_FILES).unwrap_or(false) {
+        tracing::warn!(request_id = %request_id, "request rejected: too many files");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_response(request_id, "", "too many files")),
+        )
+            .into_response();
+    }
+    for msg in &request.messages {
+        if msg.content.len() > MAX_CONTENT_CHARS {
+            tracing::warn!(request_id = %request_id, len = msg.content.len(), "request rejected: message too large");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(error_response(request_id, "", "message content too large")),
+            )
+                .into_response();
+        }
+    }
+
     // Phase F: all requests — streaming and non-streaming — execute through
     // the identical pipeline (PlanningRequest → fusion-ir → fusion-compiler →
     // fusion-scheduler → fusion-runtime). The only difference is the transport

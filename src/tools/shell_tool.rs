@@ -237,7 +237,6 @@ fn same_file_identity(
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
         // Stable std does not expose the NTFS file index from `Metadata`;
         // open a second handle on the re-statted path so both sides come
         // from GetFileInformationByHandle and compare like-for-like.
@@ -363,6 +362,11 @@ impl ShellCommandTool {
             return Ok((args.to_vec(), None));
         }
         if !FILE_READING_COMMANDS.contains(&cmd) {
+            tracing::debug!(
+                cmd = %cmd,
+                "command not in FILE_READING_COMMANDS — path validation skipped; \
+                 operator should ensure this command does not interpret file-path arguments"
+            );
             return Ok((args.to_vec(), None));
         }
         if self.allowed_read_directories.is_empty() {

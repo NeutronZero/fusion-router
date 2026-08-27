@@ -70,7 +70,10 @@ impl SqliteEvidenceRepository {
                         .unwrap_or_default()
                         .as_secs() as i64;
                     let cutoff = now.saturating_sub(cutoff_base);
-                    let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+                    let conn = conn.lock().unwrap_or_else(|e| {
+                        tracing::warn!("SQLite mutex recovered from poisoned state");
+                        e.into_inner()
+                    });
                     conn.execute(
                         "DELETE FROM execution_records WHERE timestamp < ?1",
                         params![cutoff],

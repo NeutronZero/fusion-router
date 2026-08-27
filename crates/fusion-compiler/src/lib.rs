@@ -570,6 +570,7 @@ impl CompilerEngine {
         let passes: Vec<Box<dyn CompilerPass>> = vec![
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
+            Box::new(StrategyLoweringPass::new()),
             Box::new(DeadNodeEliminationPass),
             Box::new(ModelResolutionPass::new(ModelCatalog::default())),
             Box::new(BudgetOptimisationPass {
@@ -594,6 +595,7 @@ impl CompilerEngine {
         let passes: Vec<Box<dyn CompilerPass>> = vec![
             Box::new(ConstraintValidationPass),
             Box::new(ControlFlowValidationPass),
+            Box::new(StrategyLoweringPass::new()),
             Box::new(DeadNodeEliminationPass),
             Box::new(ModelResolutionPass::new(model_catalog)),
             Box::new(BudgetOptimisationPass {
@@ -610,7 +612,8 @@ impl CompilerEngine {
     }
 
     /// Creates an engine with an empty pass list and the given resource manager.
-    pub fn with_resource_manager_custom(
+    /// Used internally by `build_compiler()` which adds the mandatory passes.
+    pub(crate) fn with_resource_manager_custom(
         resource_manager: Arc<dyn fusion_kernel::resource::ResourceManager>,
     ) -> Self {
         Self {
@@ -786,7 +789,7 @@ impl CompilerEngine {
         }
     }
 
-    fn build_provider_comparison(
+    pub fn build_provider_comparison(
         scores: &[ExplainRouteScore],
     ) -> Vec<ProviderComparisonCandidate> {
         Self::build_provider_comparison_with_models(scores, &Default::default())
@@ -1357,8 +1360,9 @@ mod tests {
             .compile("Code Generation", &ir)
             .await
             .expect("Compile");
-        assert_eq!(report.passes_executed.len(), 5);
-        assert_eq!(report.pass_diffs.len(), 5);
+        assert_eq!(report.passes_executed.len(), 6);
+        assert_eq!(report.pass_diffs.len(), 6);
+        assert_eq!(report.passes_executed[2], "strategy_lowering");
         // duration_ms is unsigned; non-negativity is guaranteed by the type
     }
 

@@ -153,7 +153,7 @@ impl DefaultScheduler {
         instance.node_states = states;
         instance.outputs = outcome.outputs;
 
-        let tracker_guard = tracker.lock().unwrap();
+        let tracker_guard = tracker.lock();
         instance.terminal_node_id = tracker_guard.terminal_node_id;
         instance.final_output = tracker_guard.final_output.clone();
         let terminal_node_id = instance.terminal_node_id;

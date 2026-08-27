@@ -56,16 +56,21 @@ impl FusionMetrics {
             provider_latency_seconds: safe_histogram_vec(
                 "fusionrouter_provider_latency_seconds",
                 "Provider latency in seconds",
+                // NOTE: cardinality bounded by known provider enum; custom
+                // provider names are normalized to "other" by the caller.
                 &["provider"],
             ),
             strategy_latency_seconds: safe_histogram_vec(
                 "fusionrouter_strategy_latency_seconds",
                 "Per-strategy latency in seconds",
+                // NOTE: cardinality bounded by StrategyKind enum variants;
+                // Custom(String) variants are normalized to "other".
                 &["strategy"],
             ),
             strategy_errors_total: safe_int_counter_vec(
                 "fusionrouter_strategy_errors_total",
                 "Per-strategy error count",
+                // NOTE: cardinality bounded by StrategyKind enum variants.
                 &["strategy"],
             ),
             graph_hash_count: safe_int_counter(

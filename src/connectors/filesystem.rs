@@ -45,7 +45,7 @@ impl CapabilityPlugin for FilesystemPlugin {
             description: "Reads a file from the filesystem".into(),
             inputs_schema: json!({"type": "object", "properties": {"path": {"type": "string"}}}),
             outputs_schema: json!({"type": "object", "properties": {"content": {"type": "string"}}}),
-            permissions: vec![Permission::Filesystem("**".into())],
+            permissions: vec![Permission::Filesystem(".".into())],
             dependencies: vec![],
             estimated_cost: fusion_core::NanoUSD::ZERO,
             estimated_latency_ms: 5,

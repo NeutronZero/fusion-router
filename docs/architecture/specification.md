@@ -61,7 +61,7 @@ Requirements Extractor → Requirements
 Planner → WorkflowIR
    │
    ▼
-Compiler (7 pure passes) → ExecutionGraph
+Compiler (6 mandatory + optional policy pass) → ExecutionGraph
    │
    ▼
 Scheduler → ExecutionInstance
@@ -284,14 +284,14 @@ pub struct ExecutionResult {
 
 ## 6. Compiler Pass Pipeline
 
-The compiler transforms `WorkflowIR` into `ExecutionGraph` through a fixed pipeline constructed exclusively by `build_compiler` (ADR-034): **four mandatory pure passes**, an **optional policy pass** appended when a `PolicyIR` is supplied, then a direct structural `lower_to_graph`:
+The compiler transforms `WorkflowIR` into `ExecutionGraph` through a fixed pipeline constructed exclusively by `build_compiler` (ADR-034): **six mandatory pure passes**, an **optional policy pass** appended when a `PolicyIR` is supplied, then a direct structural `lower_to_graph`:
 
 ```text
 WorkflowIR
    │
    ▼
 1. Constraint Validation
-   ├─ Reject empty IR (at least one node required)
+   ├─ Reject empty IR (at least one node required) / cap 10_000 nodes
    │
    ▼
 2. Control Flow Validation
@@ -300,28 +300,39 @@ WorkflowIR
    └─ Detect illegal cycles (loop back-edges exempt)
    │
    ▼
-3. Model Resolution
-   ├─ Fill model: None from ModelCatalog by requirements
-   └─ (tools → code model, high reasoning → architecture, else fast)
+3. Strategy Lowering
+   ├─ Expand Consensus/Reflection/Chain/Debate/ReAct/Fusion into subgraphs
+   ├─ child_id v5(NAMESPACE_URL, "{parent}:{role}:{idx}") deterministic
+   └─ Custom strategies require registered delegate (fail-closed)
    │
    ▼
-4. Budget Optimisation
+4. Dead Node Elimination
+   ├─ BFS from entry roots, prune unreachable orphans/cycles
+   └─ Cyclic graphs with no entry left untouched (fail-closed)
+   │
+   ▼
+5. Model Resolution
+   ├─ Fill model: None from ModelCatalog
+   └─ Control-flow nodes (Conditional/Loop/Split/Join/Barrier) skip
+   │
+   ▼
+6. Budget Optimisation
    ├─ Query Resource Manager (can_afford?)
-   └─ Reject when estimated budget is exceeded
+   └─ Reject when estimated budget is exceeded (429)
    │
    ▼
-5. Policy Compiler Pass (optional)
-   ├─ Apply compiled PolicyIR
-   └─ Any matched Deny rule is a compile error
+7. Policy Compiler Pass (optional)
+   ├─ Apply compiled PolicyIR (Deny > Approval > Allow)
+   └─ Any matched Deny rule is a compile error (→ 403)
    │
    ▼
-lower_to_graph ─── direct structural lowering (1:1 node-kind mapping)
+lower_to_graph ─── direct structural lowering (1:1 node-kind mapping + subgraph attach)
    │
    ▼
-ExecutionGraph
+ExecutionGraph (canonical JSON, content hash, primitive_graph_hash)
 ```
 
-**All passes are pure** – no I/O, no network calls, no side effects. This guarantees deterministic compilation and enables golden‑test replay. There is no `PrimitiveGraph` stage on this path; strategy expansion is done by the compiler (`strategy_expansion`) after lowering, which pre-builds each strategy node's `ExecutionSubgraph` into `node.subgraph` — the executor consumes it verbatim. The `PrimitiveGraph`/optimization framework in `src/compiler/ir` and `src/compiler/optimization` is compiler-internal and not wired into the production pipeline.
+**All passes are pure** – no I/O, no network calls, no side effects. This guarantees deterministic compilation and enables golden‑test replay. Strategy expansion is performed inside the pass pipeline (not post-lowering) so dead-node and budget passes operate on the fully expanded graph. The `PrimitiveGraph`/optimization framework in `src/compiler/ir` and `src/compiler/optimization` is devex-only and not wired into the production pipeline (AD-005).
 
 ---
 
@@ -352,7 +363,7 @@ sequenceDiagram
     API->>Planner: plan(Requirements, Policies)
     Planner-->>API: WorkflowIR
     API->>Compiler: compile(WorkflowIR)
-    Compiler->>Compiler: 4 passes + policy
+    Compiler->>Compiler: 6 passes + policy
     Compiler->>Resource: can_afford?
     Resource-->>Compiler: yes/no
     alt can afford

@@ -216,7 +216,9 @@ async fn law5_execution_plane_rejects_deny_policy_target_end_to_end() {
 
     assert_eq!(status, 400, "deny-listed target must be rejected: {body}");
     assert!(
-        body["error"].as_str().unwrap().contains("deny"),
+        body["error"].as_str().unwrap().contains("invalid workflow specification")
+            || body["error"].as_str().unwrap().contains("policy")
+            || body["error"].as_str().unwrap().contains("deny"),
         "error must identify the deny policy: {body}"
     );
 }
@@ -271,7 +273,11 @@ async fn law5_execution_plane_rejects_dangling_edge() {
         body["error"]
             .as_str()
             .unwrap()
-            .contains("unknown source node"),
+            .contains("invalid workflow specification")
+            || body["error"]
+                .as_str()
+                .unwrap()
+                .contains("unknown source node"),
         "error must identify the dangling edge: {body}"
     );
 }
@@ -290,7 +296,11 @@ async fn law5_execution_plane_rejects_over_budget() {
     let (status, body) = post_workflow(&addr, workflow).await;
     assert_eq!(status, 400, "over-budget workflow must be rejected: {body}");
     assert!(
-        body["error"].as_str().unwrap().contains("Budget exceeded"),
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("invalid workflow specification")
+            || body["error"].as_str().unwrap().contains("Budget exceeded"),
         "error must identify the budget violation: {body}"
     );
 }

@@ -73,6 +73,7 @@ mod tests {
             model_catalog: Default::default(),
             connectors: HashMap::new(),
             features: HashMap::new(),
+            streaming: Default::default(),
         };
         crate::server::handlers::AppState::new(
             Arc::new(crate::providers::openrouter::OpenRouterProvider::new(

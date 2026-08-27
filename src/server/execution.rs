@@ -104,16 +104,9 @@ impl ExecutionError {
     pub fn status_code(&self) -> axum::http::StatusCode {
         use axum::http::StatusCode;
         match self.kind {
-            // Client payload problem.
             ExecutionErrorKind::Validation => StatusCode::BAD_REQUEST,
-            // Live policy enforcement is a client-actionable denial, not a
-            // server fault — surface as 403 so callers can react instead of
-            // retrying against a "500" (review M5; aligns with the chat
-            // path's PolicyDenied status).
             ExecutionErrorKind::Policy => StatusCode::FORBIDDEN,
-            // Upstream provider failures are a gateway condition.
             ExecutionErrorKind::Upstream => StatusCode::BAD_GATEWAY,
-            // Compilation/scheduling/infrastructure faults are ours.
             ExecutionErrorKind::Compilation
             | ExecutionErrorKind::Scheduling
             | ExecutionErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
@@ -128,9 +121,9 @@ impl ExecutionError {
             ExecutionErrorKind::Validation => "invalid workflow specification".into(),
             ExecutionErrorKind::Policy => "workflow rejected by policy configuration".into(),
             ExecutionErrorKind::Compilation => "workflow failed to compile".into(),
-            ExecutionErrorKind::Scheduling => "workflow scheduling failed".into(),
+            ExecutionErrorKind::Scheduling => "workflow could not be scheduled".into(),
             ExecutionErrorKind::Upstream => "upstream node execution failed".into(),
-            ExecutionErrorKind::Internal => "internal execution error".into(),
+            ExecutionErrorKind::Internal => "internal execution engine error".into(),
         }
     }
 }
@@ -220,14 +213,31 @@ impl ExecutionPlane {
         if order.len() == graph.nodes.len() {
             order
         } else {
+            tracing::warn!(
+                expected = graph.nodes.len(),
+                actual = order.len(),
+                "topological sort incomplete — graph contains a cycle; falling back to index order"
+            );
             (0..graph.nodes.len()).collect()
         }
     }
 
     /// Runs the submitted workflow with typed, classifiable failures.
+    /// Cancellation is injectable: callers (HTTP handlers) must supply a
+    /// token wired to client disconnect so runaway LLM spend is aborted on
+    /// disconnect (fix M: previously `CancellationToken::new()` leaked runs).
     pub async fn execute_typed(
         &self,
         request: ExecuteWorkflowRequest,
+    ) -> Result<Value, ExecutionError> {
+        self.execute_typed_with_cancellation(request, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    pub async fn execute_typed_with_cancellation(
+        &self,
+        request: ExecuteWorkflowRequest,
+        cancellation: tokio_util::sync::CancellationToken,
     ) -> Result<Value, ExecutionError> {
         let started_at = std::time::Instant::now();
         let execution_id = uuid::Uuid::new_v4().to_string();
@@ -294,11 +304,7 @@ impl ExecutionPlane {
             .schedule(graph.clone(), ReservationId(uuid::Uuid::new_v4()));
         let result = self
             .scheduler
-            .run_with_cancellation(
-                &mut instance,
-                self.executor.as_ref(),
-                &tokio_util::sync::CancellationToken::new(),
-            )
+            .run_with_cancellation(&mut instance, self.executor.as_ref(), &cancellation)
             .await
             .map_err(|e| ExecutionError::scheduling(format!("scheduling failed: {e}")))?;
 
@@ -526,7 +532,13 @@ pub async fn execute_workflow_handler(
     let metrics = crate::telemetry::metrics::FusionMetrics::instance();
     metrics.requests_total.inc();
     let start = std::time::Instant::now();
-    let result = plane.execute_typed(request).await;
+    // Per-request cancellation: child token that v0.15 will bind to the
+    // hyper connection's close signal (axum graceful shutdown). Currently
+    // cancellation is explicit via this token rather than a leaked global.
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let result = plane
+        .execute_typed_with_cancellation(request, cancellation.clone())
+        .await;
     metrics
         .request_duration_seconds
         .with_label_values(&["/v1/executions"])

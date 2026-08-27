@@ -18,6 +18,7 @@
 use async_trait::async_trait;
 use fusion_core::{NanoUSD, PlatformError};
 use fusion_types::*;
+use std::collections::HashSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -217,10 +218,17 @@ impl DefaultScheduler {
             let ready = queue.get_ready(&node_states);
             if ready.is_empty() {
                 if queue.any_in_progress() {
-                    // Short poll while in-flight nodes finish (review M8):
-                    // 2ms keeps added latency negligible without a busy spin;
-                    // a Notify-driven wakeup is queued for v0.15.
-                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                    // Short poll while in-flight nodes finish. Cancellable so
+                    // client disconnect does not wait for the full 2ms window
+                    // (review M8: Notify-driven wakeup queued for v0.15).
+                    if let Some(tok) = cancel {
+                        tokio::select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(2)) => {},
+                            _ = tok.cancelled() => {},
+                        }
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                    }
                     continue;
                 }
                 break;
@@ -499,7 +507,36 @@ impl DefaultScheduler {
                     NodeState::Failed(msg) => {
                         tracing::info!(node_id = ?node_id, reason = %msg, latency_ms = result.latency_ms, "Node failed");
                         queue.mark_failed(node_id);
-                        node_states.insert(node_id, NodeState::Failed(msg));
+                        node_states.insert(node_id, NodeState::Failed(msg.clone()));
+                        // Cascade: mark all downstream dependents as Failed so
+                        // they are never left in an ambiguous Pending state.
+                        let mut stack: Vec<uuid::Uuid> = queue
+                            .outgoing_edges(node_id)
+                            .iter()
+                            .map(|e| e.to)
+                            .collect();
+                        let mut visited = HashSet::new();
+                        while let Some(downstream) = stack.pop() {
+                            if !visited.insert(downstream) {
+                                continue;
+                            }
+                            if matches!(
+                                node_states.get(&downstream),
+                                Some(NodeState::Pending) | None
+                            ) {
+                                node_states.insert(
+                                    downstream,
+                                    NodeState::Failed("dependency failed".into()),
+                                );
+                                queue.mark_failed(downstream);
+                                let edges: Vec<uuid::Uuid> = queue
+                                    .outgoing_edges(downstream)
+                                    .iter()
+                                    .map(|e| e.to)
+                                    .collect();
+                                stack.extend(edges);
+                            }
+                        }
                     }
                     _ => {
                         queue.mark_completed(node_id);
@@ -749,6 +786,9 @@ mod tests {
     #[tokio::test]
     async fn test_scheduler_passes_parent_context() {
         use std::sync::Mutex;
+        // NOTE: static is safe here because this is the only test using this
+        // pattern. If more tests need executor-to-test communication, switch
+        // to Arc<parking_lot::Mutex<>> passed through the executor struct.
         static CAPTURED: Mutex<Option<(uuid::Uuid, serde_json::Value)>> = Mutex::new(None);
 
         struct ContextCapturingExecutor;

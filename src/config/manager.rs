@@ -77,12 +77,26 @@ impl ConfigManager {
         // two generations.
         let _reload_guard = self.reload_lock.lock().await;
 
+        // Atomicity: editors may save config non-atomically (trunc + write).
+        // A torn read would fail YAML parse; retry once after a brief pause
+        // so a concurrent atomic-rename (write tmp + rename) settles.
         let content = tokio::fs::read_to_string(&self.config_path)
             .await
             .map_err(|e| ReloadError::Parse(e.to_string()))?;
 
-        let new_config: AppConfig =
-            serde_yaml::from_str(&content).map_err(|e| ReloadError::Parse(e.to_string()))?;
+        let new_config: AppConfig = match serde_yaml::from_str(&content) {
+            Ok(c) => c,
+            Err(first_err) => {
+                // Brief backoff then retry — handles torn write window.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                let retry_content = tokio::fs::read_to_string(&self.config_path)
+                    .await
+                    .map_err(|e| ReloadError::Parse(e.to_string()))?;
+                serde_yaml::from_str(&retry_content).map_err(|e| {
+                    ReloadError::Parse(format!("{e} (initial parse also failed: {first_err})"))
+                })?
+            }
+        };
 
         new_config.validate().map_err(ReloadError::Validation)?;
 
@@ -181,6 +195,7 @@ mod tests {
             model_catalog: ModelCatalog::default(),
             connectors: HashMap::new(),
             features: HashMap::new(),
+            streaming: Default::default(),
         }
     }
 

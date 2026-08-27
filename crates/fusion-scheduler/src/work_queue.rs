@@ -201,6 +201,9 @@ impl WorkQueue {
             .max_concurrent_nodes
             .saturating_sub(self.in_progress.len());
         if result.len() > available {
+            // Deterministic truncation: sort by node id so the same subset is
+            // dispatched regardless of insertion order when ready > available.
+            result.sort_by_key(|n| n.id);
             result.truncate(available);
         }
 

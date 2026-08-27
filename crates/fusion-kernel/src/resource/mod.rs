@@ -85,6 +85,10 @@ impl Default for StubResourceManager {
 
 #[async_trait]
 impl ResourceManager for StubResourceManager {
+    /// Advisory check: reads current spend atomically but **without** holding
+    /// `reserve_lock`. Two concurrent `can_afford` calls may both see available
+    /// budget then both proceed to `try_reserve`, which will reject one. Callers
+    /// must treat this as a hint and handle `try_reserve` failure gracefully.
     async fn can_afford(&self, estimated_cost: NanoUSD, estimated_tokens: u64) -> bool {
         let cost_nanos = estimated_cost.as_nanos();
         let current_cost = self.cost.load(Ordering::Acquire);

@@ -41,8 +41,8 @@ async fn test_beta_compiler_inspector_journey() {
         "provider totals must be differentiated"
     );
 
-    // 3. Tab 3: Compiler Pass Explorer & Pass Diffs (5 passes in Phase 3)
-    assert_eq!(report.pass_diffs.len(), 5);
+    // 3. Tab 3: Compiler Pass Explorer & Pass Diffs (6 passes: 5 mandatory + strategy_lowering)
+    assert_eq!(report.pass_diffs.len(), 6);
     assert_eq!(report.pass_diffs[0].pass_name, "constraint_validation");
 
     // 4. Multi-dimensional Score Verification

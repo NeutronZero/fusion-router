@@ -266,6 +266,7 @@ async fn test_chat_completion_endpoint() {
         model_catalog: Default::default(),
         connectors: std::collections::HashMap::new(),
         features: std::collections::HashMap::new(),
+        streaming: Default::default(),
     });
 
     let state = fusion_router::server::handlers::AppState::new(
@@ -665,6 +666,7 @@ fn test_config() -> AppConfig {
         model_catalog: Default::default(),
         connectors: std::collections::HashMap::new(),
         features: std::collections::HashMap::new(),
+        streaming: Default::default(),
     }
 }
 

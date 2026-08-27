@@ -14,6 +14,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
+parking_lot = "0.12"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

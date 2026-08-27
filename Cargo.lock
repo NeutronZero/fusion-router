@@ -1091,6 +1091,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tracing",
  "uuid",
 ]
 
@@ -1255,6 +1256,7 @@ dependencies = [
  "fusion-core",
  "fusion-types",
  "futures",
+ "parking_lot",
  "serde_json",
  "tokio",
  "tokio-util",

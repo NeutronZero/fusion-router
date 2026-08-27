@@ -318,7 +318,7 @@ impl PipelineStep<ExecutionGraph, ResourceGuard> for ResourceReservationStep {
             .saturating_mul(3)
             .max(NanoUSD::from_nanos(10_000));
         let max_cost =
-            NanoUSD::from_nanos((q.max_daily_cost.as_nanos() / 5)).min(estimate_with_headroom);
+            NanoUSD::from_nanos(q.max_daily_cost.as_nanos() / 5).min(estimate_with_headroom);
         // The envelope must never be smaller than the request itself needs:
         // every LLM node re-sends the full assembled context, so the minimum
         // workable budget is (input + output) x number of LLM nodes.

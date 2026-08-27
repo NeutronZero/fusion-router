@@ -32,6 +32,27 @@ pub struct AppConfig {
     pub connectors: HashMap<String, ConnectorConfig>,
     #[serde(default)]
     pub features: HashMap<String, FeatureConfig>,
+    #[serde(default)]
+    pub streaming: StreamingConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct StreamingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_checkpoint_interval_chunks")]
+    pub checkpoint_interval_chunks: u64,
+    #[serde(default = "default_chunk_timeout_secs")]
+    pub default_chunk_timeout_secs: u64,
+}
+
+fn default_checkpoint_interval_chunks() -> u64 {
+    100
+}
+
+fn default_chunk_timeout_secs() -> u64 {
+    30
 }
 
 #[derive(Debug, Clone, Deserialize)]

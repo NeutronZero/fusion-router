@@ -438,15 +438,20 @@ impl BudgetEnvelope {
     }
 
     pub fn increment_iteration(&self) -> Result<u64, BudgetExceededError> {
-        let iter = self.current_iterations.fetch_add(1, Ordering::SeqCst) + 1;
-        if iter > self.max_iterations as u64 {
-            self.current_iterations.fetch_sub(1, Ordering::SeqCst);
-            return Err(BudgetExceededError::Iterations {
-                current: iter,
+        let prev = self
+            .current_iterations
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                if current >= self.max_iterations as u64 {
+                    None // Already at limit — don't increment
+                } else {
+                    Some(current + 1)
+                }
+            })
+            .map_err(|current| BudgetExceededError::Iterations {
+                current: current + 1,
                 max: self.max_iterations,
-            });
-        }
-        Ok(iter)
+            })?;
+        Ok(prev + 1)
     }
 
     pub fn spent_cost(&self) -> NanoUSD {

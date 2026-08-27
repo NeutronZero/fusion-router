@@ -228,7 +228,14 @@ pub async fn run(args: ReviewArgs) -> anyhow::Result<()> {
 
     let provider_registry = build_provider_registry(&config, unsafe_dev)?;
 
-    let member_models = args.members.clone();
+    let member_models = if args.members.is_empty() {
+        vec![
+            config.model_catalog.general.clone(),
+            config.model_catalog.creative.clone(),
+        ]
+    } else {
+        args.members.clone()
+    };
     for model in &member_models {
         if provider_registry.get_matching_targets(model).is_empty() {
             anyhow::bail!("no provider can route model '{model}'");
@@ -283,7 +290,7 @@ pub async fn run(args: ReviewArgs) -> anyhow::Result<()> {
     let judge_model = member_models
         .last()
         .cloned()
-        .unwrap_or_else(|| "zen/deepseek-v4-flash-free".into());
+        .unwrap_or_else(|| config.model_catalog.analysis.clone());
 
     // Build a minimal WorkflowIR and compile through the standard pipeline
     // (Phase 6) — strategy expansion is handled by lower_to_graph, not by

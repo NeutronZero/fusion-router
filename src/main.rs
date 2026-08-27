@@ -388,6 +388,7 @@ async fn main() {
         .with_state(state.clone())
         .merge(operations_routes)
         .merge(execution_routes)
+        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(
             middleware::request_id::request_id_middleware,
@@ -479,26 +480,15 @@ async fn main() {
         }
     };
 
-    let shutdown_timeout = std::time::Duration::from_secs(config.server.shutdown_timeout_secs);
-
     let serve = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal());
 
-    match tokio::time::timeout(shutdown_timeout, serve).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            eprintln!("server error: {e}");
-            std::process::exit(1);
-        }
-        Err(_) => {
-            tracing::warn!(
-                timeout_secs = %config.server.shutdown_timeout_secs,
-                "graceful shutdown exceeded its bound; forcing exit"
-            );
-        }
+    if let Err(e) = serve.await {
+        eprintln!("server error: {e}");
+        std::process::exit(1);
     }
 }
 
