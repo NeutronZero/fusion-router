@@ -1,5 +1,7 @@
 use crate::runtime::config::SandboxConfig;
 use crate::runtime::context::RuntimeContext;
+use crate::runtime::host_services::CapabilityHostServices;
+use crate::runtime::linker::{configure_linker, HostAccess};
 use crate::runtime::module_cache::RuntimeModuleCache;
 use crate::runtime::sandbox_instance::SandboxInstance;
 use crate::runtime::sandbox_runtime::SandboxRuntime;
@@ -7,12 +9,15 @@ use crate::runtime::RuntimeError;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use wasmtime::{Config, Engine, Linker, Memory, Module, ResourceLimiter, Store, TypedFunc};
 
 /// Hard cap on guest table growth (elements). Tables are host-allocated
 /// memory for function references; without a cap a guest can allocate GBs of
 /// host memory while staying well within its fuel budget.
 const MAX_TABLE_ELEMENTS: usize = 10_000;
+
+const EPOCH_INTERVAL_MS: u64 = 100;
 
 pub struct WasmtimeSandboxRuntime {
     engine: Engine,
@@ -23,6 +28,17 @@ pub struct WasmtimeSandboxRuntime {
 struct StoreData {
     memory_limit: usize,
     growth_rejected: Arc<AtomicBool>,
+    host_services: Arc<dyn CapabilityHostServices>,
+    runtime_handle: tokio::runtime::Handle,
+}
+
+impl HostAccess for StoreData {
+    fn host_services(&self) -> &Arc<dyn CapabilityHostServices> {
+        &self.host_services
+    }
+    fn runtime_handle(&self) -> tokio::runtime::Handle {
+        self.runtime_handle.clone()
+    }
 }
 
 impl ResourceLimiter for StoreData {
@@ -62,9 +78,16 @@ impl WasmtimeSandboxRuntime {
         wasm_config.wasm_bulk_memory(true);
         wasm_config.wasm_multi_value(true);
         wasm_config.consume_fuel(true);
+        wasm_config.epoch_interruption(true);
 
         let engine = Engine::new(&wasm_config)
             .map_err(|e| RuntimeError::CompilationFailed(e.to_string()))?;
+
+        let ticker_engine = engine.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(EPOCH_INTERVAL_MS));
+            ticker_engine.increment_epoch();
+        });
 
         Ok(Self {
             engine,
@@ -92,6 +115,18 @@ impl SandboxRuntime for WasmtimeSandboxRuntime {
         let memory_limit = self.config.memory_limit_bytes as usize;
         let fuel_amount = self.config.fuel_amount;
         let max_response_bytes = self.config.max_response_bytes;
+        let host_services = ctx.host_services.clone();
+
+        let effective_deadline: Option<tokio::time::Instant> = match (ctx.deadline, self.config.timeout_ms) {
+            (Some(d), _) => Some(d),
+            (None, Some(ms)) => Some(tokio::time::Instant::now() + Duration::from_millis(ms)),
+            (None, None) => None,
+        };
+        let epoch_duration = effective_deadline
+            .map(|d| d.saturating_duration_since(tokio::time::Instant::now()));
+
+        let runtime_handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| RuntimeError::CompilationFailed("wasmtime sandbox requires a tokio runtime".into()))?;
 
         let build = tokio::task::spawn_blocking(move || {
             build_instance(
@@ -100,13 +135,16 @@ impl SandboxRuntime for WasmtimeSandboxRuntime {
                 StoreData {
                     memory_limit,
                     growth_rejected: Arc::new(AtomicBool::new(false)),
+                    host_services,
+                    runtime_handle,
                 },
                 fuel_amount,
                 max_response_bytes,
+                epoch_duration,
             )
         });
 
-        let built = match ctx.deadline {
+        let built = match effective_deadline {
             Some(deadline) => tokio::time::timeout_at(deadline, build)
                 .await
                 .map_err(|_| RuntimeError::ExecutionTrap {
@@ -120,7 +158,7 @@ impl SandboxRuntime for WasmtimeSandboxRuntime {
 
         Ok(Box::new(WasmtimeSandboxInstance {
             inner: Some(WasmInner {
-                deadline: ctx.deadline,
+                deadline: effective_deadline,
                 ..wasm_inner
             }),
         }))
@@ -149,6 +187,7 @@ fn build_instance(
     store_data: StoreData,
     fuel_amount: u64,
     max_response_bytes: usize,
+    epoch_deadline: Option<Duration>,
 ) -> BuiltInstance {
     let growth_rejected = store_data.growth_rejected.clone();
 
@@ -162,7 +201,14 @@ fn build_instance(
 
     store.limiter(move |data: &mut StoreData| data as &mut dyn ResourceLimiter);
 
-    let linker = Linker::new(engine);
+    if let Some(d) = epoch_deadline {
+        let epochs = ((d.as_millis() / EPOCH_INTERVAL_MS as u128).max(1)) as u64 + 1;
+        store.set_epoch_deadline(epochs);
+    }
+
+    let mut linker = Linker::new(engine);
+    configure_linker(&mut linker)
+        .map_err(|e| RuntimeError::CompilationFailed(format!("linker setup failed: {e}")))?;
     let instance = linker
         .instantiate(&mut store, &module)
         .map_err(|e| RuntimeError::CompilationFailed(e.to_string()))?;
@@ -211,6 +257,9 @@ impl WasmtimeSandboxInstance {
         if let Some(trap) = err.downcast_ref::<wasmtime::Trap>() {
             return match trap {
                 wasmtime::Trap::OutOfFuel => RuntimeError::FuelExhausted,
+                wasmtime::Trap::Interrupt => RuntimeError::ExecutionTrap {
+                    message: "wasm exceeded its wall-clock epoch deadline".into(),
+                },
                 _ => RuntimeError::ExecutionTrap {
                     message: err.to_string(),
                 },

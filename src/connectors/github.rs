@@ -8,6 +8,21 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+fn validate_repo(repo: &str) -> Result<(), String> {
+    let mut slash_count = 0usize;
+    for c in repo.chars() {
+        if c == '/' {
+            slash_count += 1;
+        } else if !(c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') {
+            return Err(format!("repo '{repo}' contains an invalid character"));
+        }
+    }
+    if slash_count != 1 {
+        return Err(format!("repo '{repo}' must be in 'owner/name' form"));
+    }
+    Ok(())
+}
+
 /// Creates GitHub issues for real via the REST API (`POST /repos/{repo}/issues`).
 ///
 /// Requires the `GITHUB_TOKEN` environment variable; without it the connector
@@ -19,7 +34,10 @@ pub struct GitHubPlugin {
 impl Default for GitHubPlugin {
     fn default() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 }
@@ -90,10 +108,33 @@ impl CapabilityExecutor for GitHubPlugin {
             retryable: false,
         })?;
 
+        validate_repo(repo).map_err(|msg| ExecutionError {
+            connector: "github".into(),
+            capability: instance.contract.id.clone(),
+            reason: msg,
+            retryable: false,
+        })?;
+
+        let api_url = format!("https://api.github.com/repos/{repo}/issues");
+
+        let perms = &instance.contract.permissions;
+        let permitted = perms
+            .iter()
+            .any(|p| matches!(p, Permission::Network))
+            || crate::runtime::policy::check_http_access(perms, &api_url).is_ok();
+        if !perms.is_empty() && !permitted {
+            return Err(ExecutionError {
+                connector: "github".into(),
+                capability: instance.contract.id.clone(),
+                reason: "GitHub issue target is not covered by declared permissions".into(),
+                retryable: false,
+            });
+        }
+
         let started = std::time::Instant::now();
         let response = self
             .client
-            .post(format!("https://api.github.com/repos/{repo}/issues"))
+            .post(&api_url)
             .header("Authorization", format!("Bearer {token}"))
             .header("User-Agent", "fusion-router")
             .header("Accept", "application/vnd.github+json")
@@ -116,13 +157,16 @@ impl CapabilityExecutor for GitHubPlugin {
         })?;
 
         if !status.is_success() {
+            tracing::debug!(
+                status = status.as_u16(),
+                "GitHub API rejected issue creation; payload omitted from error"
+            );
             return Err(ExecutionError {
                 connector: "github".into(),
                 capability: instance.contract.id.clone(),
                 reason: format!(
-                    "GitHub API rejected issue creation ({}): {}",
-                    status.as_u16(),
-                    payload
+                    "GitHub API rejected issue creation (status {})",
+                    status.as_u16()
                 ),
                 retryable: status.is_server_error(),
             });

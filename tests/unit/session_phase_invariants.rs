@@ -81,8 +81,8 @@ async fn session_invariant_store_isolation_parity() {
     mem_store.create_session(session.clone()).await.unwrap();
     sql_store.create_session(session).await.unwrap();
 
-    let mem_session = mem_store.load_session(&session_id).await.unwrap();
-    let sql_session = sql_store.load_session(&session_id).await.unwrap();
+    let mem_session = mem_store.load_session(&session_id, None).await.unwrap();
+    let sql_session = sql_store.load_session(&session_id, None).await.unwrap();
 
     assert_eq!(mem_session.unwrap().owner, sql_session.unwrap().owner);
 }
@@ -106,13 +106,13 @@ async fn session_invariant_resume_compatibility_check() {
         .unwrap();
 
     let valid_ver = semver::Version::parse("0.1.0").unwrap();
-    let restored = ResumeEngine::resume_session(&store, &session_id, &valid_ver)
+    let restored = ResumeEngine::resume_session(&store, &session_id, &valid_ver, None)
         .await
         .unwrap();
     assert_eq!(restored.session_id, session_id);
 
     let invalid_ver = semver::Version::parse("9.9.9").unwrap();
-    let err = ResumeEngine::resume_session(&store, &session_id, &invalid_ver).await;
+    let err = ResumeEngine::resume_session(&store, &session_id, &invalid_ver, None).await;
     assert!(err.is_err());
 }
 

@@ -189,7 +189,7 @@ impl DefaultScheduler {
             .map(|(i, n)| (n.id, i))
             .collect();
 
-        loop {
+        'sched_loop: loop {
             if let Some(token) = cancel {
                 if token.is_cancelled() {
                     tracing::info!("Cancellation requested; aborting scheduler loop");
@@ -202,12 +202,9 @@ impl DefaultScheduler {
                 }
             }
 
-            // Enforce per-request budget iteration limit (same position as the
-            // monolith run_inner: loop head, after the cancellation check).
-            if let Some(envelope) = envelope {
-                if envelope.increment_iteration().is_err() {
-                    tracing::info!("Budget iteration limit reached; stopping scheduler loop");
-                    break;
+            if let Some(env) = envelope {
+                if env.max_iterations == 0 {
+                    break 'sched_loop;
                 }
             }
 
@@ -435,6 +432,18 @@ impl DefaultScheduler {
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
                                 if should_continue {
+                                    // Budget iteration cap is enforced at the
+                                    // loop head re-arm only (not per scheduler
+                                    // wave) so deep non-loop DAGs are never
+                                    // truncated early (review M10).
+                                    if let Some(envelope) = envelope {
+                                        if envelope.increment_iteration().is_err() {
+                                            tracing::info!(
+                                                "Budget iteration limit reached; stopping scheduler loop"
+                                            );
+                                            break 'sched_loop;
+                                        }
+                                    }
                                     let body_ids: Vec<uuid::Uuid> = queue
                                         .outgoing_edges(node_id)
                                         .iter()

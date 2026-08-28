@@ -50,9 +50,10 @@ impl ResumeEngine {
         store: &dyn SessionStore,
         session_id: &SessionId,
         expected_api_version: &semver::Version,
+        owner: Option<&str>,
     ) -> Result<SessionSnapshot, String> {
         let session = store
-            .load_session(session_id)
+            .load_session(session_id, owner)
             .await?
             .ok_or_else(|| format!("Session not found: {}", session_id))?;
 
@@ -64,7 +65,7 @@ impl ResumeEngine {
             ));
         }
 
-        let checkpoints = store.list_checkpoints(&session.session_id).await?;
+        let checkpoints = store.list_checkpoints(&session.session_id, owner).await?;
         checkpoints
             .last()
             .cloned()

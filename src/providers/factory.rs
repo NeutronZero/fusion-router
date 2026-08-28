@@ -6,6 +6,26 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Only these shapes of env-var names may be referenced via `{env:VAR}`
+/// interpolation in `api_key`. This prevents the interpolation primitive from
+/// reading arbitrary environment contents (an exfil vector if provider config
+/// ever becomes attacker-influenced). Fail-closed: anything outside the
+/// allowlist is rejected.
+fn is_allowed_interpolation_var(var: &str) -> bool {
+    let var = var.trim();
+    if var.is_empty() {
+        return false;
+    }
+    let suffix_ok = var.ends_with("_KEY")
+        || var.ends_with("_TOKEN")
+        || var.ends_with("_SECRET")
+        || var.ends_with("_PASSWORD");
+    suffix_ok
+        && var
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
 use super::circuit_breaker::CircuitBreaker;
 use super::circuit_breaking_provider::CircuitBreakingProvider;
 use super::generic_openai_model::GenericOpenAIModel;
@@ -34,6 +54,12 @@ pub fn resolve_api_key(
             .strip_prefix("{env:")
             .and_then(|s| s.strip_suffix('}'))
         {
+            if !is_allowed_interpolation_var(var) {
+                anyhow::bail!(
+                    "provider '{}': env interpolation of '{var}' is not allowed; only key/token/secret env var names may be interpolated",
+                    provider_name
+                );
+            }
             if let Ok(val) = std::env::var(var) {
                 if !val.trim().is_empty() {
                     return Ok(val);
@@ -276,14 +302,14 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_env_syntax() {
-        std::env::set_var("TEST_RESOLVE_KEY_123", "sk-from-env");
+        std::env::set_var("TEST_RESOLVE_KEY", "sk-from-env");
         let cfg = ProviderConfig {
-            api_key: Some("{env:TEST_RESOLVE_KEY_123}".into()),
+            api_key: Some("{env:TEST_RESOLVE_KEY}".into()),
             ..Default::default()
         };
         let key = resolve_api_key(&cfg, "test", false).unwrap();
         assert_eq!(key, "sk-from-env");
-        std::env::remove_var("TEST_RESOLVE_KEY_123");
+        std::env::remove_var("TEST_RESOLVE_KEY");
     }
 
     #[test]

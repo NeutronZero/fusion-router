@@ -95,7 +95,11 @@ impl ResourceManager for StubResourceManager {
         let current_tokens = self.tokens.load(Ordering::Acquire);
         let max_cost = self.quota.max_daily_cost.as_nanos();
         let max_tokens = self.quota.max_daily_tokens;
-        (current_cost + cost_nanos <= max_cost) && (current_tokens + estimated_tokens <= max_tokens)
+        // Saturating sums mirror the monolith's `DefaultResourceManager` so a
+        // hostile overflow cannot wrap `current_cost + cost_nanos` to a falsely
+        // affordable small value.
+        (current_cost.saturating_add(cost_nanos) <= max_cost)
+            && (current_tokens.saturating_add(estimated_tokens) <= max_tokens)
     }
 
     async fn try_reserve(&self, estimated_cost: NanoUSD, estimated_tokens: u64) -> bool {
@@ -128,8 +132,14 @@ impl ResourceManager for StubResourceManager {
 
     async fn release(&self, estimated_cost: NanoUSD, estimated_tokens: u64) -> anyhow::Result<()> {
         let cost_nanos = estimated_cost.as_nanos();
-        self.cost.fetch_sub(cost_nanos, Ordering::Relaxed);
-        self.tokens.fetch_sub(estimated_tokens, Ordering::Relaxed);
+        // Saturating subtraction: a double-release (or release of a never-
+        // reserved oversized estimate) must never wrap `used` to `u64::MAX`.
+        let current_cost = self.cost.load(Ordering::Acquire);
+        let current_tokens = self.tokens.load(Ordering::Acquire);
+        self.cost
+            .fetch_sub(cost_nanos.min(current_cost), Ordering::Relaxed);
+        self.tokens
+            .fetch_sub(estimated_tokens.min(current_tokens), Ordering::Relaxed);
         Ok(())
     }
 

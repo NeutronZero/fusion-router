@@ -9,12 +9,40 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use futures::StreamExt;
+
 /// Maximum response body size kept in `outputs.body` (bytes).
 const MAX_BODY_BYTES: usize = 64 * 1024;
 
-/// Validates that a URL is safe to fetch (SSRF protection).
-/// Rejects loopback, private, and link-local addresses.
-fn validate_url_for_ssrf(url_str: &str) -> Result<(), String> {
+fn is_blocked_ip(ip: &IpAddr) -> bool {
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(*ip),
+        other => *other,
+    };
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_private()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || o[0] == 0
+                || (o[0] == 100 && (o[1] & 0xC0) == 0x40)
+        }
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (s[0] & 0xffc0) == 0xfe80
+                || (s[0] & 0xfe00) == 0xfc00
+                || (s[0] == 0x0064 && s[1] == 0xff9b && s[2..6].iter().all(|&seg| seg == 0))
+                || (s[..6].iter().all(|&seg| seg == 0) && (s[6] != 0 || s[7] != 0))
+        }
+    }
+}
+
+async fn validate_url_for_ssrf(url_str: &str) -> Result<(), String> {
     let url = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
     let scheme = url.scheme().to_lowercase();
     if scheme != "http" && scheme != "https" {
@@ -31,34 +59,40 @@ fn validate_url_for_ssrf(url_str: &str) -> Result<(), String> {
     {
         return Err("URL targets loopback address".to_string());
     }
-    // Try to parse as IP and check private/link-local ranges
     if let Ok(ip) = host_str.parse::<IpAddr>() {
-        if ip.is_loopback() || ip.is_unspecified() {
+        if is_blocked_ip(&ip) {
             return Err(format!("URL targets reserved IP address {ip}"));
         }
-        match ip {
-            IpAddr::V4(v4) => {
-                if v4.is_link_local() {
-                    return Err(format!("URL targets link-local address {v4}"));
-                }
-                let octets = v4.octets();
-                if octets[0] == 10
-                    || (octets[0] == 172 && (16..=31).contains(&octets[1]))
-                    || (octets[0] == 192 && octets[1] == 168)
-                {
-                    return Err(format!("URL targets private IP address {v4}"));
-                }
-            }
-            IpAddr::V6(v6) => {
-                let segments = v6.segments();
-                // fc00::/7 (unique local), fe80::/10 (link-local)
-                if (segments[0] & 0xfe00) == 0xfc00 || (segments[0] & 0xffc0) == 0xfe80 {
-                    return Err(format!("URL targets reserved IPv6 address {v6}"));
-                }
-            }
+        return Ok(());
+    }
+    let port = url.port_or_known_default().unwrap_or(80);
+    let addrs = tokio::net::lookup_host((host_str, port))
+        .await
+        .map_err(|e| format!("DNS resolution failed for '{host_str}': {e}"))?;
+    for addr in addrs {
+        if is_blocked_ip(&addr.ip()) {
+            return Err(format!(
+                "URL host '{host_str}' resolves to blocked address {}",
+                addr.ip()
+            ));
         }
     }
     Ok(())
+}
+
+async fn read_body_limited(response: reqwest::Response) -> Result<String, String> {
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("failed to read response body: {e}"))?;
+        if body.len() + chunk.len() > MAX_BODY_BYTES {
+            let remaining = MAX_BODY_BYTES.saturating_sub(body.len());
+            body.extend_from_slice(&chunk[..remaining]);
+            break;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).to_string())
 }
 
 /// Redacts a URL for safe error messages (keeps scheme + host only).
@@ -81,7 +115,10 @@ pub struct HttpPlugin {
 impl Default for HttpPlugin {
     fn default() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 }
@@ -136,12 +173,26 @@ impl CapabilityExecutor for HttpPlugin {
 
         // SSRF protection: reject loopback, private, and link-local addresses
         #[cfg(not(test))]
-        validate_url_for_ssrf(url).map_err(|msg| ExecutionError {
+        validate_url_for_ssrf(url).await.map_err(|msg| ExecutionError {
             connector: "http".into(),
             capability: instance.contract.id.clone(),
             reason: msg,
             retryable: false,
         })?;
+
+        let perms = &instance.contract.permissions;
+        let permitted = perms
+            .iter()
+            .any(|p| matches!(p, Permission::Network))
+            || crate::runtime::policy::check_http_access(perms, url).is_ok();
+        if !perms.is_empty() && !permitted {
+            return Err(ExecutionError {
+                connector: "http".into(),
+                capability: instance.contract.id.clone(),
+                reason: "request URL is not covered by the connector's declared permissions".into(),
+                retryable: false,
+            });
+        }
 
         let _method = input
             .get("method")
@@ -172,10 +223,10 @@ impl CapabilityExecutor for HttpPlugin {
         })?;
 
         let status = response.status().as_u16();
-        let text = response.text().await.map_err(|err| ExecutionError {
+        let text = read_body_limited(response).await.map_err(|err| ExecutionError {
             connector: "http".into(),
             capability: instance.contract.id.clone(),
-            reason: format!("failed to read response body: {err}"),
+            reason: err,
             retryable: false,
         })?;
 
@@ -185,10 +236,7 @@ impl CapabilityExecutor for HttpPlugin {
             started.elapsed().as_secs_f64() * 1000.0,
         );
 
-        let mut truncated = text;
-        if truncated.len() > MAX_BODY_BYTES {
-            truncated.truncate(MAX_BODY_BYTES);
-        }
+        let truncated = text;
 
         Ok(ExecutionResult {
             outputs: json!({ "body": truncated, "status": status }),

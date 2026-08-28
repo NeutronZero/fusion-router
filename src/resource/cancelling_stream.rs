@@ -87,18 +87,35 @@ impl Stream for MeteredStream {
                             if let Some(ref envelope) = self.budget_envelope {
                                 let cur_cost_nanos = meter.cost().as_nanos();
                                 let cur_tokens = meter.prompt_tokens() + meter.completion_tokens();
-                                let delta_cost = cur_cost_nanos
-                                    .saturating_sub(self.prev_cost_nanos.unwrap_or(0));
-                                let delta_tokens =
-                                    cur_tokens.saturating_sub(self.prev_tokens.unwrap_or(0));
-                                if let Err(e) = envelope
-                                    .record_and_check(NanoUSD::from_nanos(delta_cost), delta_tokens)
-                                {
-                                    tracing::warn!(error = ?e, "Mid-stream budget ceiling breached; terminating stream");
-                                    breached = true;
-                                    breach_err = Some(e);
-                                }
-                                if !breached {
+                                let prev_cost = self.prev_cost_nanos.unwrap_or(0);
+                                let prev_tok = self.prev_tokens.unwrap_or(0);
+                                // Signed deltas: a final/authoritative usage
+                                // report may be LOWER than the optimistic
+                                // char-based estimate already billed. In that
+                                // case refund the difference (downward) instead
+                                // of clamping to 0 and leaving the over-estimate
+                                // to trip the envelope prematurely (F7).
+                                let delta_cost = cur_cost_nanos as i128 - prev_cost as i128;
+                                let delta_tokens = cur_tokens as i128 - prev_tok as i128;
+                                if delta_cost > 0 || delta_tokens > 0 {
+                                    if let Err(e) = envelope.record_and_check(
+                                        NanoUSD::from_nanos(delta_cost.max(0) as u64),
+                                        delta_tokens.max(0) as u64,
+                                    ) {
+                                        tracing::warn!(error = ?e, "Mid-stream budget ceiling breached; terminating stream");
+                                        breached = true;
+                                        breach_err = Some(e);
+                                    }
+                                    if !breached {
+                                        seen_totals = Some((cur_cost_nanos, cur_tokens));
+                                    }
+                                } else if delta_cost < 0 || delta_tokens < 0 {
+                                    envelope.reconcile_refund(
+                                        NanoUSD::from_nanos(((-delta_cost).max(0)) as u64),
+                                        ((-delta_tokens).max(0)) as u64,
+                                    );
+                                    seen_totals = Some((cur_cost_nanos, cur_tokens));
+                                } else {
                                     seen_totals = Some((cur_cost_nanos, cur_tokens));
                                 }
                             }
@@ -178,6 +195,26 @@ impl MeteredStream {
                     ttfb_ms: None,
                     total_duration_ms: None,
                 });
+            // Reconcile the envelope to the authoritative final report: refund
+            // any optimistic over-estimate already billed, or top up the true
+            // final spend if it exceeded the mid-stream peak (F7).
+            if let Some(ref envelope) = self.budget_envelope {
+                let told_cost = self.prev_cost_nanos.unwrap_or(0);
+                let told_tok = self.prev_tokens.unwrap_or(0);
+                let final_cost = report.cost.as_nanos();
+                let final_tok = report.total_tokens;
+                if final_cost < told_cost || final_tok < told_tok {
+                    envelope.reconcile_refund(
+                        NanoUSD::from_nanos(told_cost.saturating_sub(final_cost)),
+                        told_tok.saturating_sub(final_tok),
+                    );
+                } else {
+                    let _ = envelope.record_and_check(
+                        NanoUSD::from_nanos(final_cost.saturating_sub(told_cost)),
+                        final_tok.saturating_sub(told_tok),
+                    );
+                }
+            }
             hook(report);
         }
     }

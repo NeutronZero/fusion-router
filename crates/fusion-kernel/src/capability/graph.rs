@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use fusion_plugin_api::{CapabilityContract, CapabilityId};
+use fusion_plugin_api::{CapabilityContract, CapabilityId, Permission};
 
 /// A node in the capability graph — wraps the declared ABI contract.
 #[derive(Debug, Clone)]
@@ -82,7 +82,15 @@ impl CapabilityGraph {
 
     /// Validates the graph for cycles and conflict violations.
     pub fn validate(&self) -> Result<(), String> {
-        // 1. Conflict Validation
+        for node in self.nodes.values() {
+            if let Some(broad) = broad_grant(&node.contract.permissions) {
+                return Err(format!(
+                    "Capability '{}' declares an overly-broad grant '{}' which is not permitted",
+                    node.contract.id, broad
+                ));
+            }
+        }
+
         for conflict in &self.conflicts {
             if self.nodes.contains_key(&conflict.capability_a)
                 && self.nodes.contains_key(&conflict.capability_b)
@@ -172,6 +180,20 @@ impl Default for CapabilityGraph {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn broad_grant(perms: &[Permission]) -> Option<Permission> {
+    for p in perms {
+        match p {
+            Permission::Http(s) | Permission::Secrets(s) | Permission::Environment(s)
+                if s.is_empty() || s == "*" =>
+            {
+                return Some(p.clone());
+            }
+            _ => continue,
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -277,5 +299,55 @@ mod tests {
         let res = graph.topological_sort();
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Cyclic dependency"));
+    }
+
+    fn make_contract_with_perms(id: &str, perms: Vec<Permission>) -> CapabilityContract {
+        let mut c = make_contract(id);
+        c.permissions = perms;
+        c
+    }
+
+    #[test]
+    fn test_broad_http_grant_rejected() {
+        let mut graph = CapabilityGraph::new();
+        graph.add_node(make_contract_with_perms(
+            "evil",
+            vec![Permission::Http("*".into())],
+        ));
+        assert!(graph.validate().is_err());
+    }
+
+    #[test]
+    fn test_broad_secrets_grant_rejected() {
+        let mut graph = CapabilityGraph::new();
+        graph.add_node(make_contract_with_perms(
+            "evil",
+            vec![Permission::Secrets("*".into())],
+        ));
+        assert!(graph.validate().is_err());
+    }
+
+    #[test]
+    fn test_broad_environment_grant_rejected() {
+        let mut graph = CapabilityGraph::new();
+        graph.add_node(make_contract_with_perms(
+            "evil",
+            vec![Permission::Environment("*".into())],
+        ));
+        assert!(graph.validate().is_err());
+    }
+
+    #[test]
+    fn test_scoped_grants_accepted() {
+        let mut graph = CapabilityGraph::new();
+        graph.add_node(make_contract_with_perms(
+            "ok",
+            vec![
+                Permission::Http("https://api.example.com/*".into()),
+                Permission::Secrets("API_KEY".into()),
+                Permission::Environment("HOME".into()),
+            ],
+        ));
+        assert!(graph.validate().is_ok());
     }
 }

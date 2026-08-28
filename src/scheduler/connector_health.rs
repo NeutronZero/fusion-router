@@ -77,22 +77,34 @@ impl ConnectorHealthChecker {
         let mut interval = tokio::time::interval(Duration::from_secs(self.check_interval_secs));
         loop {
             interval.tick().await;
-            let connector_pairs: Vec<(String, Arc<dyn Connector>)> = {
-                let guard = resolver.connectors.read();
-                guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-            };
+            let tick = async {
+                let connector_pairs: Vec<(String, Arc<dyn Connector>)> = {
+                    let guard = resolver.connectors.read();
+                    guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+                };
 
-            let futures = connector_pairs
-                .into_iter()
-                .map(|(name, connector)| async move {
+                let current: std::collections::HashSet<String> = connector_pairs
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect();
+
+                let futures = connector_pairs.into_iter().map(|(name, connector)| async move {
                     let health = self.check_connector_health(&name, connector.as_ref()).await;
                     (name, health)
                 });
 
-            let results = futures::future::join_all(futures).await;
-            let mut map = self.health_map.write().await;
-            for (name, health) in results {
-                map.insert(name, health);
+                let results = futures::future::join_all(futures).await;
+                let mut map = self.health_map.write().await;
+                map.retain(|name, _| current.contains(name));
+                for (name, health) in results {
+                    map.insert(name, health);
+                }
+            };
+            if futures::future::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(tick))
+                .await
+                .is_err()
+            {
+                tracing::error!("health check tick panicked; restarting on next interval");
             }
         }
     }

@@ -137,17 +137,29 @@ impl Tool for FileReadTool {
         let allowed_canonical = tokio::fs::canonicalize(&allowed)
             .await
             .map_err(|_| "Allowed directory not found".to_string())?;
-        let canonical = tokio::fs::canonicalize(&full_path)
+
+        let file = tokio::fs::File::open(&full_path)
             .await
             .map_err(|_| "Path does not exist or is inaccessible".to_string())?;
+
+        let canonical = crate::security::paths::canonicalize_within_async(
+            allowed,
+            full_path.clone(),
+        )
+        .await
+        .map_err(|_| "Path does not exist or is inaccessible".to_string())?;
         if !canonical.starts_with(&allowed_canonical) {
             return Err("Path traversal detected".to_string());
         }
 
-        let file = tokio::fs::File::open(&canonical)
-            .await
-            .map_err(|e| format!("File read error: {}", e))?;
-        let mut reader = tokio::io::BufReader::new(file).take((MAX_FILE_READ_BYTES + 1) as u64);
+        let std_file = file
+            .try_into_std()
+            .map_err(|_| "File read error".to_string())?;
+        verify_opened_file_identity(&std_file, &canonical)
+            .map_err(|_| "Path changed between open and validation; refusing".to_string())?;
+
+        let mut reader = tokio::io::BufReader::new(tokio::fs::File::from_std(std_file))
+            .take((MAX_FILE_READ_BYTES + 1) as u64);
         let mut content = String::new();
         let bytes_read = reader
             .read_to_string(&mut content)
@@ -166,6 +178,20 @@ impl Tool for FileReadTool {
             "bytes_read": bytes_read,
             "truncated": truncated,
         }))
+    }
+}
+
+fn verify_opened_file_identity(
+    file: &std::fs::File,
+    canonical: &std::path::Path,
+) -> Result<(), String> {
+    let handle_id = crate::security::paths::handle_file_id(file);
+    let reopened = std::fs::File::open(canonical).map_err(|e| format!("re-open failed: {e}"))?;
+    let path_id = crate::security::paths::handle_file_id(&reopened);
+    match (handle_id, path_id) {
+        (Some(h), Some(p)) if h == p => Ok(()),
+        (Some(_), Some(_)) => Err("opened file identity does not match validated path".into()),
+        _ => Err("file identity could not be determined; refusing".into()),
     }
 }
 

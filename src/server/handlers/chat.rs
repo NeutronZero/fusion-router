@@ -348,7 +348,7 @@ pub(crate) async fn process_request(
     let step_reserve = ResourceReservationStep {
         resource_manager: state.resource_manager.clone(),
     };
-    let mut guard = step_reserve.execute(graph.clone(), &mut pctx).await?;
+    let guard = step_reserve.execute(graph.clone(), &mut pctx).await?;
 
     // 7a. Native upstream streaming for eligible single-node graphs.
     if allow_native_stream && request.stream {
@@ -418,10 +418,17 @@ pub(crate) async fn process_request(
     }
 
     // 9. Response Building
+    let total_cost = result.total_cost;
+    let total_tokens = result.total_tokens;
     let response = ResponseBuilderStep.execute(result, &mut pctx).await?;
 
-    // Commit RAII ResourceGuard on successful completion
-    guard.commit();
+    // On success, refund the admission estimate held by the guard (dropping it
+    // releases the reserved quota) and then record the ACTUALLY measured usage,
+    // exactly mirroring the streaming path's release-before-hook accounting so
+    // net spend equals reality and the reserved quota is never leaked.
+    let rm = state.resource_manager.clone() as Arc<dyn crate::resource::ResourceManager>;
+    drop(guard);
+    rm.record_usage(total_cost, total_tokens).await;
 
     Ok(ChatOutcome::Completed(response))
 }

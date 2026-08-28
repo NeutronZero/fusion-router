@@ -51,11 +51,15 @@ impl Permission {
         match self {
             Permission::Network => Ok(()),
             Permission::Filesystem(path) if path.is_empty() => Err(PermissionError::EmptyArgument),
-            Permission::Http(endpoint) if endpoint.is_empty() => {
+            Permission::Http(endpoint) if endpoint.is_empty() || endpoint == "*" => {
                 Err(PermissionError::EmptyArgument)
             }
-            Permission::Secrets(name) if name.is_empty() => Err(PermissionError::EmptyArgument),
-            Permission::Environment(name) if name.is_empty() => Err(PermissionError::EmptyArgument),
+            Permission::Secrets(name) if name.is_empty() || name == "*" => {
+                Err(PermissionError::EmptyArgument)
+            }
+            Permission::Environment(name) if name.is_empty() || name == "*" => {
+                Err(PermissionError::EmptyArgument)
+            }
             _ => Ok(()),
         }
     }
@@ -263,6 +267,24 @@ mod tests {
     #[test]
     fn permission_validate_empty_environment_fails() {
         let p = Permission::Environment("".into());
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn permission_validate_wildcard_secrets_fails() {
+        let p = Permission::Secrets("*".into());
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn permission_validate_wildcard_environment_fails() {
+        let p = Permission::Environment("*".into());
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn permission_validate_wildcard_http_fails() {
+        let p = Permission::Http("*".into());
         assert!(p.validate().is_err());
     }
 

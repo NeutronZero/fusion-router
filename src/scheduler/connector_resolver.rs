@@ -71,16 +71,21 @@ impl ConnectorResolver {
 
     /// Late-binds an abstract `CapabilityInstance` to a concrete `BoundConnector`.
     pub fn bind(&self, instance: &CapabilityInstance) -> Result<BoundConnector, String> {
-        let map_guard = self.capability_map.read();
-        let connector_name = map_guard.get(&instance.contract.id).ok_or_else(|| {
-            format!(
-                "No connector registered for capability: {}",
-                instance.contract.id
-            )
-        })?;
+        let connector_name = {
+            let map_guard = self.capability_map.read();
+            map_guard
+                .get(&instance.contract.id)
+                .ok_or_else(|| {
+                    format!(
+                        "No connector registered for capability: {}",
+                        instance.contract.id
+                    )
+                })?
+                .clone()
+        };
 
         let connectors_guard = self.connectors.read();
-        let connector = connectors_guard.get(connector_name).ok_or_else(|| {
+        let connector = connectors_guard.get(&connector_name).ok_or_else(|| {
             format!(
                 "Connector '{}' registered for capability '{}' not found",
                 connector_name, instance.contract.id

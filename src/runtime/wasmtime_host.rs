@@ -6,6 +6,7 @@ use crate::runtime::policy::{check_http_access, check_secret_access};
 use crate::telemetry::metrics::FusionMetrics;
 use async_trait::async_trait;
 use reqwest::Request;
+use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use tracing::Level;
 use uuid::Uuid;
@@ -122,6 +123,11 @@ impl CapabilityHostServices for WasmtimeCapabilityHost {
     }
 
     async fn fetch_secret(&self, secret_name: &str) -> Result<String, GateError> {
+        if secret_name.is_empty() || secret_name == "*" {
+            return Err(GateError::PermissionDenied(
+                "secret name must not be empty or '*'".into(),
+            ));
+        }
         let perms = self.effective_permissions()?;
         check_secret_access(&perms, secret_name)?;
         std::env::var(secret_name).map_err(|_| {
@@ -133,13 +139,28 @@ impl CapabilityHostServices for WasmtimeCapabilityHost {
     }
 
     async fn http_request(&self, req: Request) -> Result<reqwest::Response, GateError> {
-        let url_str = req.url().to_string();
         let perms = self.effective_permissions()?;
+        let url_str = req.url().to_string();
         check_http_access(&perms, &url_str)?;
-        self.http_client
+        validate_ssrf(req.url())
+            .map_err(|m| GateError::PermissionDenied(format!("SSRF guard: {m}")))?;
+        let response = self
+            .http_client
             .execute(req)
             .await
-            .map_err(|e| GateError::ExecutionFailed(format!("HTTP request failed: {e}")))
+            .map_err(|e| GateError::ExecutionFailed(format!("HTTP request failed: {e}")))?;
+        validate_ssrf(response.url())
+            .map_err(|m| GateError::PermissionDenied(format!("SSRF guard (final): {m}")))?;
+        if let Some(location) = response.headers().get(reqwest::header::LOCATION) {
+            if let Ok(loc_str) = location.to_str() {
+                if let Ok(loc_url) = reqwest::Url::parse(loc_str) {
+                    validate_ssrf(&loc_url).map_err(|m| {
+                        GateError::PermissionDenied(format!("SSRF guard (redirect): {m}"))
+                    })?;
+                }
+            }
+        }
+        Ok(response)
     }
 
     fn record_metric(&self, name: &str, value: f64) {
@@ -150,6 +171,69 @@ impl CapabilityHostServices for WasmtimeCapabilityHost {
         );
         self.metrics.requests_total.inc_by(value as u64);
     }
+}
+
+fn is_blocked_ip(ip: &std::net::IpAddr) -> bool {
+    let ip = match ip {
+        std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map(std::net::IpAddr::V4).unwrap_or(*ip),
+        other => *other,
+    };
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_private()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || o[0] == 0
+                || (o[0] == 100 && (o[1] & 0xC0) == 0x40)
+        }
+        std::net::IpAddr::V6(v6) => {
+            let s = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (s[0] & 0xffc0) == 0xfe80
+                || (s[0] & 0xfe00) == 0xfc00
+                || (s[0] == 0x0064 && s[1] == 0xff9b && s[2..6].iter().all(|&seg| seg == 0))
+                || (s[..6].iter().all(|&seg| seg == 0) && (s[6] != 0 || s[7] != 0))
+        }
+    }
+}
+
+fn validate_ssrf(url: &reqwest::Url) -> Result<(), String> {
+    if url.scheme().to_ascii_lowercase() != "https" {
+        return Err(format!(
+            "URL scheme '{}' is not allowed (https only)",
+            url.scheme()
+        ));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "URL must have a host".to_string())?;
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if is_blocked_ip(&ip) {
+            return Err(format!("URL host '{host}' resolves to a blocked address"));
+        }
+    } else {
+        let port = url.port_or_known_default().unwrap_or(443);
+        let addrs: Vec<std::net::SocketAddr> = (host, port)
+            .to_socket_addrs()
+            .map_err(|e| format!("DNS resolution failed for '{host}': {e}"))?
+            .collect();
+        if addrs.is_empty() {
+            return Err(format!("URL host '{host}' resolved to no addresses"));
+        }
+        for addr in &addrs {
+            if is_blocked_ip(&addr.ip()) {
+                return Err(format!(
+                    "URL host '{host}' resolves to blocked address {}",
+                    addr.ip()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

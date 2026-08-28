@@ -1,12 +1,16 @@
 use fusion_plugin_api::CapabilityId;
 use parking_lot::RwLock;
 use semver::Version;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use wasmtime::{Engine, Module};
+
+type CacheKey = (CapabilityId, Version, u64);
 
 #[derive(Default)]
 pub struct RuntimeModuleCache {
-    modules: RwLock<HashMap<(CapabilityId, Version), Module>>,
+    modules: RwLock<HashMap<CacheKey, Module>>,
 }
 
 impl RuntimeModuleCache {
@@ -20,17 +24,23 @@ impl RuntimeModuleCache {
         engine: &Engine,
         wasm_bytes: &[u8],
     ) -> Result<Module, super::RuntimeError> {
-        if let Some(module) = self.modules.read().get(key) {
+        let mut hasher = DefaultHasher::new();
+        wasm_bytes.hash(&mut hasher);
+        let content_hash = hasher.finish();
+        let cache_key = (key.0.clone(), key.1.clone(), content_hash);
+        if let Some(module) = self.modules.read().get(&cache_key) {
             return Ok(module.clone());
         }
         let module = Module::new(engine, wasm_bytes)
             .map_err(|e| super::RuntimeError::CompilationFailed(e.to_string()))?;
-        self.modules.write().insert(key.clone(), module.clone());
+        self.modules.write().insert(cache_key, module.clone());
         Ok(module)
     }
 
     pub fn evict(&self, key: &(CapabilityId, Version)) {
-        self.modules.write().remove(key);
+        self.modules
+            .write()
+            .retain(|k, _| !(k.0 == key.0 && k.1 == key.1));
     }
 
     pub fn clear(&self) {

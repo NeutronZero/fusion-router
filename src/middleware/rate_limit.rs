@@ -25,6 +25,7 @@ pub struct RateLimiter {
     buckets: Arc<DashMap<String, Bucket>>,
     config: Arc<arc_swap::ArcSwap<RateLimitingConfig>>,
     cleanup_started: Arc<AtomicBool>,
+    gate: Arc<std::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -58,6 +59,7 @@ impl RateLimiter {
             buckets: Arc::new(DashMap::new()),
             config: Arc::new(arc_swap::ArcSwap::from_pointee(config)),
             cleanup_started: Arc::new(AtomicBool::new(false)),
+            gate: Arc::new(std::sync::Mutex::new(())),
         }
     }
 
@@ -104,6 +106,10 @@ impl RateLimiter {
     }
 
     pub fn check_rate(&self, client_id: &str) -> Result<(), u64> {
+        // Serialize the check-and-insert so the bucket-cap decision and the
+        // insert are atomic (fixes the TOCTOU between `contains_key`/`len` and
+        // `entry` — M2 / ADR-035).
+        let _gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
         if !self.buckets.contains_key(client_id) && self.buckets.len() >= MAX_BUCKETS {
             // Bucket cap: deny new clients instead of growing the map
             // without bound (M2 / ADR-035). Cleanup reclaims stale buckets.
@@ -126,7 +132,12 @@ impl RateLimiter {
             bucket.tokens -= 1.0;
             Ok(())
         } else {
-            let retry_after = (1.0 / (cfg.requests_per_minute as f64 / 60.0)).ceil() as u64;
+            let rpm = cfg.requests_per_minute as f64;
+            let retry_after = if rpm <= 0.0 {
+                60
+            } else {
+                (1.0 / (rpm / 60.0)).ceil() as u64
+            };
             Err(retry_after)
         }
     }

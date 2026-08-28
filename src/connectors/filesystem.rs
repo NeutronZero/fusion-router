@@ -85,15 +85,32 @@ impl CapabilityExecutor for FilesystemPlugin {
             retryable: false,
         })?;
 
+        let perms = &instance.contract.permissions;
+        let permitted = perms
+            .iter()
+            .any(|p| matches!(p, Permission::Network))
+            || perms.iter().any(|p| matches!(p, Permission::Filesystem(_)));
+        if !perms.is_empty() && !permitted {
+            return Err(ExecutionError {
+                connector: "filesystem".into(),
+                capability: instance.contract.id.clone(),
+                reason: "filesystem read is not covered by declared permissions".into(),
+                retryable: false,
+            });
+        }
+
         let started = std::time::Instant::now();
         let content =
             tokio::fs::read_to_string(&canonical)
                 .await
-                .map_err(|err| ExecutionError {
-                    connector: "filesystem".into(),
-                    capability: instance.contract.id.clone(),
-                    reason: format!("failed to read {}: {err}", canonical.display()),
-                    retryable: false,
+                .map_err(|err| {
+                    tracing::debug!(path = %canonical.display(), "filesystem read failed");
+                    ExecutionError {
+                        connector: "filesystem".into(),
+                        capability: instance.contract.id.clone(),
+                        reason: format!("failed to read file: {err}"),
+                        retryable: false,
+                    }
                 })?;
 
         let mut metrics = HashMap::new();

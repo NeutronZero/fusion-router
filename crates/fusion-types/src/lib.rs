@@ -437,6 +437,24 @@ impl BudgetEnvelope {
         Ok(())
     }
 
+    /// Refunds previously-recorded spend downward when a later, authoritative
+    /// usage report is lower than the optimistic estimate already committed
+    /// (e.g. char-based token estimates over-counted). Saturating so a refund
+    /// can never underflow/wrap the counter. Used to reconcile the envelope to
+    /// reality at stream finish (review finding F7).
+    pub fn reconcile_refund(&self, cost: NanoUSD, tokens: u64) {
+        self.spent_cost
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| {
+                Some(prev.saturating_sub(cost.as_nanos()))
+            })
+            .ok();
+        self.spent_tokens
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| {
+                Some(prev.saturating_sub(tokens))
+            })
+            .ok();
+    }
+
     pub fn increment_iteration(&self) -> Result<u64, BudgetExceededError> {
         let prev = self
             .current_iterations

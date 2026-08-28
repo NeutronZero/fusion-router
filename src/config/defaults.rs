@@ -29,6 +29,10 @@ pub fn default_cors_headers() -> Vec<String> {
     ]
 }
 
+pub fn default_cors_allow_credentials() -> bool {
+    false
+}
+
 pub fn default_auth_enabled() -> bool {
     true
 }

@@ -218,8 +218,12 @@ impl AppState {
             let registry = registry.clone();
             Arc::new(move |model: &str| match registry.get_pricing(model) {
                 Some(pricing) => fusion_scheduler::TokenPricing {
-                    input_nanos_per_token: pricing.input_cost_per_1k.as_nanos() / 1000,
-                    output_nanos_per_token: pricing.output_cost_per_1k.as_nanos() / 1000,
+                    // Round the per-1k nanos UP to a per-token nanos value with
+                    // `div_ceil` so oddly-priced models (e.g. sub-$0.001/1k) are
+                    // billed at a non-zero, conservative rate instead of being
+                    // truncated to 0 nanos/token and undercounted.
+                    input_nanos_per_token: pricing.input_cost_per_1k.as_nanos().div_ceil(1000),
+                    output_nanos_per_token: pricing.output_cost_per_1k.as_nanos().div_ceil(1000),
                 },
                 None => fusion_scheduler::TokenPricing::flat_fallback(),
             })

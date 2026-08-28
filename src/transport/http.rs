@@ -4,6 +4,8 @@ use crate::transport::{
 };
 use async_trait::async_trait;
 use futures::StreamExt;
+use hyper::client::connect::dns::Name;
+use reqwest::dns::{Resolve, Resolving};
 use reqwest::Client;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -33,10 +35,7 @@ impl HttpTransport {
     /// (timeout-less) client, so a misconfigured TLS/proxy setup surfaces at
     /// startup rather than producing unbounded requests at runtime.
     pub fn new(timeout: Duration) -> Result<Self, TransportError> {
-        let client = Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| TransportError::Network(format!("failed to build HTTP client: {e}")))?;
+        let client = build_client(timeout)?;
         Ok(Self {
             client,
             backoff_base_ms: DEFAULT_BACKOFF_BASE_MS,
@@ -51,10 +50,7 @@ impl HttpTransport {
         max_ms: u64,
         max_retries: u32,
     ) -> Result<Self, TransportError> {
-        let client = Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| TransportError::Network(format!("failed to build HTTP client: {e}")))?;
+        let client = build_client(timeout)?;
         Ok(Self {
             client,
             backoff_base_ms: base_ms,
@@ -64,6 +60,7 @@ impl HttpTransport {
     }
 
     async fn send_once(&self, req: &TransportRequest) -> Result<TransportResponse, TransportError> {
+        validate_url_host(&req.url)?;
         let mut request = match req.method.as_str() {
             "GET" => self.client.get(&req.url),
             _ => self.client.post(&req.url),
@@ -94,6 +91,136 @@ impl HttpTransport {
             .map_err(|e| TransportError::Serialization(e.to_string()))?;
 
         Ok(TransportResponse { status, body })
+    }
+}
+
+/// Builds a hardened HTTP client: bounded timeout, redirects disabled (so a
+/// provider `base_url` can never be pivoted via a redirect to an internal
+/// target, and `Authorization` is never forwarded across an origin change),
+/// and a dial-time SSRF-validating DNS resolver that refuses to contact
+/// loopback/private/link-local addresses. Fail-closed: build failures
+/// propagate instead of falling back to a default (redirect-following) client.
+fn build_client(timeout: Duration) -> Result<Client, TransportError> {
+    Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(Arc::new(ValidatingDnsResolver))
+        .build()
+        .map_err(|e| TransportError::Network(format!("failed to build HTTP client: {e}")))
+}
+
+/// True for addresses the transport must never contact: loopback, link-local,
+/// private/ULA ranges, unspecified, CGNAT, broadcast, the whole "this
+/// network" block, IPv4-compatible IPv6, and NAT64 (SSRF defense). Mirrors the
+/// hardened `http_request` tool.
+fn is_blocked_ip(ip: &std::net::IpAddr) -> bool {
+    let ip = match ip {
+        std::net::IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(std::net::IpAddr::V4)
+            .unwrap_or(*ip),
+        other => *other,
+    };
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_private()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || o[0] == 0
+                || (o[0] == 100 && (o[1] & 0xC0) == 0x40)
+        }
+        std::net::IpAddr::V6(v6) => {
+            let s = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (s[0] & 0xffc0) == 0xfe80
+                || (s[0] & 0xfe00) == 0xfc00
+                || (s[0] == 0x0064 && s[1] == 0xff9b && s[2..6].iter().all(|&seg| seg == 0))
+                || (s[..6].iter().all(|&seg| seg == 0) && (s[6] != 0 || s[7] != 0))
+        }
+    }
+}
+
+/// Eager accept/reject check for the URL host. IP literals are range-checked
+/// here (reqwest dials literals directly, bypassing the dial-time resolver),
+/// while hostnames are validated at dial time by [`ValidatingDnsResolver`].
+fn validate_url_host(url: &str) -> Result<(), TransportError> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|e| TransportError::Network(format!("invalid URL '{url}': {e}")))?;
+    match parsed.host() {
+        Some(url::Host::Ipv4(v4)) => {
+            let ip = std::net::IpAddr::V4(v4);
+            if is_blocked_ip(&ip) {
+                return Err(TransportError::Network(format!(
+                    "URL host '{v4}' is a blocked (loopback/private/link-local) address"
+                )));
+            }
+        }
+        Some(url::Host::Ipv6(v6)) => {
+            let ip = std::net::IpAddr::V6(v6);
+            if is_blocked_ip(&ip) {
+                return Err(TransportError::Network(format!(
+                    "URL host '{v6}' is a blocked (loopback/private/link-local) address"
+                )));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Dial-time DNS policy shared by every request the hardened client makes:
+/// whatever addresses this resolver returns are exactly what reqwest dials, so
+/// validating here pins "checked address == dialed address" at the socket
+/// layer. IP literals never reach a resolver (range-checked eagerly above).
+struct ValidatingDnsResolver;
+
+impl Resolve for ValidatingDnsResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let lookup_host = host.clone();
+            let addrs: Vec<std::net::SocketAddr> =
+                tokio::task::spawn_blocking(move || -> Result<Vec<_>, String> {
+                    use std::net::ToSocketAddrs;
+                    let resolved: Vec<std::net::SocketAddr> = (lookup_host.as_str(), 80)
+                        .to_socket_addrs()
+                        .map_err(|e| {
+                            format!("DNS resolution failed for '{}': {}", lookup_host, e)
+                        })?
+                        .collect();
+                    Ok(resolved)
+                })
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    Box::new(std::io::Error::other(format!(
+                        "dns join error for '{host}': {e}"
+                    )))
+                })?
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    Box::new(std::io::Error::other(format!(
+                        "DNS resolution failed for '{}': {}",
+                        host, e
+                    )))
+                })?;
+
+            for addr in &addrs {
+                if is_blocked_ip(&addr.ip()) {
+                    return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!(
+                            "URL host '{}' resolves to blocked address {}",
+                            host,
+                            addr.ip()
+                        ),
+                    )) as Box<dyn std::error::Error + Send + Sync>);
+                }
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
     }
 }
 
@@ -191,6 +318,7 @@ impl Transport for HttpTransport {
         futures::stream::BoxStream<'static, Result<TransportEvent, TransportError>>,
         TransportError,
     > {
+        validate_url_host(&req.url)?;
         let mut request = match req.method.as_str() {
             "GET" => self.client.get(&req.url),
             _ => self.client.post(&req.url),

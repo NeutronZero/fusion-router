@@ -35,9 +35,16 @@ impl Default for StreamMeter {
 
 impl StreamMeter {
     pub fn record_chunk(&mut self, chunk: &ChatStreamChunk, pricing: Option<&ModelPricing>) {
+        if self.finalized {
+            // A final `usage` report has already been observed: it is the
+            // authoritative absolute total, so any further content chunks must
+            // not inflate the counters/cost beyond that report.
+            return;
+        }
         if let Some(ref usage) = chunk.usage {
             self.prompt_tokens = usage.prompt_tokens as u64;
             self.completion_tokens = usage.completion_tokens as u64;
+            self.finalized = true;
         } else if let Some(ref content) = chunk.content {
             self.completion_tokens += estimate_tokens(content);
         }
@@ -111,8 +118,7 @@ pub struct StreamMeterReport {
 }
 
 fn estimate_tokens(s: &str) -> u64 {
-    let char_count = s.chars().count() as u64;
-    char_count.div_ceil(4)
+    (s.len() as u64).div_ceil(4)
 }
 
 #[cfg(test)]

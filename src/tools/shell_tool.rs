@@ -308,6 +308,13 @@ impl ShellCommandTool {
         allow_unrestricted_args: bool,
     ) -> Self {
         sweep_stale_staging_dirs();
+        if allow_unrestricted_args {
+            tracing::warn!(
+                "ShellCommandTool constructed with allow_unrestricted_args=true; \
+                 ALL path containment (Law 10) is disabled for every command and \
+                 file-path arguments may point anywhere on the filesystem"
+            );
+        }
         Self {
             allowed_commands,
             timeout_secs,

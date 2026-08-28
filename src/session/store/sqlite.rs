@@ -98,8 +98,10 @@ impl SessionStore for SqliteSessionStore {
     async fn load_session(
         &self,
         session_id: &SessionId,
+        owner: Option<&str>,
     ) -> Result<Option<ExecutionSession>, String> {
         let sid = session_id.to_string();
+        let owner = owner.map(|s| s.to_string());
         let conn = self.conn.clone();
 
         let row = tokio::task::spawn_blocking(move || -> Result<Option<(String, String, i64, String, String)>, String> {
@@ -131,7 +133,12 @@ impl SessionStore for SqliteSessionStore {
         .map_err(|e| format!("load_session task failed: {e}"))??;
 
         match row {
-            Some((sid, wf, ts, owner, cfg_json)) => {
+            Some((sid, wf, ts, owner_db, cfg_json)) => {
+                if let Some(want) = owner {
+                    if owner_db != want {
+                        return Ok(None);
+                    }
+                }
                 let session_id = SessionId(
                     uuid::Uuid::parse_str(&sid).map_err(|e| format!("bad session_id: {}", e))?,
                 );
@@ -144,7 +151,7 @@ impl SessionStore for SqliteSessionStore {
                     session_id,
                     workflow_id,
                     created_at_ms: ts as u64,
-                    owner,
+                    owner: owner_db,
                     config,
                 }))
             }
@@ -181,12 +188,27 @@ impl SessionStore for SqliteSessionStore {
     async fn list_checkpoints(
         &self,
         session_id: &SessionId,
+        owner: Option<&str>,
     ) -> Result<Vec<SessionSnapshot>, String> {
         let sid = session_id.to_string();
+        let owner = owner.map(|s| s.to_string());
         let conn = self.conn.clone();
 
         let rows = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String, Option<String>, String, String, String, i64)>, String> {
             let conn = lock_conn_for(&conn)?;
+            if let Some(want) = owner {
+                let db_owner: Option<String> = conn
+                    .query_row(
+                        "SELECT owner FROM sessions WHERE session_id = ?1",
+                        params![sid],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                match db_owner {
+                    Some(o) if o == want => {}
+                    _ => return Err(format!("session not found: {}", sid)),
+                }
+            }
             let mut stmt = conn
                 .prepare("SELECT snapshot_id, session_id, current_node_id, state, execution_context_id, trace_id, checkpoint_timestamp_ms FROM snapshots WHERE session_id = ?1 ORDER BY checkpoint_timestamp_ms ASC")
                 .map_err(|e| format!("failed to prepare list_checkpoints: {}", e))?;
@@ -253,11 +275,29 @@ impl SessionStore for SqliteSessionStore {
         Ok(snapshots)
     }
 
-    async fn delete_session(&self, session_id: &SessionId) -> Result<(), String> {
+    async fn delete_session(
+        &self,
+        session_id: &SessionId,
+        owner: Option<&str>,
+    ) -> Result<(), String> {
         let sid = session_id.to_string();
+        let owner = owner.map(|s| s.to_string());
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let conn = lock_conn_for(&conn)?;
+            if let Some(want) = owner {
+                let db_owner: Option<String> = conn
+                    .query_row(
+                        "SELECT owner FROM sessions WHERE session_id = ?1",
+                        params![sid],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                match db_owner {
+                    Some(o) if o == want => {}
+                    _ => return Err(format!("session not found: {}", sid)),
+                }
+            }
             conn.execute("DELETE FROM snapshots WHERE session_id = ?1", params![sid])
                 .map_err(|e| format!("failed to delete snapshots: {}", e))?;
             conn.execute("DELETE FROM sessions WHERE session_id = ?1", params![sid])
@@ -315,7 +355,7 @@ mod tests {
         let sid = session.session_id.clone();
 
         store.create_session(session.clone()).await.unwrap();
-        let loaded = store.load_session(&sid).await.unwrap();
+        let loaded = store.load_session(&sid, None).await.unwrap();
         assert!(loaded.is_some());
         let loaded = loaded.unwrap();
         assert_eq!(loaded.session_id, sid);
@@ -326,7 +366,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_nonexistent_session() {
         let store = SqliteSessionStore::new(":memory:").unwrap();
-        let result = store.load_session(&SessionId::new()).await.unwrap();
+        let result = store.load_session(&SessionId::new(), None).await.unwrap();
         assert!(result.is_none());
     }
 
@@ -345,7 +385,7 @@ mod tests {
         store.save_snapshot(snap1).await.unwrap();
         store.save_snapshot(snap2).await.unwrap();
 
-        let checkpoints = store.list_checkpoints(&session.session_id).await.unwrap();
+        let checkpoints = store.list_checkpoints(&session.session_id, None).await.unwrap();
         assert_eq!(checkpoints.len(), 2);
         assert_eq!(checkpoints[0].checkpoint_timestamp_ms, 1005);
         assert_eq!(checkpoints[1].checkpoint_timestamp_ms, 1010);
@@ -361,12 +401,12 @@ mod tests {
             .await
             .unwrap();
 
-        store.delete_session(&session.session_id).await.unwrap();
+        store.delete_session(&session.session_id, None).await.unwrap();
 
-        let loaded = store.load_session(&session.session_id).await.unwrap();
+        let loaded = store.load_session(&session.session_id, None).await.unwrap();
         assert!(loaded.is_none());
 
-        let checkpoints = store.list_checkpoints(&session.session_id).await.unwrap();
+        let checkpoints = store.list_checkpoints(&session.session_id, None).await.unwrap();
         assert!(checkpoints.is_empty());
     }
 
@@ -386,9 +426,9 @@ mod tests {
                     snap.checkpoint_timestamp_ms = 1000 + i;
                     store.save_snapshot(snap).await.unwrap();
                 }
-                let checkpoints = store.list_checkpoints(&session.session_id).await.unwrap();
+                let checkpoints = store.list_checkpoints(&session.session_id, None).await.unwrap();
                 assert_eq!(checkpoints.len(), 5);
-                store.delete_session(&session.session_id).await.unwrap();
+                store.delete_session(&session.session_id, None).await.unwrap();
             }));
         }
         for handle in handles {

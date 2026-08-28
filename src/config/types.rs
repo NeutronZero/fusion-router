@@ -85,6 +85,8 @@ pub struct CorsConfig {
     pub allowed_methods: Vec<String>,
     #[serde(default = "default_cors_headers")]
     pub allowed_headers: Vec<String>,
+    #[serde(default = "default_cors_allow_credentials")]
+    pub allow_credentials: bool,
 }
 
 impl Default for CorsConfig {
@@ -93,6 +95,7 @@ impl Default for CorsConfig {
             allowed_origins: default_cors_origins(),
             allowed_methods: default_cors_methods(),
             allowed_headers: default_cors_headers(),
+            allow_credentials: default_cors_allow_credentials(),
         }
     }
 }

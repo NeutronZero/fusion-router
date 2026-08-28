@@ -30,10 +30,12 @@ impl NanoUSD {
             return Err(format!("USD amount overflows NanoUSD: {usd}"));
         }
         let rounded = nanos.round();
-        // Reject values whose float representation cannot plausibly carry
-        // 9 significant decimals (e.g. 1e30 dollars) — they would silently
-        // round to a coarse multiple of nanos.
-        if (rounded - nanos).abs() > 1e-3 {
+        // Accept large valid budgets (e.g. >$10M) while still rejecting floats
+        // that cannot carry nano-scale precision relative to their magnitude.
+        // A relative tolerance (not the old absolute 1e-3 nanos gate) avoids
+        // rejecting legitimate budgets whose f64 representation has tiny
+        // rounding error at scale.
+        if nanos > 0.0 && (rounded - nanos).abs() > nanos * 1e-6 {
             return Err(format!("USD amount exceeds nano precision: {usd}"));
         }
         Ok(Self(rounded as u64))

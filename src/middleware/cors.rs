@@ -6,15 +6,23 @@ pub fn cors_layer_from_config(config: &CorsConfig) -> CorsLayer {
     let cors = CorsLayer::new();
 
     let has_wildcard = config.allowed_origins.iter().any(|o| o == "*");
-    let cors = if has_wildcard {
+
+    let cors = if has_wildcard && !config.allow_credentials {
         cors.allow_origin(AllowOrigin::any())
     } else {
         let origins: Vec<HeaderValue> = config
             .allowed_origins
             .iter()
+            .filter(|o| *o != "*")
             .filter_map(|o| o.parse::<HeaderValue>().ok())
             .collect();
         cors.allow_origin(AllowOrigin::list(origins))
+    };
+
+    let cors = if config.allow_credentials {
+        cors.allow_credentials(true)
+    } else {
+        cors
     };
 
     let cors = if config.allowed_methods.is_empty() {
@@ -58,6 +66,7 @@ mod tests {
             allowed_origins: vec![],
             allowed_methods: vec![],
             allowed_headers: vec![],
+            allow_credentials: false,
         };
         let layer = cors_layer_from_config(&config);
         let _ = layer;
@@ -69,6 +78,7 @@ mod tests {
             allowed_origins: vec!["https://example.com".into()],
             allowed_methods: vec!["GET".into()],
             allowed_headers: vec!["x-custom".into()],
+            allow_credentials: false,
         };
         let layer = cors_layer_from_config(&config);
         let _ = layer;

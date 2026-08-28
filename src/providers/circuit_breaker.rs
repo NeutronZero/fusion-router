@@ -1,5 +1,5 @@
 use parking_lot::RwLock;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -17,6 +17,7 @@ pub struct CircuitBreaker {
     failure_count: AtomicU32,
     success_count: AtomicU32,
     last_failure_time: RwLock<Option<Instant>>,
+    probe_in_flight: AtomicBool,
 }
 
 impl CircuitBreaker {
@@ -29,6 +30,7 @@ impl CircuitBreaker {
             failure_count: AtomicU32::new(0),
             success_count: AtomicU32::new(0),
             last_failure_time: RwLock::new(None),
+            probe_in_flight: AtomicBool::new(false),
         }
     }
 
@@ -42,6 +44,7 @@ impl CircuitBreaker {
                     if last_failure.elapsed() >= cooldown {
                         *self.state.write() = CircuitState::HalfOpen;
                         self.success_count.store(0, Ordering::Relaxed);
+                        self.probe_in_flight.store(true, Ordering::Release);
                         true
                     } else {
                         false
@@ -50,7 +53,10 @@ impl CircuitBreaker {
                     false
                 }
             }
-            CircuitState::HalfOpen => true,
+            CircuitState::HalfOpen => self
+                .probe_in_flight
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok(),
         }
     }
 
@@ -63,6 +69,7 @@ impl CircuitBreaker {
                     *self.state.write() = CircuitState::Closed;
                     self.failure_count.store(0, Ordering::Relaxed);
                 }
+                self.probe_in_flight.store(false, Ordering::Release);
             }
             CircuitState::Closed => {
                 self.failure_count.store(0, Ordering::Relaxed);
@@ -77,6 +84,7 @@ impl CircuitBreaker {
             CircuitState::HalfOpen => {
                 *self.state.write() = CircuitState::Open;
                 *self.last_failure_time.write() = Some(Instant::now());
+                self.probe_in_flight.store(false, Ordering::Release);
             }
             CircuitState::Closed => {
                 let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;

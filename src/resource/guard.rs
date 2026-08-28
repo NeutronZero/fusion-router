@@ -87,11 +87,23 @@ impl Drop for ResourceGuard {
                     reserved_tokens = self.graph.metadata.estimated_tokens,
                     "Synchronous release of reserved quota failed on guard drop"
                 ),
-                Err(_) => tracing::error!(
-                    request_id = %request_id,
-                    reserved_tokens = self.graph.metadata.estimated_tokens,
-                    "Synchronous release of reserved quota panicked on guard drop"
-                ),
+                Err(_) => {
+                    // `release` panicked: the reserved quota would otherwise
+                    // leak forever. Best-effort force-reclaim by re-attempting
+                    // the release under a fresh guard; for the canonical
+                    // `DefaultResourceManager` (saturating subtract) this
+                    // reclaims the reserved estimate and saturates safely.
+                    let rm = resource_manager.clone();
+                    let g = graph.clone();
+                    let _ = catch_unwind(AssertUnwindSafe(|| {
+                        futures::executor::block_on(rm.release(&g))
+                    }));
+                    tracing::error!(
+                        request_id = %request_id,
+                        reserved_tokens = self.graph.metadata.estimated_tokens,
+                        "Synchronous release panicked; attempted best-effort quota reclaim"
+                    );
+                }
             }
         }
     }

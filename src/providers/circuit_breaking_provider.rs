@@ -3,11 +3,12 @@ use crate::providers::ChatProvider;
 use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatStreamChunk};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
+use futures::StreamExt;
 use std::sync::Arc;
 
 pub struct CircuitBreakingProvider {
     inner: Arc<dyn ChatProvider + Send + Sync>,
-    breaker: CircuitBreaker,
+    breaker: Arc<CircuitBreaker>,
     name: String,
 }
 
@@ -21,13 +22,17 @@ impl CircuitBreakingProvider {
     ) -> Self {
         Self {
             inner,
-            breaker: CircuitBreaker::new(failure_threshold, success_threshold, cooldown_secs),
+            breaker: Arc::new(CircuitBreaker::new(
+                failure_threshold,
+                success_threshold,
+                cooldown_secs,
+            )),
             name,
         }
     }
 
     pub fn breaker(&self) -> &CircuitBreaker {
-        &self.breaker
+        &*self.breaker
     }
 }
 
@@ -71,8 +76,23 @@ impl ChatProvider for CircuitBreakingProvider {
         }
         match self.inner.chat_stream(request).await {
             Ok(stream) => {
-                self.breaker.record_success();
-                Ok(stream)
+                let breaker = self.breaker.clone();
+                let mut saw_success = false;
+                let wrapped = stream.map(move |result| {
+                    match &result {
+                        Ok(_) => {
+                            if !saw_success {
+                                saw_success = true;
+                                breaker.record_success();
+                            }
+                        }
+                        Err(_) => {
+                            breaker.record_failure();
+                        }
+                    }
+                    result
+                });
+                Ok(Box::pin(wrapped))
             }
             Err(e) => {
                 self.breaker.record_failure();

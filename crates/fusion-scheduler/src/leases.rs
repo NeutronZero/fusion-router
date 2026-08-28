@@ -8,6 +8,9 @@ use std::sync::Arc;
 use fusion_core::PlatformError;
 use parking_lot::RwLock;
 
+const DEFAULT_MAX_RENEWALS: u32 = 100;
+const MAX_LEASE_ABSOLUTE_LIFETIME_MS: u64 = 86_400_000;
+
 #[derive(Debug, Clone)]
 pub struct ExecutionLease {
     pub lease_key: String,
@@ -18,6 +21,10 @@ pub struct ExecutionLease {
     pub granted_at_ms: u64,
     pub ttl_ms: u64,
     pub is_revoked: bool,
+    pub owner: String,
+    pub created_at_ms: u64,
+    pub renewal_count: u32,
+    pub max_renewals: u32,
 }
 
 impl ExecutionLease {
@@ -59,8 +66,24 @@ impl ExecutionLeaseManager {
 
         let mut map = self.leases.write();
         // Opportunistic pruning BEFORE exclusivity check (fix H1 TOCTOU:
-        // expired leases must not block failover until next grant).
-        map.retain(|_, lease| !lease.is_expired(now_ms));
+        // expired leases must not block failover until next grant). Prune the
+        // corresponding (exec,node) epoch so the epochs map cannot grow
+        // without bound (review M10).
+        let mut pruned_epochs: Vec<(String, String)> = Vec::new();
+        map.retain(|_, lease| {
+            if lease.is_expired(now_ms) {
+                pruned_epochs.push((lease.execution_id.clone(), lease.node_id.clone()));
+                false
+            } else {
+                true
+            }
+        });
+        if !pruned_epochs.is_empty() {
+            let mut epochs_map = self.epochs.write();
+            for key in pruned_epochs {
+                epochs_map.remove(&key);
+            }
+        }
 
         // Enforce Invariant 12: Single-Worker Lease Exclusivity on active leases
         for existing in map.values() {
@@ -95,21 +118,54 @@ impl ExecutionLeaseManager {
             granted_at_ms: now_ms,
             ttl_ms,
             is_revoked: false,
+            owner: worker_id.to_string(),
+            created_at_ms: now_ms,
+            renewal_count: 0,
+            max_renewals: DEFAULT_MAX_RENEWALS,
         };
 
         map.insert(lease.lease_key.clone(), lease.clone());
         Ok(lease)
     }
 
-    pub fn renew_lease(&self, lease_key: &str) -> bool {
-        let mut map = self.leases.write();
-        let now_ms = std::time::SystemTime::now()
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis() as u64;
+            .as_millis() as u64
+    }
 
+    pub fn renew_lease(&self, lease_key: &str) -> bool {
+        let owner = {
+            let map = self.leases.read();
+            match map.get(lease_key) {
+                Some(lease) => lease.owner.clone(),
+                None => return false,
+            }
+        };
+        self.renew_lease_by(lease_key, &owner)
+    }
+
+    /// Owner-checked renewal. Rejects the renewal when `owner` does not match
+    /// the lease owner (prevents cross-tenant lease extension) and enforces the
+    /// renewal-count and absolute-lifetime caps so a lease cannot be extended
+    /// forever (review M10).
+    #[allow(dead_code)]
+    pub fn renew_lease_by(&self, lease_key: &str, owner: &str) -> bool {
+        let mut map = self.leases.write();
+        let now_ms = Self::now_ms();
         if let Some(lease) = map.get_mut(lease_key) {
+            if lease.owner != owner {
+                return false;
+            }
             if !lease.is_expired(now_ms) {
+                if lease.renewal_count >= lease.max_renewals {
+                    return false;
+                }
+                if now_ms.saturating_sub(lease.created_at_ms) >= MAX_LEASE_ABSOLUTE_LIFETIME_MS {
+                    return false;
+                }
+                lease.renewal_count += 1;
                 lease.epoch += 1;
                 lease.granted_at_ms = now_ms;
                 let epoch_key = (lease.execution_id.clone(), lease.node_id.clone());

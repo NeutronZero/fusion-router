@@ -35,6 +35,38 @@ pub fn check_http_access(permissions: &[Permission], url: &str) -> Result<(), Ga
     )))
 }
 
+pub fn check_environment(
+    permissions: &[Permission],
+    var_name: &str,
+) -> Result<(), GateError> {
+    if var_name.is_empty() || var_name == "*" {
+        return Err(GateError::PermissionDenied(
+            "environment variable name must not be empty or '*'".into(),
+        ));
+    }
+    for perm in permissions {
+        match perm {
+            Permission::Environment(pattern) => {
+                if pattern == "*" {
+                    continue;
+                }
+                if let Some(prefix) = pattern.strip_suffix('*') {
+                    if var_name.starts_with(prefix) {
+                        return Ok(());
+                    }
+                } else if pattern == var_name {
+                    return Ok(());
+                }
+            }
+            _ => continue,
+        }
+    }
+    Err(GateError::PermissionDenied(format!(
+        "environment variable '{}' is not in the declared permission set",
+        var_name
+    )))
+}
+
 fn glob_match(pattern: &str, candidate: &str) -> bool {
     if pattern == candidate {
         return true;
@@ -118,6 +150,39 @@ mod tests {
     fn test_secret_glob_prefix_denied() {
         let perms = vec![Permission::Secrets("db_*".into())];
         let result = check_secret_access(&perms, "api_other_key");
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_environment_exact_match_allowed() {
+        let perms = vec![Permission::Environment("HOME".into())];
+        assert!(check_environment(&perms, "HOME").is_ok());
+    }
+
+    #[test]
+    fn test_environment_glob_match_allowed() {
+        let perms = vec![Permission::Environment("DB_*".into())];
+        assert!(check_environment(&perms, "DB_PASSWORD").is_ok());
+    }
+
+    #[test]
+    fn test_environment_no_match_denied() {
+        let perms = vec![Permission::Environment("HOME".into())];
+        let result = check_environment(&perms, "PATH");
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_environment_wildcard_denied() {
+        let perms = vec![Permission::Environment("*".into())];
+        let result = check_environment(&perms, "HOME");
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_environment_network_only_denied() {
+        let perms = vec![Permission::Network];
+        let result = check_environment(&perms, "HOME");
         assert!(matches!(result, Err(GateError::PermissionDenied(_))));
     }
 }
