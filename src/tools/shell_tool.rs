@@ -226,7 +226,7 @@ impl Drop for StagingSession {
 /// failing closed (the caller refuses on any mismatch or unknown).
 #[allow(unused_variables)]
 fn same_file_identity(
-    handle_id: &(u32, u64),
+    handle_id: &(u64, u64),
     path_meta: &std::fs::Metadata,
     display: &std::path::Path,
 ) -> Result<bool, String> {

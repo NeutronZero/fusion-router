@@ -102,11 +102,9 @@ const VOLATILE_FIELDS: &[&str] = &[
 fn normalize_event(event: &ExecutionEvent) -> Value {
     let mut value = serde_json::to_value(event).unwrap_or(Value::Null);
     // The payload enum serializes as {"type": ..., "data": {...}}.
-    if let Some(data) = value.get_mut("data") {
-        if let Value::Object(map) = data {
-            for key in VOLATILE_FIELDS {
-                map.remove(*key);
-            }
+    if let Some(Value::Object(map)) = value.get_mut("data") {
+        for key in VOLATILE_FIELDS {
+            map.remove(*key);
         }
     }
     value
@@ -175,20 +173,15 @@ async fn drain_events(
     mut rx: tokio::sync::broadcast::Receiver<crate::events::ExecutionEventEnvelope>,
 ) -> Vec<ExecutionEvent> {
     let mut events = Vec::new();
-    loop {
-        match tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv()).await {
-            Ok(Ok(envelope)) => {
-                let terminal = matches!(
-                    envelope.payload,
-                    ExecutionEvent::WorkflowCompleted { .. }
-                        | ExecutionEvent::WorkflowFailed { .. }
-                );
-                events.push(envelope.payload);
-                if terminal {
-                    break;
-                }
-            }
-            _ => break,
+    while let Ok(Ok(envelope)) = tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv()).await {
+        let terminal = matches!(
+            envelope.payload,
+            ExecutionEvent::WorkflowCompleted { .. }
+                | ExecutionEvent::WorkflowFailed { .. }
+        );
+        events.push(envelope.payload);
+        if terminal {
+            break;
         }
     }
     events
