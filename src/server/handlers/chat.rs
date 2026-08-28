@@ -394,7 +394,7 @@ pub(crate) async fn process_request(
         .with_label_values(&[state.provider.name()])
         .observe((result.total_latency_ms as f64) / 1000.0);
     if result.total_tokens > 0 {
-        metrics.tokens_total.inc_by(result.total_tokens as u64);
+        metrics.tokens_total.inc_by(result.total_tokens);
     }
     if !result.success {
         metrics.errors_total.inc();

@@ -180,7 +180,7 @@ pub(crate) fn check_not_hardlinked(file: &std::fs::File, display: &Path) -> Resu
 /// fails. Used to strengthen validate-vs-open TOCTOU comparisons on Windows,
 /// where timestamp+size identity is collidable (review M9).
 #[allow(unused_variables)]
-pub fn handle_file_id(file: &std::fs::File) -> Option<(u32, u64)> {
+pub fn handle_file_id(file: &std::fs::File) -> Option<(u64, u64)> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -210,7 +210,7 @@ pub fn handle_file_id(file: &std::fs::File) -> Option<(u32, u64)> {
             return None;
         }
         Some((
-            info.volume_serial_number,
+            info.volume_serial_number as u64,
             ((info.file_index_high as u64) << 32) | info.file_index_low as u64,
         ))
     }

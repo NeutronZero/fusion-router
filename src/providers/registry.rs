@@ -270,12 +270,11 @@ impl ChatProvider for ProviderRegistry {
                     let target_for_errors = target.clone();
                     let mut seen_error = false;
                     let monitored = stream.map(move |item| {
-                        if !seen_error {
-                            if item.is_err() {
+                        if !seen_error
+                            && item.is_err() {
                                 seen_error = true;
                                 target_for_errors.record_failure();
                             }
-                        }
                         item
                     });
                     target.record_success();

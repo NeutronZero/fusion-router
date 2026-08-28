@@ -1027,6 +1027,7 @@ fn task_to_intent(task: &TaskDef) -> Intent {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_condition_b(
     compiler: &DefaultCompiler,
     scheduler: &DefaultScheduler,
@@ -1190,6 +1191,7 @@ async fn run_condition_b(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_condition_c(
     compiler: &DefaultCompiler,
     scheduler: &DefaultScheduler,
