@@ -1,5 +1,7 @@
+use crate::events::payload::ExecutionEvent;
 use crate::runtime::host_services::CapabilityHostServices;
 use std::sync::Arc;
+use tracing::Level;
 use wasmtime::{Caller, Extern, Linker};
 
 pub trait HostAccess {
@@ -7,13 +9,29 @@ pub trait HostAccess {
     fn runtime_handle(&self) -> tokio::runtime::Handle;
 }
 
-impl HostAccess for Arc<dyn CapabilityHostServices> {
+/// A safe [`HostAccess`] implementation that holds both the host services and
+/// an explicitly captured tokio runtime handle. Unlike the previous
+/// `Arc<dyn CapabilityHostServices>` impl (which called
+/// `Handle::try_current().expect(...)` and panicked outside a runtime), this
+/// never depends on a current-thread runtime context and is therefore safe to
+/// use from plain `#[test]`s or any blocking context.
+pub struct WasmHostContext {
+    host: Arc<dyn CapabilityHostServices>,
+    runtime: tokio::runtime::Handle,
+}
+
+impl WasmHostContext {
+    pub fn new(host: Arc<dyn CapabilityHostServices>, runtime: tokio::runtime::Handle) -> Self {
+        Self { host, runtime }
+    }
+}
+
+impl HostAccess for WasmHostContext {
     fn host_services(&self) -> &Arc<dyn CapabilityHostServices> {
-        self
+        &self.host
     }
     fn runtime_handle(&self) -> tokio::runtime::Handle {
-        tokio::runtime::Handle::try_current()
-            .expect("HostAccess host requires a tokio runtime to be available")
+        self.runtime.clone()
     }
 }
 
@@ -37,19 +55,58 @@ pub fn configure_linker<T: HostAccess + 'static>(
     linker.func_wrap(
         "host",
         "emit_event",
-        |_caller: Caller<'_, T>, _event_ptr: i32, _event_len: i32| -> i32 { 0 },
+        |mut caller: Caller<'_, T>, event_ptr: i32, event_len: i32| -> i32 {
+            let bytes = match read_memory(&mut caller, event_ptr, event_len) {
+                Some(b) => b,
+                None => return -1,
+            };
+            let event: ExecutionEvent = match serde_json::from_slice(&bytes) {
+                Ok(e) => e,
+                Err(_) => return -1,
+            };
+            let host = caller.data().host_services().clone();
+            let result = caller.data().runtime_handle().block_on(host.emit_event(event));
+            match result {
+                Ok(()) => 0,
+                Err(_) => -1,
+            }
+        },
     )?;
 
     linker.func_wrap(
         "host",
         "log",
-        |_caller: Caller<'_, T>, _level: i32, _msg_ptr: i32, _msg_len: i32| {},
+        |mut caller: Caller<'_, T>, level: i32, msg_ptr: i32, msg_len: i32| {
+            let bytes = match read_memory(&mut caller, msg_ptr, msg_len) {
+                Some(b) => b,
+                None => return,
+            };
+            let message = String::from_utf8_lossy(&bytes).into_owned();
+            let level = match level {
+                0 => Level::ERROR,
+                1 => Level::WARN,
+                2 => Level::INFO,
+                3 => Level::DEBUG,
+                4 => Level::TRACE,
+                _ => Level::INFO,
+            };
+            let host = caller.data().host_services().clone();
+            caller.data().runtime_handle().block_on(host.log(level, &message));
+        },
     )?;
 
     linker.func_wrap(
         "host",
         "record_metric",
-        |_caller: Caller<'_, T>, _name_ptr: i32, _name_len: i32, _value: f64| {},
+        |mut caller: Caller<'_, T>, name_ptr: i32, name_len: i32, value: f64| {
+            let bytes = match read_memory(&mut caller, name_ptr, name_len) {
+                Some(b) => b,
+                None => return,
+            };
+            let name = String::from_utf8_lossy(&bytes).into_owned();
+            let host = caller.data().host_services().clone();
+            host.record_metric(&name, value);
+        },
     )?;
 
     linker.func_wrap(
@@ -157,7 +214,6 @@ mod tests {
             Arc::new(crate::runtime::wasmtime_host::WasmtimeCapabilityHost::new(
                 Arc::new(crate::capability::InMemoryCapabilityRegistry::new()),
                 Arc::new(BroadcastEventBus::new(16)),
-                reqwest::Client::new(),
                 FusionMetrics::instance(),
                 uuid::Uuid::new_v4(),
                 uuid::Uuid::new_v4(),
@@ -202,7 +258,6 @@ mod tests {
         let base = crate::runtime::wasmtime_host::WasmtimeCapabilityHost::new(
             Arc::new(crate::capability::InMemoryCapabilityRegistry::new()),
             Arc::new(BroadcastEventBus::new(16)),
-            reqwest::Client::new(),
             FusionMetrics::instance(),
             uuid::Uuid::new_v4(),
             uuid::Uuid::new_v4(),

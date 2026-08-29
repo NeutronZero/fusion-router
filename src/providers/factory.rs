@@ -6,26 +6,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Only these shapes of env-var names may be referenced via `{env:VAR}`
-/// interpolation in `api_key`. This prevents the interpolation primitive from
-/// reading arbitrary environment contents (an exfil vector if provider config
-/// ever becomes attacker-influenced). Fail-closed: anything outside the
-/// allowlist is rejected.
-fn is_allowed_interpolation_var(var: &str) -> bool {
-    let var = var.trim();
-    if var.is_empty() {
-        return false;
-    }
-    let suffix_ok = var.ends_with("_KEY")
-        || var.ends_with("_TOKEN")
-        || var.ends_with("_SECRET")
-        || var.ends_with("_PASSWORD");
-    suffix_ok
-        && var
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-}
-
 use super::circuit_breaker::CircuitBreaker;
 use super::circuit_breaking_provider::CircuitBreakingProvider;
 use super::generic_openai_model::GenericOpenAIModel;
@@ -54,12 +34,14 @@ pub fn resolve_api_key(
             .strip_prefix("{env:")
             .and_then(|s| s.strip_suffix('}'))
         {
-            if !is_allowed_interpolation_var(var) {
-                anyhow::bail!(
-                    "provider '{}': env interpolation of '{var}' is not allowed; only key/token/secret env var names may be interpolated",
+            // Single live gate for env-var access. Fail-closed: a denied var
+            // aborts resolution instead of being read.
+            crate::runtime::policy::check_environment(var).map_err(|e| {
+                anyhow::anyhow!(
+                    "provider '{}': env interpolation of '{var}' denied: {e}",
                     provider_name
-                );
-            }
+                )
+            })?;
             if let Ok(val) = std::env::var(var) {
                 if !val.trim().is_empty() {
                     return Ok(val);
@@ -72,6 +54,14 @@ pub fn resolve_api_key(
 
     // 2. api_key_env
     if let Some(var) = &cfg.api_key_env {
+        // Same single gate: reading an infra secret here is a secret-exposure
+        // bypass, so it must be denied rather than silently used.
+        crate::runtime::policy::check_environment(var).map_err(|e| {
+            anyhow::anyhow!(
+                "provider '{}': api_key_env '{var}' denied: {e}",
+                provider_name
+            )
+        })?;
         if let Ok(val) = std::env::var(var) {
             if !val.trim().is_empty() {
                 return Ok(val);
@@ -314,14 +304,52 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_env_field() {
-        std::env::set_var("TEST_RESOLVE_KEY_456", "sk-from-env-field");
+        std::env::set_var("TEST_RESOLVE_ENV_KEY", "sk-from-env-field");
         let cfg = ProviderConfig {
-            api_key_env: Some("TEST_RESOLVE_KEY_456".into()),
+            api_key_env: Some("TEST_RESOLVE_ENV_KEY".into()),
             ..Default::default()
         };
         let key = resolve_api_key(&cfg, "test", false).unwrap();
         assert_eq!(key, "sk-from-env-field");
-        std::env::remove_var("TEST_RESOLVE_KEY_456");
+        std::env::remove_var("TEST_RESOLVE_ENV_KEY");
+    }
+
+    #[test]
+    fn test_resolve_api_key_env_field_denies_infra_secret() {
+        std::env::set_var("FUSION_MASTER_KEY", "top-secret-master");
+        let cfg = ProviderConfig {
+            api_key_env: Some("FUSION_MASTER_KEY".into()),
+            ..Default::default()
+        };
+        let result = resolve_api_key(&cfg, "test", false);
+        assert!(
+            result.is_err(),
+            "api_key_env must not read FUSION_MASTER_KEY"
+        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("FUSION_MASTER_KEY"));
+        std::env::remove_var("FUSION_MASTER_KEY");
+    }
+
+    #[test]
+    fn test_resolve_api_key_env_syntax_denies_infra_secret() {
+        std::env::set_var("FUSION_MASTER_KEY", "top-secret-master");
+        let cfg = ProviderConfig {
+            api_key: Some("{env:FUSION_MASTER_KEY}".into()),
+            ..Default::default()
+        };
+        let result = resolve_api_key(&cfg, "test", false);
+        assert!(
+            result.is_err(),
+            "{{env:FUSION_MASTER_KEY}} must not read FUSION_MASTER_KEY"
+        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("FUSION_MASTER_KEY"));
+        std::env::remove_var("FUSION_MASTER_KEY");
     }
 
     #[test]

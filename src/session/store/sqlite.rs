@@ -159,13 +159,32 @@ impl SessionStore for SqliteSessionStore {
         }
     }
 
-    async fn save_snapshot(&self, snapshot: SessionSnapshot) -> Result<(), String> {
+    async fn save_snapshot(
+        &self,
+        snapshot: SessionSnapshot,
+        owner: Option<&str>,
+    ) -> Result<(), String> {
         let state_str = serde_json::to_string(&snapshot.state)
             .map_err(|e| format!("failed to serialize state: {}", e))?;
 
+        let sid = snapshot.session_id.to_string();
+        let owner = owner.map(|s| s.to_string());
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let conn = lock_conn_for(&conn)?;
+            if let Some(want) = owner {
+                let db_owner: Option<String> = conn
+                    .query_row(
+                        "SELECT owner FROM sessions WHERE session_id = ?1",
+                        params![sid],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                match db_owner {
+                    Some(o) if o == want => {}
+                    _ => return Err(format!("session not found: {}", sid)),
+                }
+            }
             conn.execute(
                 "INSERT INTO snapshots (snapshot_id, session_id, current_node_id, state, execution_context_id, trace_id, checkpoint_timestamp_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
@@ -382,8 +401,8 @@ mod tests {
             ..test_snapshot(&session.session_id)
         };
 
-        store.save_snapshot(snap1).await.unwrap();
-        store.save_snapshot(snap2).await.unwrap();
+        store.save_snapshot(snap1, Some("test-user")).await.unwrap();
+        store.save_snapshot(snap2, Some("test-user")).await.unwrap();
 
         let checkpoints = store.list_checkpoints(&session.session_id, None).await.unwrap();
         assert_eq!(checkpoints.len(), 2);
@@ -397,7 +416,7 @@ mod tests {
         let session = test_session();
         store.create_session(session.clone()).await.unwrap();
         store
-            .save_snapshot(test_snapshot(&session.session_id))
+            .save_snapshot(test_snapshot(&session.session_id), Some("test-user"))
             .await
             .unwrap();
 
@@ -408,6 +427,33 @@ mod tests {
 
         let checkpoints = store.list_checkpoints(&session.session_id, None).await.unwrap();
         assert!(checkpoints.is_empty());
+    }
+
+    /// A snapshot write (save_snapshot) by a non-owner must be rejected
+    /// (fail-closed), mirroring load_session/delete_session isolation.
+    #[tokio::test]
+    async fn test_save_snapshot_rejects_mismatched_owner() {
+        let store = SqliteSessionStore::new(":memory:").unwrap();
+        let session = test_session();
+        store.create_session(session.clone()).await.unwrap();
+
+        let result = store
+            .save_snapshot(test_snapshot(&session.session_id), Some("attacker"))
+            .await;
+        assert!(result.is_err());
+
+        // No checkpoints should have been written for the victim session.
+        let checkpoints = store
+            .list_checkpoints(&session.session_id, Some("test-user"))
+            .await
+            .unwrap();
+        assert!(checkpoints.is_empty());
+
+        // A correct owner can still write.
+        store
+            .save_snapshot(test_snapshot(&session.session_id), Some("test-user"))
+            .await
+            .unwrap();
     }
 
     /// Concurrent writers + readers through the async API must all succeed:
@@ -424,7 +470,7 @@ mod tests {
                 for i in 0..5 {
                     let mut snap = test_snapshot(&session.session_id);
                     snap.checkpoint_timestamp_ms = 1000 + i;
-                    store.save_snapshot(snap).await.unwrap();
+                    store.save_snapshot(snap, Some("test-user")).await.unwrap();
                 }
                 let checkpoints = store.list_checkpoints(&session.session_id, None).await.unwrap();
                 assert_eq!(checkpoints.len(), 5);

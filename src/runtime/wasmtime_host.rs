@@ -4,6 +4,7 @@ use crate::release::gate::GateError;
 use crate::runtime::host_services::CapabilityHostServices;
 use crate::runtime::policy::{check_http_access, check_secret_access};
 use crate::telemetry::metrics::FusionMetrics;
+use crate::transport::http::build_ssrf_hardened_client;
 use async_trait::async_trait;
 use reqwest::Request;
 use std::net::ToSocketAddrs;
@@ -31,12 +32,18 @@ impl WasmtimeCapabilityHost {
     pub fn new(
         registry: Arc<dyn CapabilityRegistry>,
         event_bus: Arc<dyn EventBus>,
-        http_client: reqwest::Client,
         metrics: &'static FusionMetrics,
         execution_id: Uuid,
         workflow_id: Uuid,
         correlation_id: Option<String>,
     ) -> Self {
+        // SSRF-hardened client: redirects disabled and a dial-time validating
+        // DNS resolver that rejects loopback/private/link-local addresses at
+        // connect time, closing the DNS-rebinding TOCTOU window. Fail-closed:
+        // if the hardened client cannot be built we panic rather than run with
+        // a default (redirect-following, non-validating) client.
+        let http_client = build_ssrf_hardened_client()
+            .expect("WasmtimeCapabilityHost: failed to build SSRF-hardened HTTP client");
         Self {
             registry,
             event_bus,
@@ -55,7 +62,6 @@ impl WasmtimeCapabilityHost {
     pub fn with_caller(
         registry: Arc<dyn CapabilityRegistry>,
         event_bus: Arc<dyn EventBus>,
-        http_client: reqwest::Client,
         metrics: &'static FusionMetrics,
         execution_id: Uuid,
         workflow_id: Uuid,
@@ -64,6 +70,8 @@ impl WasmtimeCapabilityHost {
     ) -> Self {
         let perms = caller_contract.permissions.clone();
         let id = caller_contract.id.clone();
+        let http_client = build_ssrf_hardened_client()
+            .expect("WasmtimeCapabilityHost: failed to build SSRF-hardened HTTP client");
         Self {
             registry,
             event_bus,
@@ -271,7 +279,6 @@ mod tests {
         let host = WasmtimeCapabilityHost::new(
             make_registry(vec![]),
             bus,
-            reqwest::Client::new(),
             FusionMetrics::instance(),
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -292,7 +299,6 @@ mod tests {
         let host = WasmtimeCapabilityHost::new(
             make_registry(vec![Permission::Network]),
             Arc::new(BroadcastEventBus::new(16)),
-            reqwest::Client::new(),
             FusionMetrics::instance(),
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -308,7 +314,6 @@ mod tests {
         let host = WasmtimeCapabilityHost::new(
             make_registry(vec![Permission::Secrets("x".into())]),
             Arc::new(BroadcastEventBus::new(16)),
-            reqwest::Client::new(),
             FusionMetrics::instance(),
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -345,7 +350,6 @@ mod tests {
         let host = WasmtimeCapabilityHost::new(
             registry,
             Arc::new(BroadcastEventBus::new(16)),
-            reqwest::Client::new(),
             FusionMetrics::instance(),
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -364,7 +368,6 @@ mod tests {
         let host = WasmtimeCapabilityHost::new(
             make_registry(vec![Permission::Secrets("TEST_SECRET_FOO".into())]),
             Arc::new(BroadcastEventBus::new(16)),
-            reqwest::Client::new(),
             FusionMetrics::instance(),
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -382,7 +385,6 @@ mod tests {
         let host = WasmtimeCapabilityHost::new(
             make_registry(vec![Permission::Secrets("API_KEY".into())]),
             Arc::new(BroadcastEventBus::new(16)),
-            reqwest::Client::new(),
             FusionMetrics::instance(),
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -398,7 +400,6 @@ mod tests {
         let host = WasmtimeCapabilityHost::new(
             make_registry(vec![]),
             Arc::new(BroadcastEventBus::new(16)),
-            reqwest::Client::new(),
             FusionMetrics::instance(),
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -413,7 +414,6 @@ mod tests {
         let host = WasmtimeCapabilityHost::new(
             make_registry(vec![]),
             Arc::new(BroadcastEventBus::new(16)),
-            reqwest::Client::new(),
             FusionMetrics::instance(),
             Uuid::new_v4(),
             Uuid::new_v4(),

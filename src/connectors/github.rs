@@ -1,4 +1,5 @@
 use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
+use crate::transport::http::build_ssrf_hardened_client;
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
@@ -33,12 +34,14 @@ pub struct GitHubPlugin {
 
 impl Default for GitHubPlugin {
     fn default() -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
-        }
+        // SSRF-hardened client: redirects disabled and a dial-time validating
+        // DNS resolver that rejects loopback/private/link-local addresses at
+        // connect time, so a poisoned resolution of api.github.com to an
+        // internal IP is refused. Fail-closed: panic rather than silently
+        // degrade to a redirect-following, non-validating default client.
+        let client = build_ssrf_hardened_client()
+            .expect("GitHubPlugin: failed to build SSRF-hardened HTTP client");
+        Self { client }
     }
 }
 

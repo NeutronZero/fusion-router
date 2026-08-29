@@ -54,7 +54,7 @@ async fn test_replay_validation_from_checkpoint() {
     };
     store.create_session(session).await.unwrap();
 
-    let snapshot = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx)
+    let snapshot = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx, Some("replay-test"))
         .await
         .unwrap();
 

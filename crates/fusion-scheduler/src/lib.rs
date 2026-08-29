@@ -202,12 +202,6 @@ impl DefaultScheduler {
                 }
             }
 
-            if let Some(env) = envelope {
-                if env.max_iterations == 0 {
-                    break 'sched_loop;
-                }
-            }
-
             if queue.is_done(&node_states) {
                 break;
             }
@@ -399,11 +393,23 @@ impl DefaultScheduler {
                         let output_val = result.output.unwrap_or(serde_json::Value::Null);
                         outputs.insert(node_id, output_val.clone());
 
-                        let node_kind = queue
-                            .graph()
-                            .nodes
-                            .get(node_index[&node_id])
-                            .map(|n| n.kind.clone());
+                        let node_kind = match node_index.get(&node_id) {
+                            Some(idx) => queue
+                                .graph()
+                                .nodes
+                                .get(*idx)
+                                .map(|n| n.kind.clone()),
+                            None => {
+                                return Err(PlatformError::Scheduler {
+                                    code: "NODE_NOT_FOUND".into(),
+                                    message: format!(
+                                        "scheduler queue desync: node {node_id} not in graph"
+                                    ),
+                                    recovery_suggestion:
+                                        "Report this as a scheduler invariant violation".into(),
+                                });
+                            }
+                        };
 
                         match node_kind {
                             Some(ExecutionNodeKind::Conditional) => {
@@ -479,10 +485,24 @@ impl DefaultScheduler {
                                     if let Some(loop_node_id) = queue.loop_back_target(node_id) {
                                         let iter_count =
                                             loop_iterations.entry(loop_node_id).or_insert(0);
-                                        let max_iters = queue.graph().nodes
-                                            [node_index[&loop_node_id]]
-                                            .config
-                                            .get("max_iterations")
+                                        let loop_idx = match node_index.get(&loop_node_id) {
+                                            Some(i) => *i,
+                                            None => {
+                                                return Err(PlatformError::Scheduler {
+                                                    code: "NODE_NOT_FOUND".into(),
+                                                    message: format!(
+                                                        "scheduler queue desync: loop node {loop_node_id} not in graph"
+                                                    ),
+                                                    recovery_suggestion:
+                                                        "Report this as a scheduler invariant violation".into(),
+                                                });
+                                            }
+                                        };
+                                        let max_iters = queue
+                                            .graph()
+                                            .nodes
+                                            .get(loop_idx)
+                                            .and_then(|n| n.config.get("max_iterations"))
                                             .and_then(|v| v.as_u64())
                                             .unwrap_or(10)
                                             as u32;
@@ -1350,29 +1370,90 @@ mod tests {
 
     #[tokio::test]
     async fn test_budget_iteration_cap_stops_run() {
-        let node = uuid::Uuid::new_v4();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let loop_calls = Arc::new(AtomicUsize::new(0));
+
+        // The loop always wants to continue; only the budget envelope's
+        // iteration cap may stop it. The per-node `max_iterations` is set high
+        // so the envelope (and not the node cap) is the binding constraint.
+        struct AlwaysContinueExecutor(Arc<AtomicUsize>);
+        #[async_trait]
+        impl Executor for AlwaysContinueExecutor {
+            async fn execute_node(
+                &self,
+                node: &ExecutionNode,
+                _ctx: &NodeExecContext,
+            ) -> NodeExecutionResult {
+                if node.model == "loop" {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!(true)),
+                    }
+                } else {
+                    NodeExecutionResult {
+                        state: NodeState::Succeeded,
+                        usage: None,
+                        latency_ms: 0,
+                        output: Some(serde_json::json!("iterated")),
+                    }
+                }
+            }
+        }
+
+        let loop_id = uuid::Uuid::new_v4();
+        let body = uuid::Uuid::new_v4();
+        let exit = uuid::Uuid::new_v4();
+        let mut loop_node = RecordingExecutor::node_node(loop_id, ExecutionNodeKind::Loop, "loop");
+        loop_node
+            .config
+            .insert("max_iterations".into(), serde_json::json!(u64::MAX));
         let graph = RecordingExecutor::graph_of(
-            vec![RecordingExecutor::node_node(
-                node,
-                ExecutionNodeKind::LLMGenerate,
-                "n",
-            )],
-            vec![],
+            vec![
+                loop_node,
+                RecordingExecutor::node_node(body, ExecutionNodeKind::LLMGenerate, "body"),
+                RecordingExecutor::node_node(exit, ExecutionNodeKind::LLMGenerate, "exit-node"),
+            ],
+            vec![
+                ExecutionEdge {
+                    from: loop_id,
+                    to: body,
+                    condition: None,
+                },
+                ExecutionEdge {
+                    from: loop_id,
+                    to: exit,
+                    condition: Some("exit".into()),
+                },
+                ExecutionEdge {
+                    from: body,
+                    to: loop_id,
+                    condition: Some("loop".into()),
+                },
+            ],
         );
         let env = BudgetEnvelope::new(NanoUSD::from_nanos(1000), 1000, 0);
 
         let scheduler = DefaultScheduler::new();
         let outcome = scheduler
-            .run_with_budget(graph, &MockExecutor, &env)
+            .run_with_budget(graph, &AlwaysContinueExecutor(loop_calls.clone()), &env)
             .await
             .unwrap();
 
-        // Monolith parity: iteration cap breached at the first loop head,
-        // before any node runs; the graph completes unsuccessfully.
+        // The zero-iteration envelope must stop re-arming the loop after its
+        // initial pass (no infinite loop), leaving the graph incomplete. A
+        // non-loop DAG is unaffected by max_iterations == 0.
         assert!(!outcome.success);
+        assert_eq!(
+            loop_calls.load(Ordering::SeqCst),
+            1,
+            "loop must run only its initial pass under a zero-iteration envelope"
+        );
         assert!(
-            !outcome.node_states.contains_key(&node),
-            "node must never run under a zero-iteration envelope"
+            !matches!(outcome.node_states.get(&exit), Some(NodeState::Succeeded)),
+            "exit target must never activate while the envelope cap halts the loop"
         );
     }
 

@@ -21,7 +21,11 @@ pub trait SessionStore: Send + Sync {
         session_id: &SessionId,
         owner: Option<&str>,
     ) -> Result<Option<ExecutionSession>, String>;
-    async fn save_snapshot(&self, snapshot: SessionSnapshot) -> Result<(), String>;
+    async fn save_snapshot(
+        &self,
+        snapshot: SessionSnapshot,
+        owner: Option<&str>,
+    ) -> Result<(), String>;
     async fn list_checkpoints(
         &self,
         session_id: &SessionId,

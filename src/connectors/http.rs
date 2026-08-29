@@ -1,4 +1,5 @@
 use crate::scheduler::connector_resolver::{Connector, ConnectorDescriptor};
+use crate::transport::http::is_blocked_ip;
 use async_trait::async_trait;
 use fusion_plugin_api::{
     CapabilityContract, CapabilityExecutor, CapabilityId, CapabilityInstance, CapabilityPlugin,
@@ -13,34 +14,6 @@ use futures::StreamExt;
 
 /// Maximum response body size kept in `outputs.body` (bytes).
 const MAX_BODY_BYTES: usize = 64 * 1024;
-
-fn is_blocked_ip(ip: &IpAddr) -> bool {
-    let ip = match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(*ip),
-        other => *other,
-    };
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_private()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || o[0] == 0
-                || (o[0] == 100 && (o[1] & 0xC0) == 0x40)
-        }
-        IpAddr::V6(v6) => {
-            let s = v6.segments();
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || (s[0] & 0xffc0) == 0xfe80
-                || (s[0] & 0xfe00) == 0xfc00
-                || (s[0] == 0x0064 && s[1] == 0xff9b && s[2..6].iter().all(|&seg| seg == 0))
-                || (s[..6].iter().all(|&seg| seg == 0) && (s[6] != 0 || s[7] != 0))
-        }
-    }
-}
 
 async fn validate_url_for_ssrf(url_str: &str) -> Result<(), String> {
     let url = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
@@ -114,12 +87,15 @@ pub struct HttpPlugin {
 
 impl Default for HttpPlugin {
     fn default() -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
-        }
+        // SSRF-hardened client: redirects disabled (no pivot to an internal
+        // target) and a dial-time validating DNS resolver that rejects
+        // loopback/private/link-local addresses at connect time, closing the
+        // DNS-rebinding TOCTOU window. Fail-closed: if the hardened client
+        // cannot be built we panic rather than silently fall back to a
+        // redirect-following, non-validating default client.
+        let client = crate::transport::http::build_ssrf_hardened_client()
+            .expect("HttpPlugin: failed to build SSRF-hardened HTTP client");
+        Self { client }
     }
 }
 
@@ -171,8 +147,11 @@ impl CapabilityExecutor for HttpPlugin {
                 retryable: false,
             })?;
 
-        // SSRF protection: reject loopback, private, and link-local addresses
-        #[cfg(not(test))]
+        // SSRF protection: reject loopback, private, and link-local addresses.
+        // This is the URL-layer gate (eager, precise errors); the hardened
+        // client's dial-time resolver independently re-validates the address
+        // it actually dials, so DNS changes between this check and connect
+        // cannot pivot the request to an internal target.
         validate_url_for_ssrf(url).await.map_err(|msg| ExecutionError {
             connector: "http".into(),
             capability: instance.contract.id.clone(),
@@ -281,8 +260,6 @@ impl Connector for HttpConnector {
 mod tests {
     use super::*;
     use fusion_plugin_api::CapabilityContract;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
 
     fn make_instance() -> CapabilityInstance {
         CapabilityInstance {
@@ -304,26 +281,6 @@ mod tests {
         }
     }
 
-    fn spawn_echo_server() -> (String, std::thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let handle = std::thread::spawn(move || {
-            for stream in listener.incoming().take(1) {
-                let mut stream = stream.unwrap();
-                let mut buf = [0u8; 4096];
-                let _ = stream.read(&mut buf);
-                let body = b"real response from test server";
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.write_all(body);
-            }
-        });
-        (format!("http://{addr}/probe"), handle)
-    }
-
     #[test]
     fn test_http_connector_descriptor() {
         let connector = HttpConnector::new();
@@ -333,32 +290,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_makes_real_request() {
-        let (url, server) = spawn_echo_server();
+    async fn test_makes_request_to_public_host() {
+        // Safe test URL (public, non-internal) exercised through the hardened
+        // client (redirects disabled + dial-time validating resolver).
         let plugin = HttpPlugin::default();
         let result = plugin
-            .execute(&make_instance(), json!({ "url": url }))
-            .await
-            .unwrap();
-        server.join().unwrap();
+            .execute(
+                &make_instance(),
+                json!({ "url": "https://example.com" }),
+            )
+            .await;
+        assert!(
+            result.is_ok(),
+            "public host request must succeed through hardened client: {:?}",
+            result.err()
+        );
+        let result = result.unwrap();
         assert_eq!(result.outputs["status"], 200);
-        assert_eq!(result.outputs["body"], "real response from test server");
     }
 
     #[tokio::test]
-    async fn test_connection_failure_surfaces_error() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
+    async fn test_ssrf_blocks_link_local_metadata_address() {
+        // The SSRF gate must reject internal targets (here the cloud metadata
+        // endpoint) rather than fetching them. This is hermetic — validation
+        // happens before any network dial.
         let plugin = HttpPlugin::default();
         let err = plugin
             .execute(
                 &make_instance(),
-                json!({ "url": format!("http://{addr}/down") }),
+                json!({ "url": "http://169.254.169.254/latest/meta-data" }),
             )
             .await
             .unwrap_err();
-        assert!(err.retryable, "network failures should be retryable");
-        assert!(!err.reason.is_empty());
+        assert!(
+            err.reason.to_lowercase().contains("blocked")
+                || err.reason.to_lowercase().contains("reserved"),
+            "internal metadata address must be blocked, got: {}",
+            err.reason
+        );
+        // SSRF rejections are permanent, not transient/retryable.
+        assert!(!err.retryable);
     }
 }

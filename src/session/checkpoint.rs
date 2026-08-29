@@ -24,6 +24,7 @@ impl CheckpointEngine {
         store: &dyn SessionStore,
         session_id: &SessionId,
         ctx: &ExecutionContext,
+        owner: Option<&str>,
     ) -> Result<SessionSnapshot, String> {
         let snapshot = SessionSnapshot {
             session_id: session_id.clone(),
@@ -37,7 +38,7 @@ impl CheckpointEngine {
             checkpoint_timestamp_ms: now_epoch_ms(),
         };
 
-        store.save_snapshot(snapshot.clone()).await?;
+        store.save_snapshot(snapshot.clone(), owner).await?;
         Ok(snapshot)
     }
 }

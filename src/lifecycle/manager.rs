@@ -43,8 +43,10 @@ impl LifecycleManager {
         &self,
         session_id: &SessionId,
         ctx: &ExecutionContext,
+        owner: Option<&str>,
     ) -> Result<SessionSnapshot, String> {
-        CheckpointEngine::create_checkpoint(self.session_store.as_ref(), session_id, ctx).await
+        CheckpointEngine::create_checkpoint(self.session_store.as_ref(), session_id, ctx, owner)
+            .await
     }
 }
 

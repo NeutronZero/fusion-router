@@ -10,6 +10,14 @@ use parking_lot::RwLock;
 
 const DEFAULT_MAX_RENEWALS: u32 = 100;
 const MAX_LEASE_ABSOLUTE_LIFETIME_MS: u64 = 86_400_000;
+/// A single grant may not request a TTL longer than the absolute lease
+/// lifetime, otherwise a caller could mint a practically-immortal lease that
+/// defeats the exclusivity/expiry invariants.
+const MAX_LEASE_TTL_MS: u64 = MAX_LEASE_ABSOLUTE_LIFETIME_MS;
+/// Floor for any granted TTL. Rejects a `0` request (which would otherwise
+/// mean "already expired / instant re-grant") by substituting a sane default.
+const MIN_LEASE_TTL_MS: u64 = 1;
+const DEFAULT_LEASE_TTL_MS: u64 = 60_000;
 
 #[derive(Debug, Clone)]
 pub struct ExecutionLease {
@@ -29,7 +37,9 @@ pub struct ExecutionLease {
 
 impl ExecutionLease {
     pub fn is_expired(&self, current_time_ms: u64) -> bool {
-        self.is_revoked || (self.ttl_ms > 0 && current_time_ms >= self.granted_at_ms + self.ttl_ms)
+        self.is_revoked
+            || (self.ttl_ms > 0
+                && current_time_ms >= self.granted_at_ms.saturating_add(self.ttl_ms))
     }
 }
 
@@ -103,6 +113,15 @@ impl ExecutionLeaseManager {
             }
         }
         let mut epochs_map = self.epochs.write();
+
+        // Bound the requested TTL so a lease can never become immortal
+        // (ttl_ms ~= u64::MAX) or effectively instant (ttl_ms == 0). The
+        // absolute-lifetime cap on renewals is a second, independent guard.
+        let ttl_ms = if ttl_ms == 0 {
+            DEFAULT_LEASE_TTL_MS
+        } else {
+            ttl_ms.clamp(MIN_LEASE_TTL_MS, MAX_LEASE_TTL_MS)
+        };
 
         let epoch_key = (exec_id.to_string(), node_id.to_string());
         let prev_epoch = epochs_map.get(&epoch_key).copied().unwrap_or(0);
@@ -215,6 +234,38 @@ mod tests {
             .grant_lease("exec_100", "n1", "w2", 30000)
             .expect("Grant lease 2");
         assert_eq!(lease2.worker_id, "w2");
+    }
+
+    #[test]
+    fn grant_lease_clamps_ttl_to_bounds_and_cannot_be_made_immortal() {
+        let manager = ExecutionLeaseManager::new();
+
+        // A request for u64::MAX must be clamped to MAX_LEASE_TTL_MS, not
+        // stored raw (which would make the lease effectively immortal).
+        let lease = manager
+            .grant_lease("exec_z", "n", "w1", u64::MAX)
+            .expect("grant with huge ttl");
+        assert!(
+            lease.ttl_ms <= MAX_LEASE_TTL_MS,
+            "ttl must be clamped to the max bound, got {}",
+            lease.ttl_ms
+        );
+        assert_ne!(
+            lease.ttl_ms, u64::MAX,
+            "lease must never be granted an immortal ttl"
+        );
+
+        // The clamped lease must still expire after its (bounded) TTL.
+        let expiry = lease.granted_at_ms.saturating_add(lease.ttl_ms);
+        assert!(!lease.is_expired(lease.granted_at_ms));
+        assert!(lease.is_expired(expiry));
+
+        // A zero TTL must be substituted with the default, not stored as 0
+        // (which would mean "instantly expired / re-grantable").
+        let lease0 = manager
+            .grant_lease("exec_z", "n2", "w1", 0)
+            .expect("grant with zero ttl");
+        assert_eq!(lease0.ttl_ms, DEFAULT_LEASE_TTL_MS);
     }
 
     #[test]

@@ -50,7 +50,21 @@ impl SessionStore for InMemorySessionStore {
         }
     }
 
-    async fn save_snapshot(&self, snapshot: SessionSnapshot) -> Result<(), String> {
+    async fn save_snapshot(
+        &self,
+        snapshot: SessionSnapshot,
+        owner: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some(want) = owner {
+            let s_guard = self.sessions.read();
+            match s_guard.get(&snapshot.session_id) {
+                Some(s) if s.owner != want => {
+                    return Err(format!("session not found: {}", snapshot.session_id))
+                }
+                None => return Err(format!("session not found: {}", snapshot.session_id)),
+                _ => {}
+            }
+        }
         let mut guard = self.snapshots.write();
         guard
             .entry(snapshot.session_id.clone())
@@ -132,8 +146,50 @@ mod tests {
             checkpoint_timestamp_ms: 105,
         };
 
-        store.save_snapshot(snapshot).await.unwrap();
+        store.save_snapshot(snapshot, Some("test")).await.unwrap();
         let checkpoints = store.list_checkpoints(&session_id, None).await.unwrap();
         assert_eq!(checkpoints.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_save_snapshot_rejects_mismatched_owner() {
+        let store = InMemorySessionStore::new();
+        let session_id = SessionId::new();
+
+        let session = ExecutionSession {
+            session_id: session_id.clone(),
+            workflow_id: uuid::Uuid::new_v4(),
+            created_at_ms: 100,
+            owner: "owner".into(),
+            config: HashMap::new(),
+        };
+        store.create_session(session).await.unwrap();
+
+        let snapshot = SessionSnapshot {
+            session_id: session_id.clone(),
+            snapshot_id: uuid::Uuid::new_v4(),
+            current_node_id: None,
+            state: crate::types::execution_context::ExecutionState::Succeeded,
+            execution_context_id: uuid::Uuid::new_v4(),
+            trace_id: uuid::Uuid::new_v4(),
+            checkpoint_timestamp_ms: 105,
+        };
+
+        let result = store.save_snapshot(snapshot, Some("attacker")).await;
+        assert!(result.is_err());
+
+        let checkpoints = store.list_checkpoints(&session_id, None).await.unwrap();
+        assert!(checkpoints.is_empty());
+
+        let snapshot = SessionSnapshot {
+            session_id: session_id.clone(),
+            snapshot_id: uuid::Uuid::new_v4(),
+            current_node_id: None,
+            state: crate::types::execution_context::ExecutionState::Succeeded,
+            execution_context_id: uuid::Uuid::new_v4(),
+            trace_id: uuid::Uuid::new_v4(),
+            checkpoint_timestamp_ms: 106,
+        };
+        store.save_snapshot(snapshot, Some("owner")).await.unwrap();
     }
 }

@@ -109,11 +109,26 @@ fn build_client(timeout: Duration) -> Result<Client, TransportError> {
         .map_err(|e| TransportError::Network(format!("failed to build HTTP client: {e}")))
 }
 
+/// Builds an SSRF-hardened `reqwest::Client` for callers outside the transport
+/// layer (WASM host, connectors) that need the same dial-time IP validation
+/// and redirect-disablement without re-deriving the logic. The client refutes
+/// DNS-rebinding TOCTOU: whatever address the `ValidatingDnsResolver` returns
+/// is exactly what is dialed, so "checked address == dialed address" holds at
+/// the socket layer. Fails closed — the builder error is surfaced as a `String`
+/// instead of silently degrading to a redirect-following default client.
+pub(crate) fn build_ssrf_hardened_client() -> Result<Client, String> {
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(Arc::new(ValidatingDnsResolver))
+        .build()
+        .map_err(|e| format!("failed to build SSRF-hardened HTTP client: {e}"))
+}
+
 /// True for addresses the transport must never contact: loopback, link-local,
 /// private/ULA ranges, unspecified, CGNAT, broadcast, the whole "this
 /// network" block, IPv4-compatible IPv6, and NAT64 (SSRF defense). Mirrors the
 /// hardened `http_request` tool.
-fn is_blocked_ip(ip: &std::net::IpAddr) -> bool {
+pub(crate) fn is_blocked_ip(ip: &std::net::IpAddr) -> bool {
     let ip = match ip {
         std::net::IpAddr::V6(v6) => v6
             .to_ipv4_mapped()
@@ -176,7 +191,7 @@ fn validate_url_host(url: &str) -> Result<(), TransportError> {
 /// whatever addresses this resolver returns are exactly what reqwest dials, so
 /// validating here pins "checked address == dialed address" at the socket
 /// layer. IP literals never reach a resolver (range-checked eagerly above).
-struct ValidatingDnsResolver;
+pub(crate) struct ValidatingDnsResolver;
 
 impl Resolve for ValidatingDnsResolver {
     fn resolve(&self, name: Name) -> Resolving {

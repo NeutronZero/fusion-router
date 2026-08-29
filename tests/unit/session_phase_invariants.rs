@@ -53,10 +53,10 @@ async fn session_invariant_checkpoint_idempotence() {
 
     let ctx = create_sample_ctx();
 
-    let snap1 = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx)
+    let snap1 = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx, Some("user"))
         .await
         .unwrap();
-    let snap2 = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx)
+    let snap2 = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx, Some("user"))
         .await
         .unwrap();
 
@@ -101,7 +101,7 @@ async fn session_invariant_resume_compatibility_check() {
     store.create_session(session).await.unwrap();
 
     let ctx = create_sample_ctx();
-    let _ = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx)
+    let _ = CheckpointEngine::create_checkpoint(&store, &session_id, &ctx, Some("user"))
         .await
         .unwrap();
 

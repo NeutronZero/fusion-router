@@ -35,36 +35,68 @@ pub fn check_http_access(permissions: &[Permission], url: &str) -> Result<(), Ga
     )))
 }
 
-pub fn check_environment(
-    permissions: &[Permission],
-    var_name: &str,
-) -> Result<(), GateError> {
-    if var_name.is_empty() || var_name == "*" {
+/// Single, fail-closed gate for reading environment variables. Every live env
+/// access (provider API-key interpolation via `{env:VAR}`, the `api_key_env`
+/// config field, and any plugin path) must pass through this function.
+///
+/// Rules, in order:
+/// 1. Reject match-all / empty names (`""` or `"*"`).
+/// 2. Denylist: never allow the router's own infrastructure secrets to be read
+///    back out as a provider credential. This includes `FUSION_MASTER_KEY`
+///    explicitly, plus any `FUSION_*` var shaped like a key/secret/password/token.
+/// 3. Allowlist: only names shaped like a key/token/secret/password may be read
+///    via interpolation. Anything else is rejected (fail-closed).
+///
+/// Note: `Permission::Environment` (in `fusion_plugin_api`) independently
+/// rejects `""` and `"*"` at validation time, so a plugin can never be granted
+/// access to a variable that this gate denies.
+pub fn check_environment(var_name: &str) -> Result<(), GateError> {
+    let var = var_name.trim();
+
+    // 1. Reject match-all / empty names.
+    if var.is_empty() || var == "*" {
         return Err(GateError::PermissionDenied(
             "environment variable name must not be empty or '*'".into(),
         ));
     }
-    for perm in permissions {
-        match perm {
-            Permission::Environment(pattern) => {
-                if pattern == "*" {
-                    continue;
-                }
-                if let Some(prefix) = pattern.strip_suffix('*') {
-                    if var_name.starts_with(prefix) {
-                        return Ok(());
-                    }
-                } else if pattern == var_name {
-                    return Ok(());
-                }
-            }
-            _ => continue,
-        }
+
+    let upper = var.to_ascii_uppercase();
+
+    // 2. Denylist: explicit router infrastructure secrets.
+    const DENY_EXACT: &[&str] = &["FUSION_MASTER_KEY"];
+    if DENY_EXACT.contains(&upper.as_str()) {
+        return Err(GateError::PermissionDenied(format!(
+            "reading environment variable '{}' is denied: router infrastructure secret",
+            var
+        )));
     }
-    Err(GateError::PermissionDenied(format!(
-        "environment variable '{}' is not in the declared permission set",
-        var_name
-    )))
+
+    // 2. Denylist: any router-owned key/secret/password/token.
+    if upper.starts_with("FUSION_")
+        && (upper.ends_with("_KEY")
+            || upper.ends_with("_SECRET")
+            || upper.ends_with("_PASSWORD")
+            || upper.ends_with("_TOKEN"))
+    {
+        return Err(GateError::PermissionDenied(format!(
+            "reading environment variable '{}' is denied: router infrastructure secret",
+            var
+        )));
+    }
+
+    // 3. Allowlist: only key/token/secret/password-shaped names may be read.
+    let shape_ok = upper.ends_with("_KEY")
+        || upper.ends_with("_TOKEN")
+        || upper.ends_with("_SECRET")
+        || upper.ends_with("_PASSWORD");
+    if !shape_ok {
+        return Err(GateError::PermissionDenied(format!(
+            "environment variable '{}' is not an allowed key/token/secret/password name",
+            var
+        )));
+    }
+
+    Ok(())
 }
 
 fn glob_match(pattern: &str, candidate: &str) -> bool {
@@ -154,35 +186,42 @@ mod tests {
     }
 
     #[test]
-    fn test_environment_exact_match_allowed() {
-        let perms = vec![Permission::Environment("HOME".into())];
-        assert!(check_environment(&perms, "HOME").is_ok());
+    fn test_environment_key_shaped_allowed() {
+        assert!(check_environment("OPENAI_API_KEY").is_ok());
     }
 
     #[test]
-    fn test_environment_glob_match_allowed() {
-        let perms = vec![Permission::Environment("DB_*".into())];
-        assert!(check_environment(&perms, "DB_PASSWORD").is_ok());
+    fn test_environment_password_shaped_allowed() {
+        assert!(check_environment("DB_PASSWORD").is_ok());
     }
 
     #[test]
-    fn test_environment_no_match_denied() {
-        let perms = vec![Permission::Environment("HOME".into())];
-        let result = check_environment(&perms, "PATH");
+    fn test_environment_non_key_shape_denied() {
+        let result = check_environment("HOME");
         assert!(matches!(result, Err(GateError::PermissionDenied(_))));
     }
 
     #[test]
     fn test_environment_wildcard_denied() {
-        let perms = vec![Permission::Environment("*".into())];
-        let result = check_environment(&perms, "HOME");
+        let result = check_environment("*");
         assert!(matches!(result, Err(GateError::PermissionDenied(_))));
     }
 
     #[test]
-    fn test_environment_network_only_denied() {
-        let perms = vec![Permission::Network];
-        let result = check_environment(&perms, "HOME");
+    fn test_environment_empty_denied() {
+        let result = check_environment("");
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_environment_fusion_master_key_denied() {
+        let result = check_environment("FUSION_MASTER_KEY");
+        assert!(matches!(result, Err(GateError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_environment_fusion_secret_denied() {
+        let result = check_environment("FUSION_DB_SECRET");
         assert!(matches!(result, Err(GateError::PermissionDenied(_))));
     }
 }
