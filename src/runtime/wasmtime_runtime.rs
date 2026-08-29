@@ -201,10 +201,17 @@ fn build_instance(
 
     store.limiter(move |data: &mut StoreData| data as &mut dyn ResourceLimiter);
 
-    if let Some(d) = epoch_deadline {
-        let epochs = ((d.as_millis() / EPOCH_INTERVAL_MS as u128).max(1)) as u64 + 1;
-        store.set_epoch_deadline(epochs);
-    }
+    // Epoch preemption enforces the wall-clock deadline: wasmtime interrupts
+    // execution once the engine epoch reaches the store's deadline. A store
+    // that never sets one inherits wasmtime's near-immediate default and would
+    // be killed after a single global ticker tick. When no deadline is
+    // configured we set a far-future deadline and rely on fuel for
+    // termination instead, so deadline-less guests are not interrupted.
+    let epochs = match epoch_deadline {
+        Some(d) => ((d.as_millis() / EPOCH_INTERVAL_MS as u128).max(1)) as u64 + 1,
+        None => u64::MAX / 2,
+    };
+    store.set_epoch_deadline(epochs);
 
     let mut linker = Linker::new(engine);
     configure_linker(&mut linker)

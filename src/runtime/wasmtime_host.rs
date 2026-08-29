@@ -172,12 +172,15 @@ impl CapabilityHostServices for WasmtimeCapabilityHost {
     }
 
     fn record_metric(&self, name: &str, value: f64) {
+        // Reject non-finite and negative values: a negative f64 would be cast
+        // into an enormous u64 and corrupt the counter.
+        let v = if value.is_finite() { value.max(0.0) } else { 0.0 };
         tracing::info!(
             metric_name = name,
-            metric_value = value,
+            metric_value = v,
             "capability metric"
         );
-        self.metrics.requests_total.inc_by(value as u64);
+        self.metrics.requests_total.inc_by(v as u64);
     }
 }
 

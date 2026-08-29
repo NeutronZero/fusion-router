@@ -2,7 +2,7 @@ use crate::events::payload::ExecutionEvent;
 use crate::runtime::host_services::CapabilityHostServices;
 use std::sync::Arc;
 use tracing::Level;
-use wasmtime::{Caller, Extern, Linker};
+use wasmtime::{Caller, Extern, Linker, Val};
 
 pub trait HostAccess {
     fn host_services(&self) -> &Arc<dyn CapabilityHostServices>;
@@ -153,8 +153,8 @@ pub fn configure_linker<T: HostAccess + 'static>(
         |mut caller: Caller<'_, T>,
          req_ptr: i32,
          req_len: i32,
-         _resp_ptr: i32,
-         _resp_len: i32|
+         resp_ptr: i32,
+         resp_len: i32|
          -> i32 {
             let bytes = match read_memory(&mut caller, req_ptr, req_len) {
                 Some(b) => b,
@@ -170,11 +170,47 @@ pub fn configure_linker<T: HostAccess + 'static>(
             };
             let req = reqwest::Request::new(reqwest::Method::GET, url);
              let host = caller.data().host_services().clone();
-             let result = caller.data().runtime_handle().block_on(host.http_request(req));
-             match result {
-                Ok(_) => 0,
-                Err(_) => -1,
-            }
+             let response = match caller.data().runtime_handle().block_on(host.http_request(req)) {
+                Ok(r) => r,
+                Err(_) => return -1,
+             };
+             // Read the response body and return it to the guest. The guest must
+             // export an `allocate(len) -> ptr` function; the body is written
+             // into that buffer and its pointer/length are written into the
+             // guest-supplied `resp_ptr`/`resp_len` output slots.
+             let body = match caller.data().runtime_handle().block_on(response.bytes()) {
+                Ok(b) => b,
+                Err(_) => return -1,
+             };
+             let mem = match caller.get_export("memory").and_then(Extern::into_memory) {
+                Some(m) => m,
+                None => return -1,
+             };
+             let buf_ptr = match caller.get_export("allocate").and_then(Extern::into_func) {
+                Some(alloc) => {
+                    let mut results = [Val::I32(0)];
+                    match alloc.call(&mut caller, &[Val::I32(body.len() as i32)], &mut results) {
+                        Ok(_) => results[0].i32().unwrap_or(-1),
+                        Err(_) => return -1,
+                    }
+                }
+                // No guest allocator: cannot return the body. Preserve the prior
+                // behavior of signalling success without a payload.
+                None => return 0,
+             };
+             if buf_ptr < 0 {
+                 return 0;
+             }
+             if mem.write(&mut caller, buf_ptr as usize, &body).is_err() {
+                 return -1;
+             }
+             if mem.write(&mut caller, resp_ptr as usize, &buf_ptr.to_le_bytes()).is_err() {
+                 return -1;
+             }
+             if mem.write(&mut caller, resp_len as usize, &(body.len() as i32).to_le_bytes()).is_err() {
+                 return -1;
+             }
+             0
         },
     )?;
 
