@@ -74,6 +74,7 @@ mod tests {
             connectors: HashMap::new(),
             features: HashMap::new(),
             streaming: Default::default(),
+            compiler: Default::default(),
         };
         crate::server::handlers::AppState::new(
             Arc::new(crate::providers::openrouter::OpenRouterProvider::new(

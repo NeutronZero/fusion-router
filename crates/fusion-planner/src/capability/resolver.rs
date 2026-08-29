@@ -145,35 +145,129 @@ pub struct ResolvedCapabilitySet {
     pub instances: Vec<CapabilityInstance>,
 }
 
+/// Pluggable backing store for the planner cache. The default
+/// `InMemoryStore` is single-node LRU (original behavior). A `SharedStore`
+/// backed by `Arc<RwLock<...>>` can be shared across resolver instances on
+/// the same host (process-local distribution). A future `RedisStore` can be
+/// supplied for cross-node distribution (AD-004).
+pub trait CacheStore: Send + Sync + std::fmt::Debug {
+    fn get(&self, key: &RequirementSet) -> Option<ResolvedCapabilitySet>;
+    fn put(&self, key: RequirementSet, value: ResolvedCapabilitySet, max_capacity: usize);
+    fn len(&self) -> usize;
+    fn clear(&self);
+}
+
+#[derive(Debug, Default)]
+pub struct InMemoryStore {
+    inner: Mutex<HashMap<RequirementSet, ResolvedCapabilitySet>>,
+}
+
+impl CacheStore for InMemoryStore {
+    fn get(&self, key: &RequirementSet) -> Option<ResolvedCapabilitySet> {
+        self.inner.lock().get(key).cloned()
+    }
+    fn put(&self, key: RequirementSet, value: ResolvedCapabilitySet, max_capacity: usize) {
+        let mut g = self.inner.lock();
+        if g.len() >= max_capacity {
+            if let Some(k) = g.keys().next().cloned() {
+                g.remove(&k);
+            }
+        }
+        g.insert(key, value);
+    }
+    fn len(&self) -> usize {
+        self.inner.lock().len()
+    }
+    fn clear(&self) {
+        self.inner.lock().clear();
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SharedStore {
+    inner: Arc<parking_lot::RwLock<HashMap<RequirementSet, ResolvedCapabilitySet>>>,
+}
+
+impl SharedStore {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+        }
+    }
+    pub fn shared_clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl CacheStore for SharedStore {
+    fn get(&self, key: &RequirementSet) -> Option<ResolvedCapabilitySet> {
+        self.inner.read().get(key).cloned()
+    }
+    fn put(&self, key: RequirementSet, value: ResolvedCapabilitySet, max_capacity: usize) {
+        let mut g = self.inner.write();
+        if g.len() >= max_capacity {
+            if let Some(k) = g.keys().next().cloned() {
+                g.remove(&k);
+            }
+        }
+        g.insert(key, value);
+    }
+    fn len(&self) -> usize {
+        self.inner.read().len()
+    }
+    fn clear(&self) {
+        self.inner.write().clear();
+    }
+}
+
 /// LRU / In-memory planner cache mapping `RequirementSet` hash -> `ResolvedCapabilitySet`.
+/// AD-004: now pluggable via `CacheStore`; in-memory single-node remains the
+/// default, while `SharedStore` enables process-local distribution and a
+/// future `RedisStore` will provide cross-node distribution.
 #[derive(Debug)]
 pub struct CapabilityPlannerCache {
-    cache: Mutex<HashMap<RequirementSet, ResolvedCapabilitySet>>,
+    store: Box<dyn CacheStore>,
     max_capacity: usize,
 }
 
 impl CapabilityPlannerCache {
     pub fn new(capacity: usize) -> Self {
         Self {
-            cache: Mutex::new(HashMap::new()),
+            store: Box::new(InMemoryStore::default()),
+            max_capacity: capacity,
+        }
+    }
+
+    pub fn with_store(store: Box<dyn CacheStore>, capacity: usize) -> Self {
+        Self {
+            store,
+            max_capacity: capacity,
+        }
+    }
+
+    pub fn with_shared_store(shared: SharedStore, capacity: usize) -> Self {
+        Self {
+            store: Box::new(shared),
             max_capacity: capacity,
         }
     }
 
     pub fn get(&self, reqs: &RequirementSet) -> Option<ResolvedCapabilitySet> {
-        let guard = self.cache.lock();
-        guard.get(reqs).cloned()
+        self.store.get(reqs)
     }
 
     pub fn put(&self, reqs: RequirementSet, resolved: ResolvedCapabilitySet) {
-        let mut guard = self.cache.lock();
-        if guard.len() >= self.max_capacity {
-            // Primitive eviction if at capacity
-            if let Some(key) = guard.keys().next().cloned() {
-                guard.remove(&key);
-            }
-        }
-        guard.insert(reqs, resolved);
+        self.store.put(reqs, resolved, self.max_capacity);
+    }
+
+    pub fn len(&self) -> usize {
+        self.store.len()
+    }
+
+    pub fn clear(&self) {
+        self.store.clear();
     }
 }
 

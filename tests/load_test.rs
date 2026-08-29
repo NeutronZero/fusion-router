@@ -105,6 +105,7 @@ fn build_app(quota: &Quota) -> Router {
         connectors: std::collections::HashMap::new(),
         features: std::collections::HashMap::new(),
         streaming: Default::default(),
+        compiler: Default::default(),
     };
 
     let state = fusion_router::server::handlers::AppState::new(

@@ -23,6 +23,10 @@ impl FeatureGateSubscriber {
         self.registry.read()
     }
 
+    pub fn apply_initial(&self, config: &HashMap<String, FeatureConfig>) {
+        self.registry.write().apply_config(config);
+    }
+
     #[allow(dead_code)]
     fn rollback(&self) {
         *self.pending.write() = None;
@@ -94,6 +98,7 @@ mod tests {
             connectors: HashMap::new(),
             features: HashMap::new(),
             streaming: Default::default(),
+            compiler: Default::default(),
         }
     }
 

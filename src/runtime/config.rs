@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+use super::permissions::WasmPermissions;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SandboxConfig {
     pub memory_limit_bytes: u64,
     pub fuel_amount: u64,
     pub timeout_ms: Option<u64>,
     pub max_response_bytes: usize,
+    #[serde(default)]
+    pub permissions: WasmPermissions,
 }
 
 impl Default for SandboxConfig {
@@ -15,6 +19,7 @@ impl Default for SandboxConfig {
             fuel_amount: 1_000_000,
             timeout_ms: None,
             max_response_bytes: 64 * 1024 * 1024,
+            permissions: WasmPermissions::deny_all(),
         }
     }
 }
@@ -38,6 +43,7 @@ mod tests {
             fuel_amount: 500_000,
             timeout_ms: Some(5000),
             max_response_bytes: 8 * 1024 * 1024,
+            permissions: WasmPermissions::deny_all(),
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: SandboxConfig = serde_json::from_str(&json).unwrap();
@@ -53,6 +59,7 @@ mod tests {
             fuel_amount: 100,
             timeout_ms: Some(1000),
             max_response_bytes: 4 * 1024 * 1024,
+            permissions: WasmPermissions::allow_all(),
         };
         assert_eq!(config.memory_limit_bytes, 32 * 1024 * 1024);
         assert_eq!(config.fuel_amount, 100);

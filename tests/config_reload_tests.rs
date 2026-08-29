@@ -88,6 +88,7 @@ fn empty_config() -> AppConfig {
         connectors: HashMap::new(),
         features: HashMap::new(),
         streaming: Default::default(),
+        compiler: Default::default(),
     }
 }
 

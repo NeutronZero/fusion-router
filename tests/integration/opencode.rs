@@ -267,6 +267,7 @@ async fn test_chat_completion_endpoint() {
         connectors: std::collections::HashMap::new(),
         features: std::collections::HashMap::new(),
         streaming: Default::default(),
+        compiler: Default::default(),
     });
 
     let state = fusion_router::server::handlers::AppState::new(
@@ -667,6 +668,7 @@ fn test_config() -> AppConfig {
         connectors: std::collections::HashMap::new(),
         features: std::collections::HashMap::new(),
         streaming: Default::default(),
+        compiler: Default::default(),
     }
 }
 

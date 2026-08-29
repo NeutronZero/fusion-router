@@ -40,9 +40,27 @@ impl AuditLog {
         let entries = self.entries.lock();
         entries
             .iter()
-            .map(|e| serde_json::to_string(e).unwrap_or_default())
+            .filter_map(|e| match serde_json::to_string(e) {
+                Ok(s) => Some(s),
+                Err(err) => {
+                    tracing::error!(error = %err, "audit entry serialization failed; entry dropped");
+                    None
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Like `to_jsonl` but fails closed: returns Err if any entry cannot be
+    /// serialized, so callers that require a complete audit trail can reject
+    /// the write instead of emitting a partial file.
+    pub fn try_to_jsonl(&self) -> Result<String, serde_json::Error> {
+        let entries = self.entries.lock();
+        let mut out = Vec::with_capacity(entries.len());
+        for e in entries.iter() {
+            out.push(serde_json::to_string(e)?);
+        }
+        Ok(out.join("\n"))
     }
 }
 

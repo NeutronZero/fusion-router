@@ -58,6 +58,7 @@ mod tests {
             connectors: HashMap::new(),
             features: HashMap::new(),
             streaming: Default::default(),
+            compiler: Default::default(),
         };
         let state = AppState::new(
             Arc::new(crate::providers::openrouter::OpenRouterProvider::new(

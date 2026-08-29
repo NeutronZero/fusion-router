@@ -12,6 +12,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Directories to never recurse into (build artifacts / VCS / generated graphs).
+# Skipping them at walk-time avoids the WSL 9p slowness of enumerating
+# `target/` over /mnt/c and keeps the firewall fast on both Windows and Linux.
+EXCLUDE_DIRS = {".git", "target", "graphify-out", ".cargo", "node_modules"}
+
+def iter_rs(root: Path):
+    """Yield *.rs files under `root` without descending into EXCLUDE_DIRS."""
+    for dirpath, dirnames, filenames in __import__("os").walk(root):
+        # Prune excluded dirs in-place so os.walk does not descend.
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
+        for fn in filenames:
+            if fn.endswith(".rs"):
+                yield Path(dirpath) / fn
+
+def iter_rs_filtered(root: Path):
+    """Like iter_rs but also skips files under EXCLUDE_DIRS (for ROOT.rglob callers)."""
+    return iter_rs(root)
+
 
 def check_gate_01_planner_authority():
     """Gate 01: Canonical fusion-planner crate is single authoritative planning engine."""
@@ -145,7 +163,7 @@ def check_gate_06_policy_authority():
     if "pub struct PolicyRegistry" not in content:
         return False, "PolicyRegistry struct not found"
     constructor_sites = []
-    for rs_file in (ROOT / "src").rglob("*.rs"):
+    for rs_file in iter_rs(ROOT / "src"):
         production = rs_file.read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]
         if "PolicyRegistry::new()" in production:
             constructor_sites.append(rs_file.relative_to(ROOT))
@@ -205,9 +223,7 @@ def check_gate_09_monetary_authority():
         return False, "NanoUSD type file does not exist"
 
     # Verify zero occurrences of legacy cost_millicosts in any rust file
-    for rs_file in ROOT.rglob("*.rs"):
-        if "/target/" in str(rs_file).replace("\\", "/"):
-            continue
+    for rs_file in iter_rs(ROOT):
         content = rs_file.read_text(encoding="utf-8")
         if "cost_millicosts" in content:
             rel_path = rs_file.relative_to(ROOT)
@@ -219,10 +235,10 @@ def check_gate_09_monetary_authority():
         "max_cost_per_1k_tokens", "cost_per_1k",
     ]
     presentation_only = {Path("src/bin/eval_runner.rs")}
-    for rs_file in ROOT.rglob("*.rs"):
+    for rs_file in iter_rs(ROOT):
         rel_path = rs_file.relative_to(ROOT)
         normalized = str(rel_path).replace("\\", "/")
-        if normalized.startswith("target/") or normalized.startswith("tests/") or rel_path in presentation_only:
+        if normalized.startswith("tests/") or rel_path in presentation_only:
             continue
         content = rs_file.read_text(encoding="utf-8")
         production = content.split("#[cfg(test)]", 1)[0]
@@ -271,11 +287,8 @@ def check_gate_10_fallback_elimination():
             return False, "Custom strategy still has a generic fallback expansion"
 
     # No production expanded_subgraph() calls outside crates/ and tests.
-    for rs_file in (ROOT / "src").rglob("*.rs"):
+    for rs_file in iter_rs(ROOT / "src"):
         rel = rs_file.relative_to(ROOT)
-        normalized = str(rel).replace("\\", "/")
-        if normalized.startswith("target/"):
-            continue
         content = rs_file.read_text(encoding="utf-8")
         production = content.split("#[cfg(test)]", 1)[0]
         if "expanded_subgraph(" in production:

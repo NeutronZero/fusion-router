@@ -1,5 +1,6 @@
 mod manager;
 mod manifest;
+pub mod transport;
 #[cfg(feature = "wasm-plugins")]
 pub mod wasm;
 

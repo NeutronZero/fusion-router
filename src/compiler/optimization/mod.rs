@@ -304,6 +304,25 @@ impl OptimizationPass for FanOutConsolidationPass {
     }
 }
 
+/// Builds the production optimization pipeline for the given level (AD-005).
+/// Level 0 = no optimization (mandatory compiler passes only).
+/// Level 1 = dead-node elimination.
+/// Level 2 = dead-node + fan-out consolidation.
+pub fn build_optimization_pipeline(level: u8) -> OptimizationPipeline {
+    let mut pipeline = OptimizationPipeline::new();
+    if level >= 1 {
+        pipeline.add_pass(Box::new(DeadNodeEliminationPass::new()));
+    }
+    if level >= 2 {
+        pipeline.add_pass(Box::new(FanOutConsolidationPass::new()));
+    }
+    pipeline
+}
+
+pub fn optimization_enabled(level: u8) -> bool {
+    level > 0
+}
+
 #[derive(Default)]
 pub struct OptimizationPipeline {
     passes: Vec<Box<dyn OptimizationPass>>,
@@ -316,6 +335,14 @@ impl OptimizationPipeline {
 
     pub fn add_pass(&mut self, pass: Box<dyn OptimizationPass>) {
         self.passes.push(pass);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.passes.is_empty()
+    }
+
+    pub fn pass_names(&self) -> Vec<String> {
+        self.passes.iter().map(|p| p.name().to_string()).collect()
     }
 
     pub fn run(&self, graph: PrimitiveGraph) -> Result<PrimitiveGraph, CompilerDiagnostic> {

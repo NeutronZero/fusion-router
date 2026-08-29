@@ -101,6 +101,11 @@ These principles are **immutable** and define the system's long‑term stability
 | 12 | **Deterministic execution** – identical inputs produce identical execution decisions. |
 | 13 | **Runtime failures do not alter the compiled graph** – re‑compilation, if needed, must be explicit. |
 | 14 | **Compiler passes are pure** – no I/O, no side effects, no global mutations. |
+| 15 | **Semantic adapter annotation** – when lowering collapses planning kinds, the original planning meaning is preserved in `semantic_kind` metadata. |
+| 16 | **Canonical monetary accounting** – all internal monetary accounting uses `NanoUSD`; decimal USD only at config/presentation boundaries. |
+| 17 | **Control-plane authority** – one `PolicyRegistry` and one frozen `CapabilityRegistry` shared via `AppState`. |
+
+> **Note:** The canonical frozen set is `docs/architecture/invariants.md` (AF-003, 17 invariants). This table mirrors it; any divergence is an editorial error — invariants.md governs.
 
 **Terminology Note:** Earlier design discussions may refer to the immutable execution specification as `ExecutionPlan` or `ExecutionGraph`. In the final architecture, these terms are unified under `ExecutionGraph`. Historical ADRs retain their original terminology; future documents should use `ExecutionGraph`.
 
@@ -592,7 +597,7 @@ Golden tests are a first‑class citizen due to invariant #12 (determinism).
 - **Public APIs:** Evolve according to the compatibility contract (stable within major version).
 
 ### ADR Rule
-> **Any proposal that changes one of the fourteen architectural invariants requires a superseding ADR and a major‑version architectural review.**
+> **Any proposal that changes one of the seventeen architectural invariants requires a superseding ADR and a major‑version architectural review.**
 
 ### Architecture Review
 - The Architecture Overview and Specification are reviewed and approved by the project's architectural owner before any changes are merged.

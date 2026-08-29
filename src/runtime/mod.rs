@@ -1,6 +1,7 @@
 pub mod config;
 pub mod context;
 pub mod host_services;
+pub mod permissions;
 pub mod policy;
 pub mod sandbox_instance;
 pub mod sandbox_runtime;

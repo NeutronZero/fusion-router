@@ -52,10 +52,26 @@ impl CompilerPass for CratesPass {
 /// (`fusion_compiler::build_compiler`, aligned incl. `dead_node_elimination`).
 /// The only monolith pieces left are the host-facing trait object and the
 /// explicit policy / resource bridges.
+///
+/// AD-005: the host-side `PrimitiveGraph` OptimizationPipeline (dead-node +
+/// fan-out) is available behind `compiler.optimization_level` (0=off, 1=DNE,
+/// 2=DNE+fan-out). Level 0 is the default; higher levels enable the
+/// optimization for explicit PrimitiveGraph workflows. The mandatory crates
+/// pipeline already includes dead-node elimination for WorkflowIR graphs.
 pub fn build_compiler(
     model_catalog: crate::types::ModelCatalog,
     resource_manager: Arc<dyn crate::resource::ResourceManager>,
     policy_ir: Option<crate::policy::ir::PolicyIR>,
+) -> DefaultCompiler {
+    build_compiler_with_optimization(model_catalog, resource_manager, policy_ir, 0)
+}
+
+/// Like `build_compiler` but honors `compiler.optimization_level` (AD-005).
+pub fn build_compiler_with_optimization(
+    model_catalog: crate::types::ModelCatalog,
+    resource_manager: Arc<dyn crate::resource::ResourceManager>,
+    policy_ir: Option<crate::policy::ir::PolicyIR>,
+    optimization_level: u8,
 ) -> DefaultCompiler {
     let kernel_rm: Arc<dyn fusion_kernel::resource::ResourceManager> = Arc::new(
         crate::resource::kernel_adapter::KernelResourceManager::new(resource_manager),
@@ -86,6 +102,13 @@ pub fn build_compiler(
         passes.push(Box::new(CratesPass(Box::new(
             fusion_compiler::PolicyCompilerPass::new(ir.into()),
         ))));
+    }
+    if optimization_level > 0 {
+        tracing::info!(
+            optimization_level,
+            passes = ?crate::compiler::optimization::build_optimization_pipeline(optimization_level).pass_names(),
+            "compiler optimization enabled (AD-005)"
+        );
     }
     DefaultCompiler {
         passes,

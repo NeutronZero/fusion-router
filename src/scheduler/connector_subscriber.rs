@@ -128,6 +128,7 @@ mod tests {
             connectors,
             features: HashMap::new(),
             streaming: Default::default(),
+            compiler: Default::default(),
         };
         ConfigSnapshot {
             generation,

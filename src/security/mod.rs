@@ -4,5 +4,6 @@
 //! `paths` for the canonicalization helpers used by file tools, the shell
 //! argument policy, and plugin extraction.
 
+pub mod openat2;
 pub mod paths;
 pub mod secrets;

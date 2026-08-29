@@ -289,6 +289,15 @@ impl AppConfig {
             });
         }
 
+        if self.compiler.optimization_level > 2 {
+            errors.push(ConfigValidationError {
+                field: "compiler.optimization_level".into(),
+                message: "compiler.optimization_level must be 0, 1, or 2".into(),
+                value: Some(self.compiler.optimization_level.to_string()),
+                severity: ValidationSeverity::Error,
+            });
+        }
+
         // Provider API key mutual exclusion: at most one of api_key / api_key_env
         // / api_key_encrypted may be set per provider. Multiple sources would
         // make precedence confusing and hide misconfiguration.

@@ -34,6 +34,8 @@ pub struct AppConfig {
     pub features: HashMap<String, FeatureConfig>,
     #[serde(default)]
     pub streaming: StreamingConfig,
+    #[serde(default)]
+    pub compiler: CompilerConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -424,6 +426,24 @@ impl Default for StrategyConfig {
     fn default() -> Self {
         Self {
             consensus_count: default_consensus_count(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompilerConfig {
+    /// Optimization level for the PrimitiveGraph optimization pipeline
+    /// (AD-005). 0 = disabled (default, mandatory passes only),
+    /// 1 = dead-node elimination, 2 = dead-node + fan-out consolidation.
+    #[serde(default = "default_compiler_optimization_level")]
+    pub optimization_level: u8,
+}
+
+impl Default for CompilerConfig {
+    fn default() -> Self {
+        Self {
+            optimization_level: default_compiler_optimization_level(),
         }
     }
 }

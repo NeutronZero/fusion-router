@@ -183,15 +183,23 @@ impl AppState {
     /// `Some(ir)` appends the policy pass (deny ⇒ compile error, approval ⇒
     /// gate insertion); `None` (no active policies) yields the mandatory base
     /// passes only. Built per request so registry mutations take effect
-    /// immediately without a restart.
+    /// immediately without a restart. Honors `compiler.optimization_level`
+    /// (AD-005) from the live config snapshot.
     pub fn compiler_with_policies(
         &self,
         policy_ir: Option<crate::policy::ir::PolicyIR>,
     ) -> Arc<dyn crate::compiler::Compiler + Send + Sync> {
-        Arc::new(crate::compiler::build_compiler(
+        let opt_level = self
+            .config_manager
+            .snapshot()
+            .config
+            .compiler
+            .optimization_level;
+        Arc::new(crate::compiler::build_compiler_with_optimization(
             self.model_catalog.clone(),
             self.resource_manager.clone(),
             policy_ir,
+            opt_level,
         ))
     }
 

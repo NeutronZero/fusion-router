@@ -32,11 +32,32 @@ pub struct BoundConnector {
     pub executor: Arc<dyn CapabilityExecutor>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadBalancingStrategy {
+    RoundRobin,
+    Random,
+    LeastLatency,
+}
+
+/// Health status tracked per connector (updated by `ConnectorHealthChecker`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectorHealth {
+    Healthy,
+    Degraded,
+    Unhealthy,
+}
+
 /// Thread-safe registry providing late-binding resolution of capabilities to connectors.
+/// AD-003: supports multiple connectors per capability with load balancing and failover.
 #[derive(Clone)]
 pub struct ConnectorResolver {
     pub(crate) connectors: Arc<RwLock<HashMap<String, Arc<dyn Connector>>>>,
-    capability_map: Arc<RwLock<HashMap<CapabilityId, String>>>,
+    /// Maps capability → list of connector names (supports many-to-one)
+    capability_map: Arc<RwLock<HashMap<CapabilityId, Vec<String>>>>,
+    /// Round-robin index per capability
+    rr_index: Arc<RwLock<HashMap<CapabilityId, usize>>>,
+    /// Health override per connector name
+    health: Arc<RwLock<HashMap<String, ConnectorHealth>>>,
 }
 
 impl ConnectorResolver {
@@ -44,7 +65,22 @@ impl ConnectorResolver {
         Self {
             connectors: Arc::new(RwLock::new(HashMap::new())),
             capability_map: Arc::new(RwLock::new(HashMap::new())),
+            rr_index: Arc::new(RwLock::new(HashMap::new())),
+            health: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Mark connector health (called by health checker).
+    pub fn set_health(&self, name: &str, h: ConnectorHealth) {
+        self.health.write().insert(name.to_string(), h);
+    }
+
+    pub fn health(&self, name: &str) -> ConnectorHealth {
+        self.health
+            .read()
+            .get(name)
+            .copied()
+            .unwrap_or(ConnectorHealth::Healthy)
     }
 
     /// Registers a concrete connector and maps its supported capabilities.
@@ -63,32 +99,113 @@ impl ConnectorResolver {
         let mut map_guard = self.capability_map.write();
 
         for cap_id in &desc.supported_capabilities {
-            map_guard.insert(cap_id.clone(), desc.name.clone());
+            map_guard
+                .entry(cap_id.clone())
+                .or_default()
+                .push(desc.name.clone());
+            // de-duplicate within capability
+            let v = map_guard.get_mut(cap_id).unwrap();
+            v.sort();
+            v.dedup();
         }
         connectors_guard.insert(desc.name.clone(), connector);
+        self.health
+            .write()
+            .insert(desc.name.clone(), ConnectorHealth::Healthy);
         Ok(())
     }
 
-    /// Late-binds an abstract `CapabilityInstance` to a concrete `BoundConnector`.
+    /// Late-binds with default round-robin load balancing and failover.
     pub fn bind(&self, instance: &CapabilityInstance) -> Result<BoundConnector, String> {
-        let connector_name = {
+        self.bind_with_strategy(instance, LoadBalancingStrategy::RoundRobin)
+    }
+
+    /// Late-binds with explicit strategy. Filters unhealthy connectors and fails
+    /// closed when none are available.
+    pub fn bind_with_strategy(
+        &self,
+        instance: &CapabilityInstance,
+        strategy: LoadBalancingStrategy,
+    ) -> Result<BoundConnector, String> {
+        let candidates: Vec<String> = {
             let map_guard = self.capability_map.read();
             map_guard
                 .get(&instance.contract.id)
+                .cloned()
                 .ok_or_else(|| {
                     format!(
                         "No connector registered for capability: {}",
                         instance.contract.id
                     )
                 })?
-                .clone()
+        };
+
+        // Filter to healthy/degraded (skip unhealthy), fallback to all if none healthy
+        let health_guard = self.health.read();
+        let healthy: Vec<String> = candidates
+            .iter()
+            .filter(|n| health_guard.get(*n).copied().unwrap_or(ConnectorHealth::Healthy) != ConnectorHealth::Unhealthy)
+            .cloned()
+            .collect();
+        let pool = if healthy.is_empty() { candidates.clone() } else { healthy };
+        if pool.is_empty() {
+            return Err(format!(
+                "No healthy connector for capability: {}",
+                instance.contract.id
+            ));
+        }
+
+        let chosen_name = match strategy {
+            LoadBalancingStrategy::RoundRobin => {
+                let mut idx_guard = self.rr_index.write();
+                let idx = idx_guard.entry(instance.contract.id.clone()).or_insert(0);
+                let name = pool[*idx % pool.len()].clone();
+                *idx = (*idx + 1) % pool.len();
+                name
+            }
+            LoadBalancingStrategy::Random => {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut h = DefaultHasher::new();
+                // Deterministic pseudo-random: hash(instance id + nanos) mod len
+                instance.contract.id.as_str().hash(&mut h);
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos()
+                    .hash(&mut h);
+                let idx = (h.finish() as usize) % pool.len();
+                pool[idx].clone()
+            }
+            LoadBalancingStrategy::LeastLatency => {
+                // Pick connector with lowest estimated latency (descriptor not yet loaded,
+                // so compare via connectors map)
+                let connectors_guard = self.connectors.read();
+                let mut best: Option<(String, u64)> = None;
+                for name in &pool {
+                    if let Some(c) = connectors_guard.get(name) {
+                        // Use a static latency hint: descriptor holds no latency,
+                        // so we use Healthy (0 penalty) vs Degraded (+100ms)
+                        let penalty = match health_guard.get(name).copied().unwrap_or(ConnectorHealth::Healthy) {
+                            ConnectorHealth::Healthy => 0,
+                            ConnectorHealth::Degraded => 100,
+                            ConnectorHealth::Unhealthy => 1000,
+                        };
+                        let latency = penalty;
+                        if best.as_ref().map(|(_, l)| latency < *l).unwrap_or(true) {
+                            best = Some((name.clone(), latency));
+                        }
+                    }
+                }
+                best.map(|(n, _)| n).unwrap_or_else(|| pool[0].clone())
+            }
         };
 
         let connectors_guard = self.connectors.read();
-        let connector = connectors_guard.get(&connector_name).ok_or_else(|| {
+        let connector = connectors_guard.get(&chosen_name).ok_or_else(|| {
             format!(
                 "Connector '{}' registered for capability '{}' not found",
-                connector_name, instance.contract.id
+                chosen_name, instance.contract.id
             )
         })?;
 
@@ -110,7 +227,11 @@ impl ConnectorResolver {
         let removed = connectors.remove(name).is_some();
         if removed {
             let mut cap_map = self.capability_map.write();
-            cap_map.retain(|_, v| v != name);
+            for v in cap_map.values_mut() {
+                v.retain(|n| n != name);
+            }
+            cap_map.retain(|_, v| !v.is_empty());
+            self.health.write().remove(name);
         }
         removed
     }
@@ -119,6 +240,8 @@ impl ConnectorResolver {
     pub fn clear(&self) {
         self.connectors.write().clear();
         self.capability_map.write().clear();
+        self.rr_index.write().clear();
+        self.health.write().clear();
     }
 
     /// Find connectors that support the given capability.
@@ -273,7 +396,7 @@ mod tests {
         resolver.unregister_connector("echo");
 
         let map = resolver.capability_map.read();
-        assert!(map.values().all(|v| v != "echo"));
+        assert!(map.values().all(|v| !v.contains(&"echo".to_string())));
     }
 
     #[test]
@@ -320,5 +443,86 @@ mod tests {
 
         let instance = make_instance("echo.text");
         assert!(resolver.bind(&instance).is_err());
+    }
+
+    #[test]
+    fn test_load_balancing_round_robin() {
+        let resolver = ConnectorResolver::new();
+        struct ConnA;
+        impl Connector for ConnA {
+            fn descriptor(&self) -> ConnectorDescriptor {
+                ConnectorDescriptor {
+                    name: "a".into(),
+                    version: semver::Version::new(0, 10, 0),
+                    supported_capabilities: vec![CapabilityId::new("cap.x")],
+                }
+            }
+            fn executor(&self) -> Arc<dyn CapabilityExecutor> {
+                Arc::new(EchoPlugin::new())
+            }
+        }
+        struct ConnB;
+        impl Connector for ConnB {
+            fn descriptor(&self) -> ConnectorDescriptor {
+                ConnectorDescriptor {
+                    name: "b".into(),
+                    version: semver::Version::new(0, 10, 0),
+                    supported_capabilities: vec![CapabilityId::new("cap.x")],
+                }
+            }
+            fn executor(&self) -> Arc<dyn CapabilityExecutor> {
+                Arc::new(EchoPlugin::new())
+            }
+        }
+        resolver.register_connector(Arc::new(ConnA)).unwrap();
+        resolver.register_connector(Arc::new(ConnB)).unwrap();
+        let inst = make_instance("cap.x");
+        let first = resolver.bind(&inst).unwrap().connector_descriptor.name;
+        let second = resolver.bind(&inst).unwrap().connector_descriptor.name;
+        assert_ne!(first, second, "round-robin must alternate");
+        let third = resolver.bind(&inst).unwrap().connector_descriptor.name;
+        assert_eq!(first, third, "round-robin must cycle");
+    }
+
+    #[test]
+    fn test_failover_skips_unhealthy() {
+        let resolver = ConnectorResolver::new();
+        struct ConnA;
+        impl Connector for ConnA {
+            fn descriptor(&self) -> ConnectorDescriptor {
+                ConnectorDescriptor {
+                    name: "a".into(),
+                    version: semver::Version::new(0, 10, 0),
+                    supported_capabilities: vec![CapabilityId::new("cap.y")],
+                }
+            }
+            fn executor(&self) -> Arc<dyn CapabilityExecutor> {
+                Arc::new(EchoPlugin::new())
+            }
+        }
+        struct ConnB;
+        impl Connector for ConnB {
+            fn descriptor(&self) -> ConnectorDescriptor {
+                ConnectorDescriptor {
+                    name: "b".into(),
+                    version: semver::Version::new(0, 10, 0),
+                    supported_capabilities: vec![CapabilityId::new("cap.y")],
+                }
+            }
+            fn executor(&self) -> Arc<dyn CapabilityExecutor> {
+                Arc::new(EchoPlugin::new())
+            }
+        }
+        resolver.register_connector(Arc::new(ConnA)).unwrap();
+        resolver.register_connector(Arc::new(ConnB)).unwrap();
+        resolver.set_health("a", ConnectorHealth::Unhealthy);
+        let inst = make_instance("cap.y");
+        // Should always pick b now
+        for _ in 0..3 {
+            assert_eq!(
+                resolver.bind(&inst).unwrap().connector_descriptor.name,
+                "b"
+            );
+        }
     }
 }

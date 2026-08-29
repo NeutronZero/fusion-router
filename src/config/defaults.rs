@@ -96,3 +96,7 @@ pub fn default_allow_auto_exec() -> bool {
 pub fn default_allow_unrestricted_args() -> bool {
     false
 }
+
+pub fn default_compiler_optimization_level() -> u8 {
+    0
+}

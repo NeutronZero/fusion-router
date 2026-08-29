@@ -44,6 +44,7 @@ mod tests {
             connectors: HashMap::new(),
             features: HashMap::new(),
             streaming: Default::default(),
+            compiler: Default::default(),
         }
     }
 

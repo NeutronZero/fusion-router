@@ -115,6 +115,36 @@ async fn main() {
         std::process::exit(1);
     }
 
+    // AD-018: staging is live on all platforms; openat2 hard mode (Linux) is
+    // deferred pending CI per ADR-041. Log the mode so operators know the
+    // guarantee level.
+    if cfg!(target_os = "linux") && config.tools.shell_path_mode == "stage" {
+        tracing::info!(
+            "shell path policy: stage mode active (AD-041); openat2 hard mode deferred pending Linux CI"
+        );
+    }
+    // AD-016: logging.directory is now live — ensure the directory exists and
+    // is writable when configured, so operators get a loud failure at startup
+    // rather than silent log loss.
+    if let Some(dir) = &config.logging.directory {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("failed to create logging directory '{dir}': {e}");
+            std::process::exit(1);
+        }
+        // Probe writability with a temp file so permission errors fail closed.
+        let probe = std::path::Path::new(dir).join(".fusion_write_probe");
+        match std::fs::write(&probe, b"probe") {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&probe);
+                eprintln!("logging directory ready: {dir}");
+            }
+            Err(e) => {
+                eprintln!("logging directory '{dir}' is not writable: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let log_level = &config.logging.level;
     let log_format = &config.logging.format;
 
@@ -222,6 +252,66 @@ async fn main() {
         connector_resolver.clone(),
     )
     .with_provider_registry(provider_registry.clone());
+
+    // AD-016: feature flags are live — register the subscriber so
+    // `features:` map in config is applied at startup and on SIGHUP reload,
+    // and gate compile-time-disabled features off at runtime.
+    {
+        use crate::feature_gate::config_subscriber::FeatureGateSubscriber;
+        use crate::feature_gate::{FeatureDefinition, FeatureFlag, Stability};
+        const FEATURE_DEFINITIONS: &[FeatureDefinition] = &[
+            FeatureDefinition {
+                id: FeatureFlag::Streaming,
+                introduced: "0.1.0",
+                removed: None,
+                stability: Stability::Stable,
+                default_enabled: true,
+                description: "Enable streaming responses",
+            },
+            FeatureDefinition {
+                id: FeatureFlag::Replay,
+                introduced: "0.5.0",
+                removed: None,
+                stability: Stability::Experimental,
+                default_enabled: false,
+                description: "Enable request replay",
+            },
+            FeatureDefinition {
+                id: FeatureFlag::ConnectorHealth,
+                introduced: "0.8.0",
+                removed: None,
+                stability: Stability::Stable,
+                default_enabled: true,
+                description: "Enable connector health checks",
+            },
+            FeatureDefinition {
+                id: FeatureFlag::SemanticCache,
+                introduced: "0.9.0",
+                removed: None,
+                stability: Stability::Experimental,
+                default_enabled: false,
+                description: "Enable semantic caching",
+            },
+            FeatureDefinition {
+                id: FeatureFlag::WasmPlugins,
+                introduced: "0.10.0",
+                removed: None,
+                stability: Stability::Deprecated,
+                default_enabled: false,
+                description: "Enable WASM plugin support",
+            },
+        ];
+        let feature_subscriber = FeatureGateSubscriber::new(FEATURE_DEFINITIONS);
+        // Seed registry from the initially loaded config (ConfigManager only
+        // applies features on reload).
+        {
+            let snapshot = state.config_manager.snapshot();
+            feature_subscriber.apply_initial(&snapshot.config.features);
+        }
+        state
+            .config_manager
+            .register_subscriber(Box::new(feature_subscriber));
+    }
 
     // Law 5 / ADR-034: the execution plane compiles through the same
     // `build_compiler` pipeline as the chat path, with a budget pass reading
@@ -362,13 +452,14 @@ async fn main() {
         .with_state(ops_state);
 
     let event_bus = Arc::new(crate::events::BroadcastEventBus::new(1024));
-    let exec_plane = crate::server::execution::build_execution_plane_with_concurrency(
+    let exec_plane = crate::server::execution::build_execution_plane_with_optimization(
         event_bus,
         state.executor.clone(),
         state.model_catalog.clone(),
         state.resource_manager.clone(),
         state.policy_registry.clone(),
         config.resources.max_concurrent_nodes,
+        config.compiler.optimization_level,
     );
     let execution_routes = axum::Router::new()
         .route(

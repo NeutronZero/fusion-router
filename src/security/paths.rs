@@ -221,6 +221,23 @@ pub fn handle_file_id(file: &std::fs::File) -> Option<(u64, u64)> {
     }
 }
 
+/// Lexically normalizes `path` without touching the filesystem (removes `.`
+/// and `..` components). Used as a fallback when the candidate does not yet
+/// exist on disk but we still want to containment-check the *intended* path.
+pub fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            _ => out.push(comp.as_os_str()),
+        }
+    }
+    out
+}
+
 /// True when `candidate` canonicalizes inside `root` (see `canonicalize_within`).
 // Kept as the boolean convenience wrapper over `canonicalize_within`; used by
 // tests today and by future policy callers that don't need the error detail.

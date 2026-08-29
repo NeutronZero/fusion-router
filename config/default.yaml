@@ -178,6 +178,9 @@ tools:
   allow_auto_exec: false
   allow_unrestricted_args: false
 
+compiler:
+  optimization_level: 0  # 0=off, 1=dead-node elimination, 2=+fan-out consolidation (AD-005)
+
 # Feature flags (runtime overridable)
 features:
   streaming:
