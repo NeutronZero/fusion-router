@@ -13,6 +13,7 @@ members = [
     "crates/fusion-compiler",
     "crates/fusion-scheduler",
     "crates/fusion-runtime",
+    "crates/fusion-agent-state",
     "crates/fusion-plugin-api",
     "crates/fusion-capability-macros",
     "crates/fusion-capability-sdk",
@@ -88,6 +89,7 @@ fusion-compiler = { path = "crates/fusion-compiler" }
 fusion-planner = { path = "crates/fusion-planner" }
 fusion-scheduler = { path = "crates/fusion-scheduler" }
 fusion-runtime = { path = "crates/fusion-runtime" }
+fusion-agent-state = { path = "crates/fusion-agent-state" }
 fusion-plugin-echo = { path = "plugins/fusion-plugin-echo" }
 ring = { version = "0.17.14", default-features = false }
 zeroize = "1"

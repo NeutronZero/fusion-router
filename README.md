@@ -75,8 +75,10 @@ docker run --env-file .env -p 8080:8080 fusion-router
 | `crates/fusion-compiler` | Pass pipeline, strategy expansion, scoring |
 | `crates/fusion-scheduler` | Concurrent DAG scheduling |
 | `crates/fusion-runtime` | Node execution, tools, subgraphs |
+| `crates/fusion-agent-state` | Long-horizon agent state (SKILL.state: P+Σ+O, bounded context, persistent) |
 | `crates/fusion-core` / `fusion-kernel` | Errors, NanoUSD, resource contracts |
 | `crates/fusion-scheduler::leases` | Execution lease manager (preserved Invariant 12 logic) |
+| `src/agent` | Host adapters: RouterLlm / RouterTools (Σ-blind boundary) |
 | `src/` | Host binary: HTTP, providers, policy registry, bridges |
 | `tests/` | E2E golden, contract wiring, security, release gates |
 | `docs/` | ADRs, architecture, debt register, roadmaps |

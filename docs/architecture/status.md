@@ -1,7 +1,18 @@
 # FusionRouter Architecture Status
 
 > **Purpose:** Single entry point for contributors to understand the current project state.
-> **Last updated:** 2026-08-24
+> **Last updated:** 2026-08-30 — Agent-State extension frozen (see below)
+
+## Agent-State Extension (frozen 2026-08-30)
+
+`crates/fusion-agent-state` (SKILL.state) provides **bounded-context, persistent long-horizon execution** above `fusion-runtime` without contaminating `WorkflowIR`/`ExecutionGraph`:
+
+- **Invariant:** `FusionRouter executes; agent-state reasons about Σ.` `fusion-runtime` remains Σ-blind; `fusion-agent-state` owns `SkillSpec(P)`, `ExecutionState(Σ)`, `Observation(O)`, `StatePatch(ΔΣ)`, `StateStore` (transactional `Σ' = Σ ⊕ ΔΣ`, null-delete, deterministic), `EventLog` (out-of-band audit).
+- **Validation:** 29 agent + 26 state tests; warehouse scaling `T=200` 52.8× token reduction; operational `T=1k/2.5k/5k` `ctx~29` / `state~16B` constant, `EventLog/Tokens/NanoUSD ∝ T`; crash `1k→kill→recover→5k` `Σ_A==Σ_B`; live `opencode/muse-spark-1.2-contributor-free` (zen, cost 0) real provider fence valid.
+- **Security:** `src/agent/host.rs` `RouterTools` ordered `allowlist → ApprovalGate → ResourceManager → registry → execute`; Stage 2 adversarial suite proves `Σ`/skill/retry cannot confer authority (ADR-037). Host adapters are the only seam; `crates/fusion-agent-state` has no `fusion-runtime` dep (CI guard `s2_no_reverse_dep_guard`).
+- **Status:** Frozen — no further `fusion-agent-state`/`fusion-runtime` changes unless a production defect requires it. Next work is driven by real agent use cases. Integration guide: [`docs/agent-state-integration.md`](../agent-state-integration.md).
+
+---
 
 ---
 

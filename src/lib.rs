@@ -27,6 +27,7 @@ pub mod types;
 #[cfg(feature = "wasm-plugins")]
 pub mod wasm;
 
+pub mod agent;
 pub mod devex;
 pub mod events;
 pub mod feature_gate;

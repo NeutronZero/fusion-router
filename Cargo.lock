@@ -1044,6 +1044,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fusion-agent-state"
+version = "0.14.5"
+dependencies = [
+ "async-trait",
+ "fusion-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "fusion-capability-macros"
 version = "0.14.5"
 dependencies = [
@@ -1180,6 +1196,7 @@ dependencies = [
  "dotenv",
  "fasteval",
  "flate2",
+ "fusion-agent-state",
  "fusion-capability-sdk",
  "fusion-compiler",
  "fusion-core",

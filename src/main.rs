@@ -32,6 +32,7 @@ mod session;
 mod strategies;
 mod telemetry;
 mod tools;
+mod agent;
 mod transport;
 mod types;
 
