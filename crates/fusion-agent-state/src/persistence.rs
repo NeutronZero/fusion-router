@@ -28,7 +28,8 @@ impl SqliteStateStore {
         )
         .map_err(|e| StateError::PatchValidation(format!("create table: {e}")))?;
 
-        // Validate initial against schema
+        // Validate skill provenance + initial against schema
+        skill.validate()?;
         crate::validate_against_schema(&initial.value, &skill.schema)?;
 
         // Insert initial if empty

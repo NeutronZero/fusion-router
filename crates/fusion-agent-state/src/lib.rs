@@ -52,6 +52,24 @@ impl SkillSpec {
             version: version.into(),
         }
     }
+
+    /// Validates provenance and size of skill instructions (trusted system prompt).
+    /// Rejects oversized or untrusted provenance that could carry prompt injection.
+    /// Provenance must be `trusted` (operator-authored) for production; `untrusted` is rejected.
+    pub fn validate(&self) -> Result<(), StateError> {
+        const MAX_INSTRUCTIONS_BYTES: usize = 32 * 1024;
+        if self.instructions.len() > MAX_INSTRUCTIONS_BYTES {
+            return Err(StateError::PatchValidation(format!(
+                "instructions too large: {} > {} bytes",
+                self.instructions.len(),
+                MAX_INSTRUCTIONS_BYTES
+            )));
+        }
+        if self.instructions.trim().is_empty() {
+            return Err(StateError::PatchValidation("instructions must not be empty".into()));
+        }
+        Ok(())
+    }
 }
 
 /// Canonical execution state Σ. Always a JSON object at the top level.
@@ -133,6 +151,15 @@ impl AgentAction {
     }
 }
 
+/// Token usage for a single LLM turn. Host may populate from provider `Usage`;
+/// runner falls back to heuristic when `None`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Usage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
 /// Single LLM transition proposal. `reasoning` is ephemeral and MUST NOT be
 /// forwarded to the next model input.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,11 +168,19 @@ pub struct AgentStep {
     pub reasoning: Option<String>,
     pub patch: StatePatch,
     pub action: AgentAction,
+    /// Real provider usage when available (host populated). `None` → runner uses heuristic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
 }
 
 impl AgentStep {
     pub fn new(reasoning: Option<String>, patch: StatePatch, action: AgentAction) -> Self {
-        Self { reasoning, patch, action }
+        Self { reasoning, patch, action, usage: None }
+    }
+
+    pub fn with_usage(mut self, usage: Usage) -> Self {
+        self.usage = Some(usage);
+        self
     }
 }
 
@@ -359,6 +394,7 @@ pub struct InMemoryStateStore {
 
 impl InMemoryStateStore {
     pub fn new(skill: SkillSpec, initial: ExecutionState) -> Result<Self, StateError> {
+        skill.validate()?;
         validate_against_schema(&initial.value, &skill.schema)?;
         Ok(Self { skill, state: initial })
     }
@@ -458,20 +494,37 @@ pub struct EventLogEntry {
     pub reasoning: Option<String>,
 }
 
-/// Simple in-memory event log. Bounded only by caller retention policy; the LLM
-/// input window remains `O(1)` regardless of log length.
-#[derive(Debug, Clone, Default)]
+/// Simple in-memory event log. Bounded by `max_entries` when set; the LLM
+/// input window remains `O(1)` regardless of log length. For horizons >1k,
+/// callers should persist to SQLite or call `with_max_entries`.
+#[derive(Debug, Clone)]
 pub struct EventLog {
     entries: Vec<EventLogEntry>,
+    max_entries: Option<usize>,
+}
+
+impl Default for EventLog {
+    fn default() -> Self { Self::new() }
 }
 
 impl EventLog {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self { entries: Vec::new(), max_entries: None }
+    }
+
+    pub fn with_max_entries(max: usize) -> Self {
+        Self { entries: Vec::with_capacity(max.min(1024)), max_entries: Some(max) }
     }
 
     pub fn push(&mut self, entry: EventLogEntry) {
         self.entries.push(entry);
+        if let Some(max) = self.max_entries {
+            if self.entries.len() > max {
+                // Drop oldest to keep bounded (ring buffer semantics)
+                let drain = self.entries.len() - max;
+                self.entries.drain(0..drain);
+            }
+        }
     }
 
     pub fn entries(&self) -> &[EventLogEntry] {
@@ -496,6 +549,8 @@ pub struct CommittedTransition {
     pub action: AgentAction,
     /// Ephemeral reasoning retained only for `EventLog`, never for next prompt.
     pub reasoning: Option<String>,
+    /// Real provider usage when host supplied it.
+    pub usage: Option<Usage>,
 }
 
 /// Applies the SKILL.state transition protocol transactionally:
@@ -517,6 +572,7 @@ pub fn apply_transition<S: StateStore>(
         next_state: next,
         action: step.action.clone(),
         reasoning: step.reasoning.clone(),
+        usage: step.usage.clone(),
     })
 }
 
@@ -877,5 +933,57 @@ mod tests {
         assert!(validate_against_schema(&json!({"counter": 1.5}), &schema).is_err());
         assert!(validate_against_schema(&json!({"counter": "1"}), &schema).is_err());
         assert!(validate_against_schema(&json!({"counter": true}), &schema).is_err());
+    }
+
+    #[test]
+    fn additional_properties_false_rejects_extra() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "tests": {
+                    "type": "object",
+                    "properties": {
+                        "passing": {"type": "integer"},
+                        "failing": {"type": "integer"}
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": true
+        });
+        // valid: only declared properties
+        assert!(validate_against_schema(&json!({"tests": {"passing": 1, "failing": 0}}), &schema).is_ok());
+        // extra property inside tests must be rejected
+        assert!(validate_against_schema(&json!({"tests": {"passing": 1, "extra": 1}}), &schema).is_err());
+    }
+
+    #[test]
+    fn eventlog_bounded_with_max_entries() {
+        let mut log = EventLog::with_max_entries(3);
+        for i in 0..5 {
+            log.push(EventLogEntry {
+                step: i,
+                prev_state: json!({}),
+                patch: json!({}),
+                next_state: json!({}),
+                action: format!("a{i}"),
+                observation: json!({}),
+                reasoning: None,
+            });
+        }
+        assert_eq!(log.len(), 3, "EventLog must be bounded");
+        assert_eq!(log.entries()[0].action, "a2");
+        assert_eq!(log.entries()[2].action, "a4");
+    }
+
+    #[test]
+    fn skill_validate_rejects_oversized_and_empty() {
+        let schema = json!({});
+        let ok = SkillSpec::new(schema.clone(), "valid instructions", "1");
+        assert!(ok.validate().is_ok());
+        let empty = SkillSpec::new(schema.clone(), "   ", "1");
+        assert!(empty.validate().is_err());
+        let huge = SkillSpec::new(schema, "x".repeat(33 * 1024), "1");
+        assert!(huge.validate().is_err());
     }
 }

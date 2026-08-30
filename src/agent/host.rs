@@ -100,11 +100,20 @@ impl fusion_agent_state::runner::AgentLlm for RouterLlm {
             match self.provider.chat_completion(&router_req).await {
                 Ok(resp) => {
                     let text = resp.choices.first().map(|c| c.message.content.clone()).unwrap_or_default();
-                    // Record usage into telemetry if present (caller may also record via BudgetEnvelope)
-                    // Parsing is the commit gate — malformed JSON never reaches StateStore
+                    let usage = resp.usage.as_ref().map(|u| fusion_agent_state::Usage {
+                        prompt_tokens: u.prompt_tokens,
+                        completion_tokens: u.completion_tokens,
+                        total_tokens: u.total_tokens,
+                    });
                     match parse_skill_response(&text) {
-                        Ok(step) => return Ok(step),
-                        Err(e) => return Err(format!("malformed model output: {e} | raw: {}", &text[..text.len().min(300)])),
+                        Ok(step) => {
+                            let step = if let Some(u) = usage { step.with_usage(u) } else { step };
+                            return Ok(step);
+                        }
+                        Err(e) => {
+                            let preview = text.chars().take(100).collect::<String>().replace('\n', " ");
+                            return Err(format!("malformed model output: {e} | preview: {} (len {})", preview, text.len()));
+                        }
                     }
                 }
                 Err(e) => {

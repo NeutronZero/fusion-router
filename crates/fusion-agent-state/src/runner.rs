@@ -166,10 +166,20 @@ impl<S: StateStore> AgentRunner<S> {
                 return Err("cancelled before tool execution".into());
             }
         }
+        // Pre-tool budget check (fail closed before side effect). Uses predicted output if usage not yet known.
+        if let Some(max) = self.config.max_tokens {
+            let predicted = self.total_tokens.saturating_add(input_tokens).saturating_add(12);
+            if predicted > max {
+                return Err(format!("token budget {} would exceed: predicted {} > max", max, predicted));
+            }
+        }
+
         let next_obs = self.tools.execute(&committed.action).await?;
 
-        let output_tokens = 12u64; // accounting placeholder; host can report real usage via Llm wrapper
-        self.total_tokens += input_tokens + output_tokens;
+        // Real usage when host provided it, else heuristic 12
+        let output_tokens = committed.usage.as_ref().map(|u| u.completion_tokens as u64).unwrap_or(12);
+        let total_step_tokens = input_tokens.saturating_add(output_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(total_step_tokens);
 
         if let Some(max) = self.config.max_tokens {
             if self.total_tokens > max {
