@@ -1,9 +1,9 @@
 //! Stage 3 operational validation — 1k/2.5k/5k + crash/recovery gate
-//! Uses the SAME RouterLlm+RouterTools path (deterministic mock provider for reproducibility).
-//! Metrics are architectural: tokens/step, state bytes, NanoUSD/step, context size.
-//! Wall-clock is recorded but not asserted (provider latency is external).
+//! Protocol-equivalent AgentRunner path with deterministic LLM/tools for reproducible scaling.
+//! Horizon metrics use InMemoryStateStore (bounded ctx/size); crash gate uses real
+//! SqliteStateStore file persistence. Wall-clock recorded but not asserted (external).
 
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::sync::Arc;
 use std::time::Instant;
 use fusion_agent_state::{
     ExecutionState, Observation, SkillSpec, StateStore, InMemoryStateStore,
@@ -38,6 +38,7 @@ fn extract_counter(s: &str)->Option<u64>{
 }
 struct NoopTools; #[async_trait::async_trait] impl AgentToolExecutor for NoopTools { async fn execute(&self,a:&fusion_agent_state::AgentAction)->Result<Observation,String>{ Ok(Observation::new(json!({"echo":a.raw}))) } }
 
+#[allow(dead_code)]
 struct Metrics {
     horizon: u64,
     avg_ctx: f64,
@@ -53,19 +54,12 @@ struct Metrics {
     failed: usize,
 }
 
-async fn run_horizon(horizon: u64, use_sqlite: bool) -> Metrics {
+async fn run_horizon(horizon: u64, _use_sqlite: bool) -> Metrics {
+    // Fix: previously created a dead `store` Box and always used InMemory — now explicitly
+    // run with InMemory for horizon metrics (deterministic, WAL not needed for ctx/size checks).
+    // Crash gate below exercises real SqliteStateStore file persistence.
     let start = Instant::now();
     let s = skill();
-    let store: Box<dyn StateStore> = if use_sqlite {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(format!("stage3_{horizon}.db"));
-        // Use in-memory sqlite for speed but measure file size via temp path
-        let sqlite = SqliteStateStore::open_in_memory(s.clone(), initial()).unwrap();
-        Box::new(sqlite)
-    } else {
-        Box::new(InMemoryStateStore::new(s.clone(), initial()).unwrap())
-    };
-    // We need concrete type for AgentRunner; use InMemory for metrics run for simplicity
     let mut runner = AgentRunner::new(s.clone(), InMemoryStateStore::new(s.clone(), initial()).unwrap(), Arc::new(DeterministicLlm), Arc::new(NoopTools), RunnerConfig{ max_steps: horizon+10, model: "mock".into(), max_tokens: None });
     let mut obs = Observation::new(json!({"tick":0}));
     let mut ctx_tokens = Vec::new();

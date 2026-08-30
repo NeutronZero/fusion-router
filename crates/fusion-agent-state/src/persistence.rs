@@ -19,6 +19,9 @@ impl SqliteStateStore {
     pub fn open(skill: SkillSpec, path: impl AsRef<Path>, initial: ExecutionState) -> Result<Self, StateError> {
         let conn = rusqlite::Connection::open(path.as_ref())
             .map_err(|e| StateError::PatchValidation(format!("sqlite open: {e}")))?;
+        // Match repo SQLite hardening: WAL + busy_timeout + FK (see sqlite_repo.rs / session/store/sqlite.rs)
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;")
+            .map_err(|e| StateError::PatchValidation(format!("pragma: {e}")))?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS agent_state (id INTEGER PRIMARY KEY, value TEXT NOT NULL)",
             [],
@@ -73,13 +76,19 @@ impl StateStore for SqliteStateStore {
     }
 
     fn commit(&mut self, patch: &StatePatch) -> Result<ExecutionState, StateError> {
-        let cur = self.load();
+        // Explicit transaction: load→merge→validate→REPLACE atomic under BEGIN IMMEDIATE
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| StateError::PatchValidation(format!("begin tx: {e}")))?;
+        let cur = Self::load_inner(&tx)?;
         let merged = crate::merge_state(&cur.value, &patch.value)?;
         crate::validate_against_schema(&merged, &self.skill.schema)?;
         let json = serde_json::to_string(&merged).map_err(|e| StateError::PatchValidation(e.to_string()))?;
-        self.conn
-            .execute("REPLACE INTO agent_state (id, value) VALUES (1, ?1)", rusqlite::params![json])
+        tx.execute("REPLACE INTO agent_state (id, value) VALUES (1, ?1)", rusqlite::params![json])
             .map_err(|e| StateError::PatchValidation(format!("commit: {e}")))?;
+        tx.commit()
+            .map_err(|e| StateError::PatchValidation(format!("commit tx: {e}")))?;
         ExecutionState::new(merged)
     }
 }

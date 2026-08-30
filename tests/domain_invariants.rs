@@ -53,8 +53,8 @@ async fn test_domain_invariant_workflow_ir_produces_one_execution_graph() {
     );
     assert_eq!(
         report.pass_diffs.len(),
-        5,
-        "Must execute exactly 5 compiler passes"
+        6,
+        "Must execute exactly 6 compiler passes"
     );
 }
 

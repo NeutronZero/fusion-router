@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use fusion_agent_state::{
-    AgentAction, AgentStep, ChatMessage as AgentChatMessage, ChatRequest as AgentChatRequest,
+    AgentAction, AgentStep, ChatRequest as AgentChatRequest,
     Observation, StatePatch,
 };
 

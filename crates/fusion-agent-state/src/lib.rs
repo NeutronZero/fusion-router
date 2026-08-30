@@ -163,8 +163,6 @@ pub enum StateError {
     MergeError(String),
     #[error("patch validation failed: {0}")]
     PatchValidation(String),
-    #[error("invalid patch JSON: {0}")]
-    InvalidPatch(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -312,18 +310,15 @@ fn validate_value_against_schema(value: &serde_json::Value, schema: &serde_json:
                 }
             }
             "integer" => {
-                if !value.as_i64().is_none() && !value.as_u64().is_none() {
-                    // serde_json numbers that are integers pass
-                    if value.as_i64().is_none() && value.as_u64().is_none() {
-                        return Err(StateError::SchemaViolation(format!("{path}: expected integer, got {}", type_of(value))));
-                    }
-                }
-                // Also reject floats that are not integers
-                if let Some(n) = value.as_f64() {
-                    if n.fract() != 0.0 {
-                        return Err(StateError::SchemaViolation(format!("{path}: expected integer, got float")));
-                    }
-                } else if !value.is_number() {
+                // Strict JSON Schema integer: must be a JSON number with no fractional part
+                // and within integer range. Reject floats like 1.0 via is_i64/is_u64 check;
+                // JSON `1` and `-1` are integers, JSON `1.0` is not.
+                if value.is_i64() || value.is_u64() {
+                    // ok — integer-typed JSON number
+                } else if value.is_number() {
+                    // JSON number but not i64/u64 → must be f64; reject (covers 1.0, 1.5, 1e20 as float)
+                    return Err(StateError::SchemaViolation(format!("{path}: expected integer, got float")));
+                } else {
                     return Err(StateError::SchemaViolation(format!("{path}: expected integer, got {}", type_of(value))));
                 }
             }
@@ -868,5 +863,19 @@ mod tests {
         let base2 = json!({"branch": "main", "tests": {"passing": 42, "failing": 3}, "temporary_note": "x"});
         let merged2 = merge_state(&base2, &patch).unwrap();
         assert_eq!(merged2, json!({"branch": "main", "tests": {"passing": 42, "failing": 2}}));
+    }
+
+    #[test]
+    fn integer_type_rejects_float() {
+        let schema = json!({"type": "object", "properties": {"counter": {"type": "integer"}}, "additionalProperties": true});
+        // integer values valid
+        assert!(validate_against_schema(&json!({"counter": 1}), &schema).is_ok());
+        assert!(validate_against_schema(&json!({"counter": 0}), &schema).is_ok());
+        assert!(validate_against_schema(&json!({"counter": -1}), &schema).is_ok());
+        // floats must be rejected even if they represent integer value
+        assert!(validate_against_schema(&json!({"counter": 1.0}), &schema).is_err(), "1.0 must be rejected as integer");
+        assert!(validate_against_schema(&json!({"counter": 1.5}), &schema).is_err());
+        assert!(validate_against_schema(&json!({"counter": "1"}), &schema).is_err());
+        assert!(validate_against_schema(&json!({"counter": true}), &schema).is_err());
     }
 }

@@ -137,15 +137,32 @@ impl<S: StateStore> AgentRunner<S> {
         // 2. LLM proposes R_t + ΔΣ + a_t
         let step = self.llm.complete(req).await?;
 
-        // 3. Transactional commit (validates ΔΣ → Σ' before any side effect)
+        // 3. Cancellation before commit — fail closed, no mutation on cancel
+        if let Some(tok) = cancellation {
+            if tok.is_cancelled() {
+                return Err("cancelled before commit".into());
+            }
+        }
+
+        // 4. Transactional commit (validates ΔΣ → Σ' before any side effect)
         let prev = self.store.load();
         let committed = apply_transition(&mut self.store, &step).map_err(|e| e.to_string())?;
 
-        // 4. Tool/action execution ONLY after commit (runtime-owned policy/budget/retry)
+        // 5. Cancellation before tool — no tool side effect, but Σ' remains committed
+        // State transition precedes side effect (SKILL.state semantic). Caller may retry
+        // tool execution from committed Σ' if needed.
         if let Some(tok) = cancellation {
             if tok.is_cancelled() {
-                // State already committed; surface cancellation before side effect
-                // Caller decides whether to retry tool execution from committed Σ'
+                // Log the committed transition even when tool was cancelled to keep store/log consistent
+                self.log.push(EventLogEntry {
+                    step: t,
+                    prev_state: prev.value.clone(),
+                    patch: step.patch.value.clone(),
+                    next_state: committed.next_state.value.clone(),
+                    action: committed.action.raw.clone(),
+                    observation: Observation::new(json!({"cancelled": true, "before_tool": true})).value,
+                    reasoning: committed.reasoning.clone(),
+                });
                 return Err("cancelled before tool execution".into());
             }
         }
